@@ -1,0 +1,7 @@
+*.pyc
+.cproject
+.project
+.DS_Store
+*.patch
+#*.iml
+lib/

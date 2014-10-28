@@ -1,0 +1,7 @@
+
+[[ -r ~/.bashrc ]] && source ~/.bashrc
+
+if [[ "$AUTO_TMUX" -eq "1" ]]; then
+  tmux attach
+fi
+

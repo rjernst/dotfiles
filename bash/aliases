@@ -1,0 +1,11 @@
+
+alias ls='ls -bF --color=auto'
+alias ll='ls -l'
+alias rm='rm -i'       # always ask before removing a file
+alias mv='mv -i'       # always ask before moving a file onto another file
+alias cp='cp -i'       # always ask before copying a file onto another file
+alias h='history'
+alias hs='history | grep -i'
+
+
+# vi: set tabstop=4 shiftwidth=4 textwidth=79 filetype=sh expandtab:

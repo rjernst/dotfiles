@@ -1,0 +1,29 @@
+
+""" basic settings
+set ts=2
+set shiftwidth=2
+set expandtab
+"""set autoindent
+set number
+set hlsearch
+set statusline=%F%m%r%h%w\ [TYPE=%Y]\ [ASCII=\%03.3b]\ [HEX=\%02.2B]\ [POS=%04l,%04v][%p%%]\ [LEN=%L]
+set laststatus=2
+set hidden
+""" set pastetoggle=<S-P>
+syntax on
+set modelines=1
+set viminfo='10000,<10000,s1000
+
+nnoremap k gk
+nnoremap j gj
+nnoremap gk k
+nnoremap gj j
+
+filetype plugin on
+
+let mapleader = ","
+
+""" color settings
+hi Comment ctermfg=lightgray
+
+map! jk <ESC> 
