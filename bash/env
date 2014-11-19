@@ -18,7 +18,7 @@ export BackYellow="\033[43m"
 
 export CPWD_LEN=50
 export STATUS_COLOR='`if [[ $? = 0 ]]; then echo -ne "$Green"; else echo -ne "$Red"; fi;`'
-export PROMPT="\[$Brown\][\t]\[$STATUS_COLOR\][\`cpwd\`]\[$Black\]\[$BackYellow\]\[$STATUS_COLOR\]\$ \[$None\]"
+export PROMPT="\[$Brown\][\t]\[$STATUS_COLOR\][\w]\[$Black\]\[$BackYellow\]\[$STATUS_COLOR\]\$ \[$None\]"
 export HOSTNAME=`hostname | cut -d. -f 1-2`
 if [ -e "$HOME/.ssh/alias" ]; then
     export SSH_ALIAS="$(<$HOME/.ssh/alias) | "
