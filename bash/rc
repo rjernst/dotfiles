@@ -1,11 +1,11 @@
 
 [[ -r ~/.bash_env ]] && source ~/.bash_env
-[[ -r ~/.bash_aliases ]] && source ~/.bash_aliases
-[[ -r ~/.bash_gitcompletion ]] && source ~/.bash_gitcompletion
+[[ -r ~/.bash_env.local ]] && source ~/.bash_env.local
 
-[[ -r ~/.bashlocal_env ]] && source ~/.bashlocal_env
-[[ -r ~/.bashlocal_aliases ]] && source ~/.bashlocal_aliases
-[[ -r ~/.bashlocal_rc ]] && source ~/.bashlocal_rc
+[[ -r ~/.bash_aliases ]] && source ~/.bash_aliases
+[[ -r ~/.bash_aliases.local ]] && source ~/.bash_aliases.local
+
+[[ -r ~/.bash_gitcompletion ]] && source ~/.bash_gitcompletion
 
 set -o noclobber       # can't > to existing files
 set -o ignoreeof       # ignore ^D to exit shell
@@ -28,5 +28,7 @@ PS1="\[\033]0;${TITLE} \a\]${PROMPT}"
 # use xrs (resize) to reset your window size after
 # you have resized an xterm (is this needed?)
 alias xrs='set -o noglob; eval `resize`; set +o noglob'
+
+[[ -r ~/.bash_rc.local ]] && source ~/.bash_rc.local
 
 # vi: set tabstop=4 shiftwidth=4 textwidth=79 filetype=sh expandtab:

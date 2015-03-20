@@ -8,4 +8,9 @@ alias hs='history | grep -i'
 
 alias py3='python3'
 
+alias jdk7='export JAVA_HOME=${JDK7_HOME:?"JDK7_HOME is not set"}'
+alias jdk8='export JAVA_HOME=${JDK8_HOME:?"JDK8_HOME is not set"}'
+alias jdk8ea='export JAVA_HOME=${JDK8_EA_HOME:?"JDK8_EA_HOME is not set"}'
+alias jdk9ea='export JAVA_HOME=${JDK9_EA_HOME:?"JDK9_EA_HOME is not set"}'
+
 # vi: set tabstop=4 shiftwidth=4 textwidth=79 filetype=sh expandtab:
