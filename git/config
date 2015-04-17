@@ -1,6 +1,5 @@
-[user]
-  name = Ryan Ernst
-  email = ryan@iernst.net
+[include]
+    file = ~/.gitconfig.local
 
 [color]
     diff = auto
