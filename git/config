@@ -39,7 +39,7 @@
     cp = cherry-pick
 
 [alias]
-    pr = "!f() { git fetch origin pull/$1/head:pr/$1; }; f"
+    pr = "!f() { git fetch origin pull/$1/head:review/$1; }; f"
     add-unmerged = "!f() { git ls-files --unmerged | cut -f2 | sort -u ; }; git add `f`"
 
 [push]
