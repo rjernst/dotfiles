@@ -35,12 +35,15 @@
     ci = commit
     b = branch
     s = status
-    up = pull --rebase origin
     cp = cherry-pick
 
-[alias]
+    # scripts
     pr = "!f() { git fetch origin pull/$1/head:review/$1; }; f"
     add-unmerged = "!f() { git ls-files --unmerged | cut -f2 | sort -u ; }; git add `f`"
+    sync-remotes = "!f() { git co master ; git fetch ; git remote prune origin; }; f"
+    prune-local-merged = "!f() { git branch —merged master | grep -v \"master$\"| xargs git branch -d; }; f"
+    #prune-remote-merged = "!f() { echo \"The following remote branches are fully merged into master and will be removed:\"; git branch -r —merged master | sed 's/ *origin\///' | grep -v \"master$\"; read -p \"Continue (y/n)? \" if [ \"$REPLY\" == \"y\" ] then git branch -r —merged master | sed 's/ *origin\///' | grep -v \"master$\" | xargs -I%; git push origin --delete %; echo \"Done!\" say \"Obsolete branches are removed\" fi; }; f"
+    #prune-merged = 
 
 [push]
 	default = simple
