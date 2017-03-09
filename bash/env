@@ -1,6 +1,4 @@
 
-export JAVA_HOME=$JDK8_HOME
-
 export EDITOR=/usr/bin/vim
 export GREP_OPTIONS=--color=auto
 

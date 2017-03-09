@@ -25,3 +25,5 @@ setup_link "hg/rc"                ".hgrc"
 setup_link "vim/rc"               ".vimrc"
 setup_link "tmux/conf"            ".tmux.conf"
 
+echo "Sourcing bash files"
+source ~/.bash_profile # todo might need to change this for linux vs mac

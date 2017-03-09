@@ -32,3 +32,8 @@ alias xrs='set -o noglob; eval `resize`; set +o noglob'
 [[ -r ~/.bash_rc.local ]] && source ~/.bash_rc.local
 
 # vi: set tabstop=4 shiftwidth=4 textwidth=79 filetype=sh expandtab:
+
+export NVM_DIR="/Users/rjernst/.nvm"
+[ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"  # This loads nvm
+
+export PATH="$PATH:$HOME/.rvm/bin" # Add RVM to PATH for scripting

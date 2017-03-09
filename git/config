@@ -29,6 +29,7 @@
     pager = less -FRSX
     whitespace=fix,-indent-with-non-tab,trailing-space,cr-at-eol
     excludesfile = ~/.gitignore
+	autocrlf = input
 
 [alias]
     co = checkout
@@ -40,10 +41,10 @@
     # scripts
     pr = "!f() { git fetch origin pull/$1/head:review/$1; }; f"
     add-unmerged = "!f() { git ls-files --unmerged | cut -f2 | sort -u ; }; git add `f`"
+    prune = "!f() { echo \"The following remote branches are fully merged into master and will be removed:\" && git branch --merged master | grep -v \"master$\" | xargs -L 1 git branch -D; }; f"
     sync-remotes = "!f() { git co master ; git fetch ; git remote prune origin; }; f"
-    prune-local-merged = "!f() { git branch —merged master | grep -v \"master$\"| xargs git branch -d; }; f"
-    #prune-remote-merged = "!f() { echo \"The following remote branches are fully merged into master and will be removed:\"; git branch -r —merged master | sed 's/ *origin\///' | grep -v \"master$\"; read -p \"Continue (y/n)? \" if [ \"$REPLY\" == \"y\" ] then git branch -r —merged master | sed 's/ *origin\///' | grep -v \"master$\" | xargs -I%; git push origin --delete %; echo \"Done!\" say \"Obsolete branches are removed\" fi; }; f"
-    #prune-merged = 
+
+    grog = "log --graph --abbrev-commit --decorate --all --format=format:\"%C(bold blue)%h%C(reset) - %C(bold cyan)%aD%C(dim white) - %an%C(reset) %C(bold green)(%ar)%C(reset)%C(bold yellow)%d%C(reset)%n %C(white)%s%C(reset)\""
 
 [push]
 	default = simple

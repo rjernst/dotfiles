@@ -21,6 +21,8 @@ nnoremap gj j
 
 filetype plugin on
 
+au BufNewFile,BufRead *.gradle set filetype=groovy
+
 let mapleader = ","
 
 """ color settings
