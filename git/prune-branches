@@ -1,0 +1,51 @@
+#!/bin/sh
+#
+# git-prune-branches
+#
+# Simple script that cleans up unnecessary branches.
+#
+# First it deletes each fully merged branch after prompting
+# for confirmation.
+#
+# Then it prunes all branches that no longer exist at each upstream
+# remote.
+
+username=`git config --get user.github`
+echo $username
+repo=`git config --get remote.origin.url | sed 's/git@github.com://' | sed 's/\.git//'`
+echo $repo
+
+branches=`git branch --no-color | grep -v -E "^\\W*master$|^\\W*\\d+\\.x$|^\\W*\\d+.\\d+$" | sed 's/\*/ /'`
+remotes=`git remote`
+
+if [ ! -z "$branches" ] ; then
+  all=n
+  delete=n
+  for branch in $branches; do
+    isMerged=`git api "/repos/$repo/pulls?state=closed&head=$username:$branch" | jq '. | length'`
+    if [ $isMerged = '1' ]; then
+      if [ $all = 'n' ] ; then
+        delete=n
+        read -p "Delete $branch (y=yes, n=no, a=all)? " prompt
+        echo "all=$all delete=$delete prompt=$prompt"
+        if [ "$prompt" = 'a' ] ; then
+          delete=y
+          all=y
+        elif [ "$prompt" = 'y' ]; then
+          delete=y
+        fi
+      fi
+      
+      if [ "$delete" = 'y' ] ; then
+        git branch -D $branch
+        for remote in $remotes; do
+          if [[ $(git ls-remote $remote $branch) ]]; then
+            git push -f $remote :$branch
+          fi
+        done
+      fi
+    fi
+  done
+fi
+
+        
