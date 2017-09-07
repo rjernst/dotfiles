@@ -1,11 +1,16 @@
 
-[[ -r ~/.bash_env ]] && source ~/.bash_env
-[[ -r ~/.bash_env.local ]] && source ~/.bash_env.local
+[[ -r ~/.bash_rc.local ]] && source ~/.bash_rc.local
 
-[[ -r ~/.bash_aliases ]] && source ~/.bash_aliases
-[[ -r ~/.bash_aliases.local ]] && source ~/.bash_aliases.local
+[[ -r ~/.bash/env.local ]] && source ~/.bash/env.local
+source ~/.bash/env
+[[ -r ~/.bash/env.override ]] && source ~/.bash/env.override
 
-[[ -r ~/.bash_gitcompletion ]] && source ~/.bash_gitcompletion
+[[ -r ~/.bash/aliases.local ]] && source ~/.bash/aliases.local
+source ~/.bash/aliases
+[[ -r ~/.bash/aliases.override ]] && source ~/.bash/aliases.override
+
+source ~/.bash/git_completion
+source ~/.bash/iterm2_integration
 
 set -o noclobber       # can't > to existing files
 set -o ignoreeof       # ignore ^D to exit shell
@@ -29,11 +34,6 @@ PS1="\[\033]0;${TITLE} \a\]${PROMPT}"
 # you have resized an xterm (is this needed?)
 alias xrs='set -o noglob; eval `resize`; set +o noglob'
 
-[[ -r ~/.bash_rc.local ]] && source ~/.bash_rc.local
+[[ -r ~/.bash/rc.override ]] && source ~/.bash/rc.override
 
 # vi: set tabstop=4 shiftwidth=4 textwidth=79 filetype=sh expandtab:
-
-export NVM_DIR="/Users/rjernst/.nvm"
-[ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"  # This loads nvm
-
-export PATH="$PATH:$HOME/.rvm/bin" # Add RVM to PATH for scripting

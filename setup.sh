@@ -14,16 +14,20 @@ setup_link() {
   ln -s $SOURCE $DEST
 }
 
-setup_link "bash/rc"              ".bashrc"
-setup_link "bash/profile"         ".bash_profile"
-setup_link "bash/aliases"         ".bash_aliases"
-setup_link "bash/env"             ".bash_env"
-setup_link "git/bash_completion"  ".bash_gitcompletion"
-setup_link "git/config"           ".gitconfig"
-setup_link "git/ignore"           ".gitignore"
-setup_link "hg/rc"                ".hgrc"
-setup_link "vim/rc"               ".vimrc"
-setup_link "tmux/conf"            ".tmux.conf"
+mkdir -p ~/.bash
+setup_link "bash/rc"                  ".bashrc"
+setup_link "bash/profile"             ".bash_profile"
+setup_link "bash/aliases"             ".bash/aliases"
+setup_link "bash/env"                 ".bash/env"
+setup_link "bash/iterm2_integration"  ".bash/iterm2_integration"
+setup_link "bash/git_completion"      ".bash/git_completion"
+mkdir -p ~/.git
+setup_link "git/config"               ".gitconfig"
+setup_link "git/ignore"               ".gitignore"
+setup_link "git/prune-branches"       ".git/prune-branches"
+setup_link "hg/rc"                    ".hgrc"
+setup_link "vim/rc"                   ".vimrc"
+setup_link "tmux/conf"                ".tmux.conf"
 
 echo "Sourcing bash files"
 source ~/.bash_profile # todo might need to change this for linux vs mac
