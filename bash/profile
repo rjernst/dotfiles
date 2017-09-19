@@ -1,6 +1,7 @@
 
-[[ -r ~/.bashrc ]] && source ~/.bashrc
 [[ -r ~/.bashrc.local ]] && source ~/.bashrc.local
+[[ -r ~/.bashrc ]] && source ~/.bashrc
+[[ -r ~/.bashrc.override ]] && source ~/.bashrc.override
 
 if [[ "$AUTO_TMUX" -eq "1" ]]; then
   tmux has-session 2> /dev/null

@@ -34,6 +34,18 @@ PS1="\[\033]0;${TITLE} \a\]${PROMPT}"
 # you have resized an xterm (is this needed?)
 alias xrs='set -o noglob; eval `resize`; set +o noglob'
 
+function tabname {
+  if [ -z $TMUX ] ; then
+    printf "\e]1;$@\a"
+  else
+   tmux rename-window $@
+  fi
+}
+
+function panename {
+  tmux rename-pane $@
+}
+
 [[ -r ~/.bash/rc.override ]] && source ~/.bash/rc.override
 
 # vi: set tabstop=4 shiftwidth=4 textwidth=79 filetype=sh expandtab:
