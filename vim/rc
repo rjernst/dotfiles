@@ -27,5 +27,6 @@ let mapleader = ","
 
 """ color settings
 hi Comment ctermfg=lightgray
+set t_Co=256
 
 map! jk <ESC> 
