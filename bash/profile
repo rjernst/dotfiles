@@ -1,8 +1,5 @@
 
-[[ -r ~/.bashrc.local ]] && source ~/.bashrc.local
 source ~/.bashrc
-[[ -r ~/.bashrc.override ]] && source ~/.bashrc.override
-source ~/.bash/iterm2_integration
 
 if [[ "$AUTO_TMUX" -eq "1" && -z "$TMUX" ]]; then
   tmux has-session 2> /dev/null
