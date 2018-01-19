@@ -31,7 +31,7 @@ setup_link "tmux/conf"                ".tmux.conf"
 
 mkdir -p ~/.scripts
 for script in scripts/*; do
-  setup_link $script $(basename $script)
+  setup_link $script .scripts/$(basename $script)
 done
 
 echo "Sourcing bash files"
