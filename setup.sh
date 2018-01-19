@@ -29,5 +29,10 @@ setup_link "hg/rc"                    ".hgrc"
 setup_link "vim/rc"                   ".vimrc"
 setup_link "tmux/conf"                ".tmux.conf"
 
+mkdir -p ~/.scripts
+for script in scripts/*; do
+  setup_link $script $(basename $script)
+done
+
 echo "Sourcing bash files"
 source ~/.bashrc # todo might need to change this for linux vs mac
