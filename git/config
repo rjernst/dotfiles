@@ -50,3 +50,6 @@
 
 [push]
 	default = simple
+[user]
+	name = Ryan Ernst
+	email = ryan@iernst.net

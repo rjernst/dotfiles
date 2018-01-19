@@ -15,8 +15,10 @@ alias py3='python3'
 alias jdk='echo $JAVA_HOME'
 alias jdk7='export JAVA_HOME=${JAVA7_HOME:?"JAVA7_HOME is not set"}'
 alias jdk8='export JAVA_HOME=${JAVA8_HOME:?"JAVA8_HOME is not set"}'
-alias jdk9='export JAVA_HOME=${JAVA8_HOME:?"JAVA8_HOME is not set"}'
+alias jdk9='export JAVA_HOME=${JAVA9_HOME:?"JAVA9_HOME is not set"}'
 alias jdk8ea='export JAVA_HOME=${JAVA8_EA_HOME:?"JAVA8_EA_HOME is not set"}'
 alias jdk9ea='export JAVA_HOME=${JAVA9_EA_HOME:?"JAVA9_EA_HOME is not set"}'
+
+alias gw='~/.scripts/gradlew.sh'
 
 # vi: set tabstop=4 shiftwidth=4 textwidth=79 filetype=sh expandtab:
