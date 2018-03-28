@@ -4,5 +4,4 @@
 .DS_Store
 *.patch
 #*.iml
-lib/
 **/.local-*

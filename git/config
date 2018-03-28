@@ -31,6 +31,9 @@
     excludesfile = ~/.gitignore
     autocrlf = input
 
+[rebase]
+    instructionFormat = %s [%an]
+
 [alias]
     co = checkout
     ci = commit
