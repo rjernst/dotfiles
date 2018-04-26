@@ -1,14 +1,44 @@
 #!/usr/bin/env bash
 
 set -e
+set -x
 
-DOTFILES=$HOME/.dotfiles2
+DOTFILES=$HOME/.dotfiles
 if [ ! -d "$DOTFILES" ]; then
-  #git clone git@github.com:rjernst/dotfiles.git $DOTFILES
-  git clone $HOME/.dotfiles/.git $DOTFILES
+  git clone git@github.com:rjernst/dotfiles.git $DOTFILES
   cd $DOTFILES
+  git checkout zsh
   git submodule init
-  git submodule update
 fi
 
+git submodule update
 
+"$DOTFZF/install" --key-bindings --completion --no-update-rc
+
+echo "Setting up config files"
+
+setup_link() {
+  SOURCE=$DIR/$1
+  DEST=~/$2
+  if [[ -e "$DEST" ]]; then
+    echo "Replacing old file $DEST"
+    rm $DEST
+  fi 
+  echo "Linking $SOURCE to $DEST"
+  ln -s $SOURCE $DEST
+}
+
+setup_link "bash/rc"                  ".bashrc"
+setup_link "bash/profile"             ".bash_profile"
+#setup_link "bash/aliases"             ".bash/aliases"
+#setup_link "bash/env"                 ".bash/env"
+
+setup_link "git/config"               ".gitconfig"
+#setup_link "git/prune-branches"       ".git/prune-branches"
+setup_link "vim/rc"                   ".vimrc"
+setup_link "vim"                      ".vim"
+setup_link "tmux/conf"                ".tmux.conf"
+setup_link "zsh/rc"                   ".zshrc"
+
+echo "Sourcing zshrc"
+source ~/.zshrc
