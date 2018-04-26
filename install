@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+
+set -e
+
+DOTFILES=$HOME/.dotfiles2
+if [ ! -d "$DOTFILES" ]; then
+  #git clone git@github.com:rjernst/dotfiles.git $DOTFILES
+  git clone $HOME/.dotfiles/.git $DOTFILES
+  cd $DOTFILES
+  git submodule init
+  git submodule update
+fi
+
+

@@ -1,0 +1,30 @@
+[submodule "vim/pack/plugins/start/ale"]
+	path = vim/pack/plugins/start/ale
+	url = https://github.com/w0rp/ale.git
+[submodule "vim/pack/plugins/start/fzf.vim"]
+	path = vim/pack/plugins/start/fzf.vim
+	url = https://github.com/junegunn/fzf.vim.git
+[submodule "vim/pack/plugins/start/vim-polyglot"]
+	path = vim/pack/plugins/start/vim-polyglot
+	url = https://github.com/sheerun/vim-polyglot.git
+[submodule "vim/pack/plugins/start/vim-javascript-syntax"]
+	path = vim/pack/plugins/start/vim-javascript-syntax
+	url = https://github.com/jelera/vim-javascript-syntax.git
+[submodule "vim/pack/plugins/start/vim-js-pretty-template"]
+	path = vim/pack/plugins/start/vim-js-pretty-template
+	url = https://github.com/Quramy/vim-js-pretty-template.git
+[submodule "plugins/vim-colors-solarized"]
+	path = plugins/vim-colors-solarized
+	url = https://github.com/altercation/vim-colors-solarized.git
+[submodule "plugins/fzf"]
+	path = plugins/fzf
+	url = https://github.com/junegunn/fzf.git
+[submodule "plugins/zsh-completions"]
+	path = plugins/zsh-completions
+	url = https://github.com/zsh-users/zsh-completions.git
+[submodule "plugins/zsh-history-substring-search"]
+	path = plugins/zsh-history-substring-search
+	url = https://github.com/zsh-users/zsh-history-substring-search.git
+[submodule "plugins/zsh-syntax-highlighting"]
+	path = plugins/zsh-syntax-highlighting
+	url = https://github.com/zsh-users/zsh-syntax-highlighting.git
