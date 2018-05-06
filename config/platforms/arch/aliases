@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+
+alias paclist='comm -23 <(pacman -Qeqn | sort) <(pacman -Qgq base base-devel | sort)'
+alias aurlist='comm -13 <(pacman -Qeqn | sort) <(pacman -Qeq | sort)'
+

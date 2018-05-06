@@ -30,3 +30,6 @@ hi Comment ctermfg=lightgray
 set t_Co=256
 
 map! jk <ESC> 
+
+""" change viminfo location
+set viminfo+=n~/.vim/viminfo
