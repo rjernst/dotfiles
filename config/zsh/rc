@@ -22,6 +22,7 @@ zstyle ':completion:*' matcher-list '' 'm:{[:lower:][:upper:]}={[:upper:][:lower
 
 autoload -U compinit && compinit -d $HOME/.zsh/compdump
 zmodload -i zsh/complist
+zmodload -i zsh/zle
 
 unsetopt menu_complete
 unsetopt flowcontrol
@@ -31,6 +32,7 @@ setopt append_history
 setopt auto_menu
 setopt complete_in_word
 setopt extended_history
+setopt extended_glob
 setopt hist_expire_dups_first
 setopt hist_ignore_dups
 setopt hist_ignore_space

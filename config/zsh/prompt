@@ -4,24 +4,111 @@ setopt prompt_subst
 bindkey '^a' beginning-of-line
 bindkey '^e' end-of-line
 
-git_prompt() {
-  BRANCH=$(git branch 2> /dev/null | sed -e '/^[^*]/d' -e 's/*\(.*\)/\1/')
+#
+#  |-(~/mypwd/colored)---------------------------(gitinfo)-|
+#  |->                                                TIME-|
+#
+#  ULCORNER + HBAR + ( + PWD + ) HBAR(repeated) +
+#
+#
 
-  if [ ! -z $BRANCH ]; then
-    echo -n "%F{yellow}$BRANCH"
+git_prompt_info() {
+  local branch=$(git branch 2> /dev/null | sed -e '/^[^*]/d' -e 's/*\(.*\)/\1/')
 
-    if [ ! -z "$(git status --short)" ]; then
-      echo " %F{red}✗"
-    fi
-  fi
+  echo -n "$branch "
 }
 
-vim_prompt() {
-  if [ ! -z $VIMRUNTIME ]; then
-    echo ":%F{green}sh ";
+# setup env vars dynamically before PROMPT is resolved
+precmd() {
+  local last_status=$?
+  PR_STATUS=""
+  if [ $last_status -ne 0 ]; then
+    local status_failed="[ failed: $last_status ]"
   fi
+  local elapsed=$(( $SECONDS - ${TIMER:-$SECONDS} ))
+  unset TIMER
+  if [ $elapsed -gt 1 ]; then
+    local status_timer="[ timer: "
+    local hours=$(( $elapsed / 3600 ))
+    [ $hours -gt 0 ] && status_timer+="$hours hours "
+    elapsed=$(( $elapsed % 3600 ))
+    local mins=$(( $elapsed / 60 ))
+    [ $mins -gt 0 ] && status_timer+="$mins mins "
+    local secs=$(( $elapsed % 60 ))
+    [ $secs -gt 0 ] && status_timer+="$secs secs "
+    status_timer+="]"
+  fi
+  if [[ ! -z "$status_timer" || ! -z "$status_failed" ]]; then
+    PR_STATUS="⇧ $status_failed $status_timer"
+  fi
+
+  local termwidth=$(( $COLUMNS - 2 ))
+  local info_repo=$(git_prompt_info)
+  local info_repo_len=${#info_repo}
+  local info_pwd=${(%):-%~}
+  local info_pwd_len=${#info_pwd}
+  local ul_corner="${PR_SHIFT_IN}${PR_ULCORNER}${PR_HBAR}${PR_SHIFT_OUT}"
+  local fillbar_size=$(( $termwidth - 9 - $info_pwd_len - $info_repo_len ))
+  local fillbar="${PR_SHIFT_IN}${PR_HBAR}"
+  if [ $fillbar_size -gt 0 ]; then
+    while [ $fillbar_size -gt 0 ]; do
+      fillbar+="${PR_HBAR}"
+      (( fillbar_size -= 1 ))
+    done
+  else
+    info_pwd="%$(( $info_pwd_len + $fillbar_size ))<...<%~%<<"
+  fi
+  fillbar+="${PR_HBAR}${PR_SHIFT_OUT}"
+  local ur_corner="${PR_SHIFT_IN}${PR_HBAR}${PR_URCORNER}${PR_SHIFT_OUT}"
+  PR_INFOBAR="${ul_corner}( ${info_pwd} )${fillbar}${info_repo}${ur_corner}"
+
+  PR_PROMPT="➜  "
+  PR_TIME="[$(date +%T)]"
 }
 
-PS1='
-$(vim_prompt)%F{blue}%~$(git_prompt)
-%F{244}%# %F{reset}'
+rewrite_prompt_on_enter() {
+  OLD_PROMPT="$PROMPT"
+  OLD_RPROMPT="$RPROMPT"
+  PROMPT='$PR_TIME $PR_PROMPT'
+  if [ ! -z "$PR_STATUS" ]; then
+    PROMPT='$PR_STATUS'$'\n'$PROMPT
+  fi
+  RPROMPT=""
+  zle reset-prompt
+  PROMPT="$OLD_PROMPT"
+  RPROMPT="$OLD_RPROMPT"
+  TIMER=${TIMER:-$SECONDS}
+  zle accept-line
+}
+
+autoload colors zsh/terminfo
+if [[ "$terminfo[colors]" -ge 8 ]]; then
+  colors
+fi
+for color in RED GREEN YELLOW BLUE MAGENTA CYAN WHITE; do
+  eval PR_$color='%{$terminfo[bold]$fg[${(L)color}]%}'
+  eval PR_LIGHT_$color='%{$fg[${(L)color}]%}'
+  (( count = $count + 1 ))
+done
+PR_NO_COLOR="%{$terminfo[sgr0]%}"
+
+typeset -A altchar
+set -A altchar ${(s..)terminfo[acsc]}
+PR_SET_CHARSET="%{$terminfo[enacs]%}"
+PR_SHIFT_IN="%{$terminfo[smacs]%}"
+PR_SHIFT_OUT="%{$terminfo[rmacs]%}"
+PR_HBAR=${altchar[q]:--}
+PR_ULCORNER=${altchar[l]:--}
+PR_LLCORNER=${altchar[m]:--}
+PR_LRCORNER=${altchar[j]:--}
+PR_URCORNER=${altchar[k]:--}
+
+zle -N rewrite_prompt_on_enter
+bindkey "^M" rewrite_prompt_on_enter
+
+PROMPT='$PR_SET_CHARSET
+$PR_STATUS
+$PR_INFOBAR
+${PR_SHIFT_IN}${PR_LLCORNER}${PR_HBAR}${PR_SHIFT_OUT}$PR_PROMPT'
+
+RPROMPT='$PR_TIME${PR_SHIFT_IN}${PR_HBAR}${PR_LRCORNER}${PR_SHIFT_OUT}'
