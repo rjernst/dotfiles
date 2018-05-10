@@ -13,17 +13,20 @@ bindkey '^e' end-of-line
 #
 
 git_prompt_info() {
-  local branch=$(git branch 2> /dev/null | sed -e '/^[^*]/d' -e 's/*\(.*\)/\1/')
+  #local branch=$(git branch 2> /dev/null | sed -e '/^[^*]/d' -e 's/* \(.*\)/\1/')
+  local branch=$(git symbolic-ref --short -q HEAD 2>/dev/null)
 
-  echo -n "$branch "
+  if [ ! -z "$branch" ]; then
+    echo -n "[ $branch ]"
+  fi
 }
 
 # setup env vars dynamically before PROMPT is resolved
 precmd() {
-  local last_status=$?
+  PR_LAST_STATUS=${PR_LAST_STATUS:-$?}
   PR_STATUS=""
-  if [ $last_status -ne 0 ]; then
-    local status_failed="[ failed: $last_status ]"
+  if [ $PR_LAST_STATUS -ne 0 ]; then
+    local status_failed="[ failed: $PR_LAST_STATUS]"
   fi
   local elapsed=$(( $SECONDS - ${TIMER:-$SECONDS} ))
   unset TIMER
@@ -39,14 +42,14 @@ precmd() {
     status_timer+="]"
   fi
   if [[ ! -z "$status_timer" || ! -z "$status_failed" ]]; then
-    PR_STATUS="⇧ $status_failed $status_timer"
+    PR_STATUS="⇧ $PR_LIGHT_RED$status_failed $PR_LIGHT_YELLOW$status_timer$PR_NO_COLOR"$'\n'
   fi
 
   local termwidth=$(( $COLUMNS - 2 ))
   local info_repo=$(git_prompt_info)
   local info_repo_len=${#info_repo}
-  local info_pwd=${(%):-%~}
-  local info_pwd_len=${#info_pwd}
+  PR_INFO_PWD=${(%):-%~}
+  local info_pwd_len=${#PR_INFO_PWD}
   local ul_corner="${PR_SHIFT_IN}${PR_ULCORNER}${PR_HBAR}${PR_SHIFT_OUT}"
   local fillbar_size=$(( $termwidth - 9 - $info_pwd_len - $info_repo_len ))
   local fillbar="${PR_SHIFT_IN}${PR_HBAR}"
@@ -56,11 +59,11 @@ precmd() {
       (( fillbar_size -= 1 ))
     done
   else
-    info_pwd="%$(( $info_pwd_len + $fillbar_size ))<...<%~%<<"
+    PR_INFO_PWD="%$(( $info_pwd_len + $fillbar_size ))<...<%~%<<"
   fi
   fillbar+="${PR_HBAR}${PR_SHIFT_OUT}"
   local ur_corner="${PR_SHIFT_IN}${PR_HBAR}${PR_URCORNER}${PR_SHIFT_OUT}"
-  PR_INFOBAR="${ul_corner}( ${info_pwd} )${fillbar}${info_repo}${ur_corner}"
+  PR_INFOBAR="${ul_corner}[ ${PR_GREEN}$PR_INFO_PWD${PR_NO_COLOR} ]${fillbar}${info_repo}${ur_corner}"
 
   PR_PROMPT="➜  "
   PR_TIME="[$(date +%T)]"
@@ -69,7 +72,7 @@ precmd() {
 rewrite_prompt_on_enter() {
   OLD_PROMPT="$PROMPT"
   OLD_RPROMPT="$RPROMPT"
-  PROMPT='$PR_TIME $PR_PROMPT'
+  PROMPT='$PR_LIGHT_YELLOW$PR_TIME${PR_LIGHT_GREEN}[$PR_INFO_PWD]$PR_NO_COLOR $PR_PROMPT'
   if [ ! -z "$PR_STATUS" ]; then
     PROMPT='$PR_STATUS'$'\n'$PROMPT
   fi
@@ -78,6 +81,11 @@ rewrite_prompt_on_enter() {
   PROMPT="$OLD_PROMPT"
   RPROMPT="$OLD_RPROMPT"
   TIMER=${TIMER:-$SECONDS}
+  if [ -z $BUFFER ]; then
+    PR_LAST_STATUS=0
+  else
+    unset PR_LAST_STATUS
+  fi 
   zle accept-line
 }
 
@@ -86,8 +94,9 @@ if [[ "$terminfo[colors]" -ge 8 ]]; then
   colors
 fi
 for color in RED GREEN YELLOW BLUE MAGENTA CYAN WHITE; do
-  eval PR_$color='%{$terminfo[bold]$fg[${(L)color}]%}'
-  eval PR_LIGHT_$color='%{$fg[${(L)color}]%}'
+  #eval PR_$color="%{$terminfo[bold]$fg[${(L)color}]%}"
+  eval PR_$color="%{$terminfo[bold]$fg[${(L)color}]%}"
+  eval PR_LIGHT_$color="%{$fg[${(L)color}]%}"
   (( count = $count + 1 ))
 done
 PR_NO_COLOR="%{$terminfo[sgr0]%}"
@@ -106,9 +115,8 @@ PR_URCORNER=${altchar[k]:--}
 zle -N rewrite_prompt_on_enter
 bindkey "^M" rewrite_prompt_on_enter
 
-PROMPT='$PR_SET_CHARSET
-$PR_STATUS
+PROMPT='$PR_SET_CHARSET$PR_STATUS
 $PR_INFOBAR
 ${PR_SHIFT_IN}${PR_LLCORNER}${PR_HBAR}${PR_SHIFT_OUT}$PR_PROMPT'
 
-RPROMPT='$PR_TIME${PR_SHIFT_IN}${PR_HBAR}${PR_LRCORNER}${PR_SHIFT_OUT}'
+RPROMPT='$PR_YELLOW$PR_TIME$PR_NO_COLOR${PR_SHIFT_IN}${PR_HBAR}${PR_LRCORNER}${PR_SHIFT_OUT}'
