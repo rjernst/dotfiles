@@ -25,5 +25,6 @@ alias gw='$DOTFILES/scripts/gradlew.sh'
 [ -f $ZSHFILES/aliases.platform ] && source $ZSHFILES/aliases.platform
 
 alias reload-config='echo "Reloading $HOME/.zshrc"; source $HOME/.zshrc'
+alias cdd='cd $DOTFILES'
 
 # vi: set tabstop=2 shiftwidth=2 filetype=sh expandtab:
