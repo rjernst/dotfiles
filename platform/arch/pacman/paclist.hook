@@ -1,0 +1,9 @@
+[Trigger]
+Operation = Install
+Operation = Remove
+Type = Package
+Target = *
+
+[Action]
+When = PostTransaction
+Exec = /bin/bash -c 'comm -23 <(pacman -Qeqn | sort) <(pacman -Qgq base base-devel | sort) > /etc/paclist.txt'

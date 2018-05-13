@@ -1,8 +1,0 @@
-
-%include ~/.hgauth
-
-[ui]
-username = Ryan Ernst <ryan@iernst.net>
-
-[hostfingerprints]
-code.google.com = 2e:cb:9d:98:17:29:6e:1f:ae:1e:60:9d:74:8b:67:d9:de:1e:3b:07

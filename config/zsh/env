@@ -1,0 +1,22 @@
+
+export DOTFILES=$HOME/.dotfiles
+export ZSHFILES=$HOME/.zsh
+
+export EDITOR=/usr/bin/vim
+export CLICOLOR=1
+export LESSHISTSIZE=0
+export GRADLE_USER_HOME=$HOME/.gradle
+
+[ -f $ZSHFILES/env.machine ] && source $ZSHFILES/env.machine
+[ -f $ZSHFILES/env.platform ] && source $ZSHFILES/env.platform
+
+# find the latest installed java home
+for i in {7..18}; do
+  JAVA_HOME_ENV=JAVA${i}_HOME
+  TEST_HOME=$(eval echo \$$JAVA_HOME_ENV)
+  if [ -d "$TEST_HOME" ]; then
+    export JAVA_HOME=$TEST_HOME
+  fi
+done
+
+# vi: set tabstop=2 shiftwidth=2 filetype=sh expandtab:

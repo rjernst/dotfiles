@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+
+DOTFILES=$HOME/.dotfiles
+CONFIG_FILES=$DOTFILES/config
+
+setup_link() {
+  SOURCE=$CONFIG_FILES/$1
+  DEST=$HOME/$2
+  if [ -L "$DEST" ]; then
+    rm -f $DEST
+  fi 
+  echo "$SOURCE -> $DEST"
+  ln -s $SOURCE $DEST
+}
+
+setup_link "gitconfig"                          ".gitconfig"
+setup_link "tmux.conf"                          ".tmux.conf"
+
+setup_link "vim/rc"                             ".vimrc"
+[ ! -d $HOME/.vim ] && mkdir $HOME/.vim
+for VIMFILE in $CONFIG_FILES/vim/*; do
+  NAME=$(basename $VIMFILE)
+  if [[ $NAME != "rc" ]]; then
+  	setup_link "vim/$NAME"                      ".vim/$NAME"
+  fi
+done
+
+setup_link "zsh/rc"                             ".zshrc"
+[ ! -d $HOME/.zsh ] && mkdir $HOME/.zsh
+for ZSHFILE in $CONFIG_FILES/zsh/*; do
+  NAME=$(basename $ZSHFILE)
+  if [[ $NAME != "rc" && $NAME != "login" ]]; then
+  	setup_link "zsh/$NAME"                      ".zsh/$NAME"
+  fi
+done
+
+setup_link "machines/$HOSTNAME/aliases"         ".zsh/aliases.machine"
+setup_link "machines/$HOSTNAME/env"             ".zsh/env.machine"
+
+source $DOTFILES/platform/detect
+setup_link "platforms/$PLATFORM/aliases"        ".zsh/aliases.platform"
+setup_link "platforms/$PLATFORM/env"            ".zsh/env.platform"
+
+# run fzf installation, but don't let it mess with the real zshrc
+ZDOTDIR=/tmp "$DOTFILES/plugins/fzf/install" --key-bindings --completion --no-update-rc --no-bash &> /dev/null
+mv -f $HOME/.fzf.zsh $HOME/.zsh/fzf
+
+echo ""
+echo "Config files are setup. Run 'reload-config' to re-source zsh config."
