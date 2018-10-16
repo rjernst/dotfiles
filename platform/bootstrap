@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-BASE_URL=https://raw.githubusercontent.com/rjernst/dotfiles/zsh/platform
+BASE_URL=https://raw.githubusercontent.com/rjernst/dotfiles/master/platform
 curl -s $BASE_URL/detect | source /dev/stdin
 
 case "$PLATFORM" in

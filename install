@@ -14,7 +14,7 @@ setup_link() {
 }
 
 setup_link "gitconfig"                          ".gitconfig"
-setup_link "tmux.conf"                          ".tmux.conf"
+setup_link "tmux/conf"                          ".tmux.conf"
 
 setup_link "vim/rc"                             ".vimrc"
 [ ! -d $HOME/.vim ] && mkdir $HOME/.vim
