@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+
+BASE_URL=https://raw.githubusercontent.com/rjernst/dotfiles/zsh
+PLATFORM=$(curl -s $BASE_URL/scripts/detect-platform | bash)
+
+bootstrap_macos() {
+  command -v brew &> /dev/null || {
+    echo "---> Installing homebrew"
+    /usr/bin/ruby -e "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/master/install)"
+  }
+  command -v ansible &> /dev/null || {
+    echo "---> Installing ansible"
+    /usr/local/bin/brew install ansible
+  }
+}
+
+bootstrap_arch() {
+  pacman -S ansible
+}
+
+case "$PLATFORM" in
+  'macos')
+    bootstrap_macos        
+    ;;
+  'arch')
+    bash <(curl -s $BASE_URL/arch/bootstrap)
+    ;;
+  *)
+    echo "Unsupported platform $PLATFORM"
+    ;; 
+esac

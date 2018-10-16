@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+
+if [ $(uname) == "Darwin" ]; then
+  echo "macos"
+else
+  if [ -f /etc/arch-release ]; then
+    echo "arch"
+  else
+    echo "unknown"
+  fi
+fi

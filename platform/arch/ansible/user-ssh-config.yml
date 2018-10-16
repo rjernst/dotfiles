@@ -1,0 +1,18 @@
+---
+- name: Configure ssh for user
+  hosts: localhost
+  become: true
+
+  vars_prompt:
+    - name: "ssh_password_hash"
+      prompt: "password"
+      private: yes
+      encrypt: "sha512_crypt"
+      confirm: yes
+      salt_size: 7
+
+  tasks:
+    - name: Install zsh
+      pacman:
+        name: zsh
+

@@ -1,0 +1,30 @@
+---
+- name: Creat primary user
+  hosts: localhost
+  become: true
+
+  vars_prompt:
+    - name: "username"
+      prompt: "username"
+      private: no
+
+    - name: "password_hash"
+      prompt: "password"
+      private: yes
+      encrypt: "sha512_crypt"
+      confirm: yes
+      salt_size: 7
+
+  tasks:
+    - name: Install zsh
+      pacman:
+        name: zsh
+
+    - name: Add primary user
+      user:
+        name: "{{ username }}"
+        shell: /bin/zsh
+        groups: wheel
+        password: "{{ password_hash }}"
+        append: yes
+

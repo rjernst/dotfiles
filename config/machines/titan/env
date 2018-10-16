@@ -1,0 +1,1 @@
+export VAGRANT_WINDOWS_2012R2_BOX=elastic/windows-2012_r2-x86_64
