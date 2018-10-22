@@ -1,0 +1,12 @@
+---
+- name: clone yay repo
+  git:
+    repo: "https://aur.archlinux.org/yay.git"
+    dest: /tmp/yay
+
+- name: install yay
+  shell: cd /tmp/yay && makepkg -si
+
+- name: install ansible-aur
+  shell: yay -S --noconfirm --needed ansible-aur
+

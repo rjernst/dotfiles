@@ -1,0 +1,15 @@
+---    
+- name: install openssh
+  pacman:
+    name: openssh
+
+- name: configure sshd
+  template:
+    src: sshd_config
+    dest: /etc/ssh/sshd_config
+
+- name: enable and start sshd
+  systemd:
+    name: sshd
+    enabled: yes
+    state: started

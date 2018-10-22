@@ -1,0 +1,14 @@
+---
+- name: setup dotfiles
+  hosts: all
+  vars:
+    username: "{{ ansible_user_id }}"
+  tasks:
+    - include_role:
+        name: dotfiles
+        tasks_from: deps
+      become: yes
+
+    - include_role:
+        name: dotfiles
+

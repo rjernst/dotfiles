@@ -1,0 +1,50 @@
+---
+- name: use ntp
+  shell: timedatectl set-ntp true
+
+- name: set timezone
+  file:
+    src:  /usr/share/zoneinfo/America/Los_Angeles
+    dest: /etc/localtime
+    force: yes
+    state: link
+
+- name: generate adjtime
+  shell: hwclock --systohc
+
+- name: set /etc/locale.gen
+  copy:
+    content: "en_US.UTF-8 UTF-8"
+    dest: /etc/locale.gen
+
+- name: generate locale
+  shell: locale-gen
+
+- name: set /etc/locale.conf
+  copy:
+    content: "LANG=en_US.UTF-8"
+    dest: /etc/locale.conf
+
+- name: set /etc/hostname
+  copy:
+    content: "{{ hostname }}"
+    dest: /etc/hostname
+
+- name: set /etc/hosts
+  template:
+   src: hosts
+   dest: /etc/hosts
+
+# boot setup
+- name: generate boot ramfs
+  shell: mkinitcpio -p linux
+
+- name: install grub
+  pacman:
+    name: grub
+
+- name: put grub in /boot
+  shell: grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=GRUB
+
+- name: configure grub
+  shell: grub-mkconfig -o /boot/grub/grub.cfg

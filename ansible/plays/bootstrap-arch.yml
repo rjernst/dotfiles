@@ -1,0 +1,55 @@
+---
+- name: bootstrap arch
+  hosts: localhost
+  vars_prompt:
+    - name: "hostname"
+      prompt: "enter hostname"
+      private: no
+    - name: "username"
+      prompt: "admin username"
+      private: no
+    - name: "ssh_pubkey"
+      prompt: "ssh pubkey"
+      private: no
+    - name: "ip_address"
+      prompt: "fixed ip address"
+      private: no
+      default: "127.0.1.1"
+    - name: "sshd_port"
+      prompt: "sshd port"
+      private: no
+      default: "22"
+  vars:
+    # https checkout of dotfiles before ssh forwarding is possible
+    github_base: "https://github.com/"
+
+  tasks:
+    - name: basic install
+      include_role:
+        name: arch
+        tasks_from: install
+      when: ansible_architecture == "x86_64"
+
+    - name: create admin user
+      include_role:
+        name: arch
+        tasks_from: create-admin
+
+    - name: enable remote access
+      include_role:
+        name: arch
+        tasks_from: sshd
+
+    - name: setup dotfiles
+      include_role:
+        name: dotfiles
+
+    - name: setup aur helper
+      include_role:
+        name: arch
+        tasks_from: aur
+      become_user: "{{ username }}"
+
+    # TODO: amd/intel microcode
+
+

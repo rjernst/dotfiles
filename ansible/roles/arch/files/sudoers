@@ -1,0 +1,5 @@
+## sudo for root is a noop
+root ALL=(ALL) ALL
+
+## wheel can sudo, but with a password!
+%wheel ALL=(ALL) ALL

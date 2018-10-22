@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+
+ANSIBLE_PLAYBOOK=/tmp/ansible-playbook
+ANSIBLE_CONFIG=/tmp/ansible.cfg
+clone_scripts() {
+  if [ -d "$ANSIBLE_PLAYBOOK" ];
+    rm -rf $ANSIBLE_PLAYBOOK
+  fi
+  echo "---> cloning ansible scripts"
+  git clone https://github.com/rjernst/ansible.git $ANSIBLE_PLAYBOOK
+}
+
+bootstrap_macos() {
+  command -v brew &> /dev/null || {
+    echo "---> installing homebrew"
+    ruby -e "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/master/install)"
+  }
+  command -v ansible &> /dev/null || {
+    echo "---> installing ansible"
+    brew install ansible
+  }
+  command -v git &> /dev/null || {
+    echo "---> installing git"
+    brew install git
+  }
+}
+
+bootstrap_arch() {
+  echo "---> set root password"
+  passwd
+  echo "---> installing ansible"
+  pacman -S --noconfirm --needed ansible
+  echo "---> installing git"
+  pacman -S --noconfirm --needed git
+  
+  clone_scripts
+
+  echo "---> setting local ansible hosts file"
+  echo "[all]\nlocalhost              ansible_connection=local" > /etc/ansible/hosts
+  echo "---> creating temporary ansible config"
+  echo "[defaults]\nroles_path=/tmp/ansible-playbook/roles" > $ANSIBLE_CONFIG
+  echo "---> running bootstrap playbook" 
+  ansible-playbook $ANSIBLE_PLAYBOOK/plays/bootstrap-arch.yml
+}
+
+BASE_URL=https://raw.githubusercontent.com/rjernst/dotfiles/master
+PLATFORM=$(curl -s $BASE_URL/scripts/detect-platform | bash)
+echo "---> detected platform: $PLATFORM"
+
+case "$PLATFORM" in
+  'macos')
+    bootstrap_macos        
+    ;;
+  'arch')
+    bootstrap_arch
+    ;;
+  *)
+    echo "unsupported platform $PLATFORM"
+    ;; 
+esac

@@ -1,0 +1,13 @@
+# {{ ansible_managed }}
+[Unit]
+Description=Backup for /mnt/ramdisk
+
+[Service]
+User={{ username }}
+Group={{ username }}
+ExecStart=/bin/bash /home/{{ username }}/.local/ramdisk-backup.sh
+ExecReload=/bin/kill -s HUP $MAINPID
+ExecStop=/bin/kill -s TERM $MAINPID
+
+[Install]
+WantedBy=multi-user.target

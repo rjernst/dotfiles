@@ -1,0 +1,19 @@
+---
+- name: clone repo
+  git:
+    repo: "https://github.com/rjernst/dotfiles.git"
+    dest: $HOME/.dotfiles
+  become_user: "{{ username }}"
+
+- name: install zsh
+  pacman:
+    name: zsh
+
+- name: install vim
+  pacman:
+    name: vim
+
+- name: initialize submodules
+  shell: git submodules init
+  chdir: $HOME/.dotfiles
+  become_user: "{{ username }}"

@@ -1,0 +1,79 @@
+---
+- name: setup elasticsearch development
+  hosts: localhost
+  vars:
+    github_user: rjernst
+    code_dir: code/elastic
+  tasks:
+    - name: clone repo
+      git:
+        repo: "git@github.com:{{ github_user }}/elasticsearch.git"
+        dest: "$HOME/{{ code_dir }}/elasticsearch"
+        update: no
+
+    - name: install vagrant
+      pacman:
+        name: vagrant
+      become: true
+
+    # kernel modules first so the default dkms is not chosen when installing vbox
+    - name: install vbox kernel modules
+      pacman:
+        name: virtualbox-host-modules-arch
+      become: true
+
+    - name: install virtualbox
+      pacman:
+        name: virtualbox
+      become: true
+
+    - name: load vbox kernel modules
+      shell: modprobe vboxdrv
+      become: true
+
+    # JAVA
+    - name: install jdk
+      aur:
+        name: jdk
+
+    - name: find latest java version
+      shell: java -version |& awk -F'"' '{print $2}' |& cut -d. -f1
+      register: java_version_str
+
+    - name: TEMP set min_jdk
+      set_fact:
+        min_jdk: 8
+
+    - name: save java version bounds
+      set_fact:
+        max_jdk: "{{ java_version_str.stdout_lines[0] }}"
+        min_jdk: "{{ min_jdk | default(java_version_str.stdout_lines[0]) }}"
+
+    - name: install older jdks
+      aur:
+        name: "jdk{{ item }}"
+      loop: "{{ range(min_jdk | int, max_jdk | int) | list }}"
+
+    - name: create oracle config dir
+      file:
+        path: /etc/oracle/java/
+        state: directory
+      become: true
+
+    - name: disable oracle usage tracking
+      copy:
+        src: usagetracker.properties
+        dest: /etc/oracle/java/
+      become: true
+
+    # TODO:
+    # * virtualbox extensions?
+    # * jdks
+    # * ramdisk
+    # * worktree checkouts
+
+    # gradle stuff
+    - name: Install ncurses compat for gradle status line
+      aur:
+        name: ncurses5-compat-libs
+

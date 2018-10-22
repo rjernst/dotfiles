@@ -1,0 +1,32 @@
+---
+- name: install sudo
+  pacman:
+    name: sudo
+
+- name: configure sudo
+  copy:
+    src: sudoers
+    dest: /etc/sudoers
+    validate: /usr/sbin/visudo -cf %s
+
+- name: "create user {{ username }}"
+  user:
+    name: "{{ username }}"
+    groups: wheel
+
+- name: create .ssh dir
+  file:
+    path: $HOME/.ssh
+    state: directory
+  become_user: "{{ username }}"
+
+- name: copy authorized keys
+  copy:
+    content: "{{ ssh_pubkey }}"
+    dest: $HOME/.ssh/authorized_keys
+  become_user: "{{ username }}"
+
+- name: "set {{ username }} shell to zsh"
+  user:
+    name: "{{ username }}"
+    shell: /bin/zsh

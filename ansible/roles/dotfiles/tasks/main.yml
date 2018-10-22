@@ -1,0 +1,19 @@
+---
+- name: clone repo
+  git:
+    repo: "{{ github_base }}{{ github_user }}/dotfiles.git"
+    dest: $HOME/.dotfiles
+
+- name: initialize submodules
+  shell: git submodules init
+  args:
+    chdir: $HOME/.dotfiles
+
+- name: updating submodules
+  shell: git submodules update
+  args:
+    chdir: $HOME/.dotfiles
+
+- name: load dotfiles 
+  shell: $HOME/.dotfiles/install
+

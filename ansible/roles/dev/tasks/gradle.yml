@@ -1,0 +1,5 @@
+---
+- name: install ncurses compat for gradle status line
+  aur:
+    name: ncurses5-compat-libs
+

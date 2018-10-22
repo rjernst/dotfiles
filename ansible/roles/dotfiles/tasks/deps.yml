@@ -1,0 +1,13 @@
+---
+- name: install zsh
+  pacman:
+    name: zsh
+
+- name: install vim
+  pacman:
+    name: vim
+
+- name: set shell to zsh
+  user:
+    name: "{{ username }}"
+    shell: /bin/zsh
