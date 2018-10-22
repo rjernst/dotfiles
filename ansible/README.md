@@ -1,4 +1,4 @@
-Run the following command to bootstrap installing ansible and checking out these scripts:
+Run the following command to bootstrap installing ansible and bootstrapping the host:
 ```
-curl -s https://raw.githubusercontent.com/rjernst/ansible/master/bootstrap | bash
+curl -s https://raw.githubusercontent.com/rjernst/dotfiles/master/ansible/bootstrap | bash
 ```

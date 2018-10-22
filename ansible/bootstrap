@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 
-ANSIBLE_PLAYBOOK=/tmp/ansible-playbook
+DOTFILES=/tmp/dotfiles
+ANSIBLE_PLAYBOOK=$DOTFILES/ansible
 ANSIBLE_CONFIG=/tmp/ansible.cfg
-clone_scripts() {
-  if [ -d "$ANSIBLE_PLAYBOOK" ];
-    rm -rf $ANSIBLE_PLAYBOOK
+clone_dotfiles() {
+  if [ -d "$DOTFILES" ];
+    rm -rf $DOTFILES
   fi
   echo "---> cloning ansible scripts"
-  git clone https://github.com/rjernst/ansible.git $ANSIBLE_PLAYBOOK
+  git clone https://github.com/rjernst/dotfiles.git $DOTFILES
 }
 
 bootstrap_macos() {
@@ -33,7 +34,7 @@ bootstrap_arch() {
   echo "---> installing git"
   pacman -S --noconfirm --needed git
   
-  clone_scripts
+  clone_dotfiles
 
   echo "---> setting local ansible hosts file"
   echo "[all]\nlocalhost              ansible_connection=local" > /etc/ansible/hosts

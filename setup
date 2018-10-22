@@ -13,6 +13,7 @@ setup_link() {
   ln -s $SOURCE $DEST
 }
 
+setup_link "ansible.cfg"                ".ansible.cfg"
 setup_link "gitconfig"                          ".gitconfig"
 setup_link "tmux/conf"                          ".tmux.conf"
 
