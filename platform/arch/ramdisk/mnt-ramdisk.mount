@@ -1,8 +1,0 @@
-[Unit]
-Description=Mount ramdisk
-
-[Mount]
-What=tmpfs
-Where=/mnt/ramdisk
-Type=tmpfs
-Options=size=32G

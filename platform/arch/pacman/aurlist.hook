@@ -1,9 +1,0 @@
-[Trigger]
-Operation = Install
-Operation = Remove
-Type = Package
-Target = *
-
-[Action]
-When = PostTransaction
-Exec = /bin/bash -c 'comm -13 <(pacman -Qeqn | sort) <(pacman -Qeq | sort) > /etc/aurlist.txt'

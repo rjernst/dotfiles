@@ -17,25 +17,3 @@
 * tmux tab names
 * tmux window name
 * terminal window name
-
-ansible
----------
-2 bootstrap scirpts
-* bootstrap-managed
-  - needs to have user configurable (don't have sudo access on some systems? so run as user to update dotfiles only
-  1. install ansible
-  2. playbook to:
-    - create ansible user
-    - add authorized keys
-    - install sudo
-    - configure sudo for ansible user
-  
-* bootstrap-control
-  1. run bootstrap-managed
-  2. playbook to:
-    - install keybase
-    - install git
-    - login to keybase
-    - checkout ansible-files
-    - init submodules (inventories)
-    - link ssh private key for ansible user to checkout
