@@ -22,7 +22,7 @@
 
 - name: copy authorized keys
   copy:
-    content: "{{ ssh_pubkey }}"
+    src: "{{ ssh_pubkey }}.pubkey"
     dest: $HOME/.ssh/authorized_keys
   become_user: "{{ username }}"
 
