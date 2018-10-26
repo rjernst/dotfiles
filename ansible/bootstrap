@@ -37,11 +37,11 @@ bootstrap_arch() {
   clone_dotfiles
 
   echo "---> setting local ansible hosts file"
-  echo "[all]\nlocalhost              ansible_connection=local" > /etc/ansible/hosts
+  echo -e "[localhost]\n127.0.0.1   ansible_connection=local" > /etc/ansible/hosts
   echo "---> creating temporary ansible config"
-  echo "[defaults]\nroles_path=/tmp/ansible-playbook/roles" > $ANSIBLE_CONFIG
+  echo -e "[defaults]\nroles_path=$ANSIBLE_PLAYBOOK/roles" > $ANSIBLE_CONFIG
   echo "---> running bootstrap playbook" 
-  ansible-playbook -v $ANSIBLE_PLAYBOOK/plays/bootstrap-arch.yml
+  ansible-playbook -vv $ANSIBLE_PLAYBOOK/plays/arch-bootstrap.yml
 }
 
 BASE_URL=https://raw.githubusercontent.com/rjernst/dotfiles/master
