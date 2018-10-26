@@ -48,11 +48,29 @@
         name: dotfiles
         tasks_from: deps
 
+    - name: configure ssh agent forwarding for github
+      set_fact:
+        ssh_auth_sock: "{{ ansible_env.SSH_AUTH_SOCK if ansible_bios_version != 'VirtualBox' else '/var/run/authsocket.sock' }}"
+
+    - name: hack ssh socket on vagrant
+      shell: "socat UNIX-LISTEN:/var/run/authsocket.sock,umask=077,user={{ username }},fork \"UNIX:$SSH_AUTH_SOCK\""
+      when: ansible_bios_version != 'VirtualBox'
+
+    - name:
+
     - name: setup dotfiles
       import_role:
         name: dotfiles
+      environment:
+        SSH_AUTH_SOCK: "{{ ssh_auth_sock }}"
       become: yes
       become_user: "{{ username }}"
+
+    - name: delete ssh socket hack
+      file:
+        path: /var/run/authsocket.sock
+        state: absent
+      when: ansible_bios_version != 'VirtualBox'
 
     - name: setup aur helper
       import_role:
