@@ -32,6 +32,10 @@
     name: "{{ username }}"
     shell: /bin/zsh
 
+- name: install pexpect
+  pip:
+    name: pexpect
+
 - name: "set {{ username }} password"
   expect:
     command: passwd
