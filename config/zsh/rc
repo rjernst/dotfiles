@@ -5,7 +5,7 @@ source $ZSHFILES/env
 source $ZSHFILES/aliases
 source $ZSHFILES/fzf
 source $ZSHFILES/iterm2
-eval `dircolors $ZSHFILES/colors`
+#eval `dircolors $ZSHFILES/colors`
 
 INCLUDES=$DOTFILES/plugins
 source $INCLUDES/zsh-completions/zsh-completions.plugin.zsh

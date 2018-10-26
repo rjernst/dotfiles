@@ -4,7 +4,7 @@ DOTFILES=/tmp/dotfiles
 ANSIBLE_PLAYBOOK=$DOTFILES/ansible
 ANSIBLE_CONFIG=/tmp/ansible.cfg
 clone_dotfiles() {
-  if [ -d "$DOTFILES" ];
+  if [ -d "$DOTFILES" ]; then
     rm -rf $DOTFILES
   fi
   echo "---> cloning ansible scripts"
