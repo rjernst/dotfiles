@@ -25,7 +25,7 @@ PermitRootLogin no
 Subsystem	sftp	/usr/lib/ssh/sftp-server
 
 # only explicit users
-AllowUsers {{ username }}
+# AllowUsers {{ username }}
 
 # and they can do the usual stuff
 AllowAgentForwarding yes
