@@ -48,12 +48,14 @@
     - name: setup dotfiles
       import_role:
         name: dotfiles
+      become: yes
       become_user: "{{ username }}"
 
     - name: setup aur helper
       import_role:
         name: arch
         tasks_from: aur
+      become: yes
       become_user: "{{ username }}"
 
     # TODO: amd/intel microcode
