@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 
+set -e
+set -x
+
 DOTFILES=/tmp/dotfiles
 ANSIBLE_PLAYBOOK=$DOTFILES/ansible
 export ANSIBLE_CONFIG=/tmp/ansible.cfg
