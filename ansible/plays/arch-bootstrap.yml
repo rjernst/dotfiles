@@ -53,10 +53,11 @@
         ssh_auth_sock: "{{ ansible_env.SSH_AUTH_SOCK if ansible_bios_version != 'VirtualBox' else '/var/run/authsocket.sock' }}"
 
     - name: hack ssh socket on vagrant
-      shell: "socat UNIX-LISTEN:/var/run/authsocket.sock,umask=077,user={{ username }},fork \"UNIX:$SSH_AUTH_SOCK\""
-      when: ansible_bios_version != 'VirtualBox'
-
-    - name:
+      block:
+        - pacman:
+            name: socat
+        - shell: "( nohup socat UNIX-LISTEN:/var/run/authsocket.sock,umask=077,user={{ username }},fork \"UNIX:$SSH_AUTH_SOCK\" 1>/dev/null 2>&1 ) &"
+      when: ansible_bios_version == 'VirtualBox'
 
     - name: setup dotfiles
       import_role:
@@ -67,10 +68,15 @@
       become_user: "{{ username }}"
 
     - name: delete ssh socket hack
-      file:
-        path: /var/run/authsocket.sock
-        state: absent
-      when: ansible_bios_version != 'VirtualBox'
+      block:
+        - file:
+            path: /var/run/authsocket.sock
+            state: absent
+        - pacman:
+            name: socat
+            state: absent
+            recurse: yes
+      when: ansible_bios_version == 'VirtualBox'
 
     - name: setup aur helper
       import_role:
