@@ -8,6 +8,8 @@
     - name: "username"
       prompt: "admin username"
       private: no
+    - name: "user_password"
+      prompt: "admin password"
     - name: "ssh_pubkey"
       prompt: "ssh pubkey"
       private: no
