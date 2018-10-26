@@ -35,14 +35,17 @@
   template:
    src: hosts
    dest: /etc/hosts
+  when: ansible_bios_version != 'VirtualBox'
 
 # boot setup
 - name: generate boot ramfs
   shell: mkinitcpio -p linux
+  when: ansible_bios_version != 'VirtualBox'
 
 - name: install grub
   pacman:
     name: grub
+  when: ansible_bios_version != 'VirtualBox'
 
 - name: put grub in /boot
   shell: grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=GRUB

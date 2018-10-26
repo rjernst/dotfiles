@@ -3,3 +3,10 @@ root ALL=(ALL) ALL
 
 ## wheel can sudo, but with a password!
 %wheel ALL=(ALL) ALL
+
+## allow ssh agent forwarding through sudo
+Defaults    env_keep += "SSH_AUTH_SOCK"
+
+## Read drop-in files from /etc/sudoers.d
+## (the '#' here does not indicate a comment)
+#includedir /etc/sudoers.d
