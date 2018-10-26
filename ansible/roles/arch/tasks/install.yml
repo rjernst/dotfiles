@@ -29,6 +29,7 @@
   copy:
     content: "{{ hostname }}"
     dest: /etc/hostname
+  when: hostname is defined
 
 - name: set /etc/hosts
   template:
@@ -45,6 +46,8 @@
 
 - name: put grub in /boot
   shell: grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=GRUB
+  when: ansible_bios_version != 'VirtualBox'
 
 - name: configure grub
   shell: grub-mkconfig -o /boot/grub/grub.cfg
+  when: ansible_bios_version != 'VirtualBox'

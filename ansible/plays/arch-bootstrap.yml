@@ -40,12 +40,18 @@
         name: arch
         tasks_from: sshd
 
-    - name: setup dotfiles
+    - name: install dotfiles deps
       include_role:
         name: dotfiles
+        tasks_from: deps
+
+    - name: setup dotfiles
+      import_role:
+        name: dotfiles
+      become_user: "{{ username }}"
 
     - name: setup aur helper
-      include_role:
+      import_role:
         name: arch
         tasks_from: aur
       become_user: "{{ username }}"
