@@ -3,6 +3,7 @@
   git:
     repo: "{{ github_base }}{{ github_user }}/dotfiles.git"
     dest: $HOME/.dotfiles
+    accept_hostkey: yes
 
 - name: initialize submodules
   shell: git submodules init

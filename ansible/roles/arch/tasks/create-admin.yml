@@ -13,6 +13,7 @@
   user:
     name: "{{ username }}"
     groups: wheel
+  register: user_created
 
 - name: create .ssh dir
   file:
@@ -30,3 +31,11 @@
   user:
     name: "{{ username }}"
     shell: /bin/zsh
+
+- name: "set {{ username }} password"
+  expect:
+    command: passwd
+    responses:
+      New password.*: "{{ user_password }}"
+      Retype new password.*: "{{ user_password }}"
+  when: user_created.changed
