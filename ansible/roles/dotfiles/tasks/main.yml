@@ -6,12 +6,12 @@
     accept_hostkey: yes
 
 - name: initialize submodules
-  shell: git submodules init
+  shell: git submodule init
   args:
     chdir: $HOME/.dotfiles
 
 - name: updating submodules
-  shell: git submodules update
+  shell: git submodule update
   args:
     chdir: $HOME/.dotfiles
 
