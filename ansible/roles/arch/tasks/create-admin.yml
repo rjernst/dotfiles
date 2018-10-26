@@ -33,8 +33,8 @@
     shell: /bin/zsh
 
 - name: install pexpect
-  pip:
-    name: pexpect
+  pacman:
+    name: python-pexpect
 
 - name: "set {{ username }} password"
   expect:
