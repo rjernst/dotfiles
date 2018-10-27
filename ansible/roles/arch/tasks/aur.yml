@@ -12,5 +12,7 @@
       password for rjernst: "{{ user_password }}"
 
 - name: install ansible-aur
-  shell: yay -S --noconfirm --needed ansible-aur
-
+  expect:
+    command: /usr/bin/yay -S --noconfirm --needed ansible-aur
+    responses:
+      password for rjernst: "{{ user_password }}"
