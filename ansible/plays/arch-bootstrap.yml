@@ -17,6 +17,7 @@
     - name: "ssh_pubkey"
       prompt: "ssh pubkey"
       private: no
+      default: "frink"
     - name: "ip_address"
       prompt: "fixed ip address"
       private: no
