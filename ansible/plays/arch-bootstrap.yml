@@ -44,7 +44,7 @@
         tasks_from: sshd
 
     - name: install dotfiles deps
-      include_role:
+      import_role:
         name: dotfiles
         tasks_from: deps
 

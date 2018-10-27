@@ -16,5 +16,5 @@
     chdir: $HOME/.dotfiles
 
 - name: load dotfiles 
-  shell: $HOME/.dotfiles/install
+  shell: $HOME/.dotfiles/setup
 
