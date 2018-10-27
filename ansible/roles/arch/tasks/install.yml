@@ -14,7 +14,7 @@
 
 - name: set /etc/locale.gen
   copy:
-    content: "en_US.UTF-8 UTF-8"
+    content: "en_US.UTF-8 UTF-8\n"
     dest: /etc/locale.gen
 
 - name: generate locale
