@@ -7,9 +7,9 @@
 - name: install yay
   expect:
     command: makepkg -si --noconfirm
+    chdir: /tmp/yay
     responses:
       password for rjernst: "{{ user_password }}"
-  chdir: /tmp/yay
 
 - name: install ansible-aur
   shell: yay -S --noconfirm --needed ansible-aur
