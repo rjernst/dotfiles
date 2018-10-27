@@ -1,6 +1,7 @@
 ---
 - name: use ntp
   shell: timedatectl set-ntp true
+  changed_when: False
 
 - name: set timezone
   file:
@@ -11,14 +12,17 @@
 
 - name: generate adjtime
   shell: hwclock --systohc
+  changed_when: False
 
 - name: set /etc/locale.gen
   copy:
     content: "en_US.UTF-8 UTF-8\n"
     dest: /etc/locale.gen
+  register: locale_gen_conf
 
 - name: generate locale
   shell: locale-gen
+  changed_when: locale_gen_conf.changed
 
 - name: set /etc/locale.conf
   copy:

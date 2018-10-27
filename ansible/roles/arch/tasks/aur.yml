@@ -6,13 +6,17 @@
 
 - name: install yay
   expect:
-    command: makepkg -si --noconfirm
+    command: makepkg -si --noconfirm --needed
     chdir: /tmp/yay
     responses:
       password for rjernst: "{{ user_password }}"
+  register: install_yay
+  changed_when: "not install_yay.stdout.endswith('is up to date -- skipping')"
 
 - name: install ansible-aur
   expect:
     command: /usr/bin/yay -S --noconfirm --needed ansible-aur
     responses:
       password for rjernst: "{{ user_password }}"
+  register: ansible_aur
+  changed_when: "not ansible_aur.stdout.endswith('is up to date -- skipping')"
