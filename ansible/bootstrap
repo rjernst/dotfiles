@@ -30,8 +30,6 @@ bootstrap_macos() {
 }
 
 bootstrap_arch() {
-  echo "---> set root password"
-  passwd
   echo "---> installing ansible"
   pacman -S --noconfirm --needed ansible
   echo "---> installing git"

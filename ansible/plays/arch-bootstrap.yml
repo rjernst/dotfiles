@@ -2,15 +2,18 @@
 - name: bootstrap arch
   hosts: localhost
   vars_prompt:
-    - name: "hostname"
-      prompt: "enter hostname"
-      private: no
+    - name: "root_password"
+      prompt: "root password"
+      confirm: yes
     - name: "username"
       prompt: "admin username"
       private: no
     - name: "user_password"
       prompt: "admin password"
       confirm: yes
+    - name: "hostname"
+      prompt: "enter hostname"
+      private: no
     - name: "ssh_pubkey"
       prompt: "ssh pubkey"
       private: no
@@ -29,6 +32,8 @@
         name: arch
         tasks_from: install
       when: ansible_architecture == "x86_64"
+
+    # TODO: amd/intel microcode
 
     - name: create admin user
       include_role:
@@ -61,6 +66,10 @@
       become: yes
       become_user: "{{ username }}"
 
-    # TODO: amd/intel microcode
-
+    - name: "set root password"
+      expect:
+        command: "passwd"
+        responses:
+          (?i)password: "{{ root_password }}"
+      changed_when: False
 
