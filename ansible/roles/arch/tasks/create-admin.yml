@@ -38,8 +38,7 @@
 
 - name: "set {{ username }} password"
   expect:
-    command: passwd
+    command: "passwd {{ username }}"
     responses:
-      New password.*: "{{ user_password }}"
-      Retype new password.*: "{{ user_password }}"
+      (?i)password: "{{ user_password }}"
   when: user_created.changed
