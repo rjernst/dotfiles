@@ -31,7 +31,7 @@
 
 - name: set /etc/hostname
   copy:
-    content: "{{ hostname }}"
+    content: "{{ hostname }}\n"
     dest: /etc/hostname
   when: hostname is defined
 

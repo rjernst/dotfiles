@@ -11,7 +11,7 @@
     responses:
       password for rjernst: "{{ user_password }}"
   register: install_yay
-  changed_when: "not install_yay.stdout.endswith('is up to date -- skipping')"
+  changed_when: "not install_yay.stdout.endswith('there is nothing to do')"
 
 - name: install ansible-aur
   expect:

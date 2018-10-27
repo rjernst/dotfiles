@@ -12,4 +12,4 @@
   systemd:
     name: sshd
     enabled: yes
-    state: started
+    state: restarted
