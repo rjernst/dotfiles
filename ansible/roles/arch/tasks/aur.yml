@@ -5,7 +5,7 @@
     dest: /tmp/yay
 
 - name: install yay
-  shell: cd /tmp/yay && makepkg -si
+  shell: cd /tmp/yay && makepkg -si --noconfirm
 
 - name: install ansible-aur
   shell: yay -S --noconfirm --needed ansible-aur
