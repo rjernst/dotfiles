@@ -19,12 +19,14 @@
   file:
     path: $HOME/.ssh
     state: directory
+  become: yes
   become_user: "{{ username }}"
 
 - name: copy authorized keys
   copy:
     src: "{{ ssh_pubkey }}.pubkey"
     dest: $HOME/.ssh/authorized_keys
+  become: yes
   become_user: "{{ username }}"
 
 - name: "set {{ username }} shell to zsh"
