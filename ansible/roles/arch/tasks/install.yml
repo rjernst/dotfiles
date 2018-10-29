@@ -1,7 +1,7 @@
 ---
-- name: use ntp
-  shell: timedatectl set-ntp true
-  changed_when: False
+#- name: use ntp
+#  shell: timedatectl set-ntp true
+#  changed_when: False
 
 - name: set timezone
   file:
