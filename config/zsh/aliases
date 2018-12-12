@@ -16,7 +16,7 @@ alias g='git'
 alias vm='vagrant'
 
 alias jdk='echo $JAVA_HOME'
-for i in {7..10}; do
+for i in {7..11}; do
   alias jdk${i}='export JAVA_HOME=${JAVA'${i}'_HOME:?"JAVA'${i}'_HOME is not set"}'
 done
 
