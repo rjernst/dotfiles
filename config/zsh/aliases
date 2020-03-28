@@ -1,7 +1,9 @@
 
 alias cfg='git -C $DOTFILES'
 
-#alias ls='ls --group-directories-first'
+if [ "$(uname)" == "Linux" ]; then
+  alias ls='ls --group-directories-first'
+fi
 alias ll='ls -l'
 alias rm='rm -i'       # always ask before removing a file
 alias mv='mv -i'       # always ask before moving a file onto another file
@@ -16,8 +18,12 @@ alias g='git'
 alias vm='vagrant'
 
 alias jdk='echo $JAVA_HOME'
-for i in {7..11}; do
-  alias jdk${i}='export JAVA_HOME=${JAVA'${i}'_HOME:?"JAVA'${i}'_HOME is not set"}'
+for i in {7..18}; do
+  JAVA_HOME_ENV=JAVA${i}_HOME
+  TEST_HOME=$(eval echo \$$JAVA_HOME_ENV)
+  if [ -d "$TEST_HOME" ]; then
+    alias jdk${i}='export JAVA_HOME=${JAVA'${i}'_HOME}'
+  fi
 done
 
 alias gw='$DOTFILES/scripts/gradlew.sh'
