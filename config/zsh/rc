@@ -16,6 +16,8 @@ source $INCLUDES/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh
 
 if [[ "$(uname)" == "Linux" ]]; then
   export PINENTRY_USER_DATA=curses
+  # make sure current tty will be used by pinentry
+  gpg-connect-agent updatestartuptty /bye >/dev/null
 else
   export PINENTRY_USER_DATA=mac
 fi
