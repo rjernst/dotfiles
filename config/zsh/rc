@@ -14,13 +14,6 @@ source $INCLUDES/zsh-completions/zsh-completions.plugin.zsh
 source $INCLUDES/zsh-history-substring-search/zsh-history-substring-search.zsh
 source $INCLUDES/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh
 
-if [[ "$(uname)" == "Linux" ]]; then
-  export PINENTRY_USER_DATA=curses
-  # make sure current tty will be used by pinentry
-  gpg-connect-agent updatestartuptty /bye >/dev/null
-else
-  export PINENTRY_USER_DATA=mac
-fi
 if [[ $SSH_AUTH_SOCK == /tmp/* ]]; then
   # Fix SSH auth socket location so agent forwarding works with tmux
   ln -sf $SSH_AUTH_SOCK $HOME/.ssh/ssh_auth_sock
@@ -28,6 +21,7 @@ if [[ $SSH_AUTH_SOCK == /tmp/* ]]; then
 else
   # connect ssh agent to gpg for key retrieval
   export SSH_AUTH_SOCK=$(gpgconf --list-dirs agent-ssh-socket)
+  gpg-connect-agent updatestartuptty /bye >/dev/null
 fi
 
 HISTFILE=$HOME/.zsh/history
