@@ -5,7 +5,7 @@ source $ZSHFILES/env
 source $ZSHFILES/aliases
 source $ZSHFILES/fzf
 source $ZSHFILES/iterm2
-if [ "$(uname)" == "Linux" ]; then
+if [[ "$(uname)" == "Linux" ]]; then
   eval `dircolors $ZSHFILES/colors`
 fi
 
@@ -14,9 +14,13 @@ source $INCLUDES/zsh-completions/zsh-completions.plugin.zsh
 source $INCLUDES/zsh-history-substring-search/zsh-history-substring-search.zsh
 source $INCLUDES/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh
 
-# Fix SSH auth socket location so agent forwarding works with tmux
-if test "$SSH_AUTH_SOCK" ; then
-  ln -sf $SSH_AUTH_SOCK ~/.ssh/ssh_auth_sock
+if [[ $SSH_AUTH_SOCK == /tmp/* ]]; then
+  # Fix SSH auth socket location so agent forwarding works with tmux
+  ln -sf $SSH_AUTH_SOCK $HOME/.ssh/ssh_auth_sock
+  export SSH_AUTH_SOCK
+else
+  # connect ssh agent to gpg for key retrieval
+  export SSH_AUTH_SOCK=$(gpgconf --list-dirs agent-ssh-socket)
 fi
 
 HISTFILE=$HOME/.zsh/history

@@ -17,6 +17,12 @@ setup_link "ansible.cfg"                        ".ansible.cfg"
 setup_link "gitconfig"                          ".gitconfig"
 setup_link "tmux/conf"                          ".tmux.conf"
 
+[ ! -d $HOME/.gnupg ] && mkdir $HOME/.gnupg
+for GPGFILE in $CONFIG_FILES/gpg/*; do
+  NAME=$(basename $GPGFILE)
+  setup_link "gpg/$NAME"                        ".gnupg/$NAME"
+done
+
 setup_link "vim/rc"                             ".vimrc"
 [ ! -d $HOME/.vim ] && mkdir $HOME/.vim
 for VIMFILE in $CONFIG_FILES/vim/*; do

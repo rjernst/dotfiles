@@ -1,7 +1,7 @@
 
 alias cfg='git -C $DOTFILES'
 
-if [ "$(uname)" == "Linux" ]; then
+if [[ "$(uname)" == "Linux" ]]; then
   alias ls='ls --group-directories-first'
 fi
 alias ll='ls -l'
