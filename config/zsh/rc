@@ -5,7 +5,9 @@ source $ZSHFILES/env
 source $ZSHFILES/aliases
 source $ZSHFILES/fzf
 source $ZSHFILES/iterm2
-#eval `dircolors $ZSHFILES/colors`
+if [ "$(uname)" == "Linux" ]; then
+  eval `dircolors $ZSHFILES/colors`
+fi
 
 INCLUDES=$DOTFILES/plugins
 source $INCLUDES/zsh-completions/zsh-completions.plugin.zsh
