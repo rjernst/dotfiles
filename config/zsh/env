@@ -7,6 +7,7 @@ export CLICOLOR=1
 export LESSHISTSIZE=0
 export GRADLE_USER_HOME=$HOME/.gradle
 
+[ -f $ZSHFILES/env.local ] && source $ZSHFILES/env.local
 [ -f $ZSHFILES/env.machine ] && source $ZSHFILES/env.machine
 [ -f $ZSHFILES/env.platform ] && source $ZSHFILES/env.platform
 

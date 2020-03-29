@@ -22,6 +22,7 @@ done
 
 alias gw='$DOTFILES/scripts/gradlew.sh'
 
+[ -f $ZSHFILES/aliases.local ] && source $ZSHFILES/aliases.local
 [ -f $ZSHFILES/aliases.machine ] && source $ZSHFILES/aliases.machine
 [ -f $ZSHFILES/aliases.platform ] && source $ZSHFILES/aliases.platform
 
