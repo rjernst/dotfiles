@@ -14,6 +14,11 @@ source $INCLUDES/zsh-completions/zsh-completions.plugin.zsh
 source $INCLUDES/zsh-history-substring-search/zsh-history-substring-search.zsh
 source $INCLUDES/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh
 
+if [[ "$(uname)" == "Linux" ]]; then
+  export PINENTRY_USER_DATA=curses
+else
+  export PINENTRY_USER_DATA=mac
+fi
 if [[ $SSH_AUTH_SOCK == /tmp/* ]]; then
   # Fix SSH auth socket location so agent forwarding works with tmux
   ln -sf $SSH_AUTH_SOCK $HOME/.ssh/ssh_auth_sock
