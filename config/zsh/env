@@ -13,11 +13,15 @@ export GPG_TTY=$(tty)
 [ -f $ZSHFILES/env.platform ] && source $ZSHFILES/env.platform
 
 # find the latest installed java home
-for i in {7..18}; do
+for i in {18..7}; do
   JAVA_HOME_ENV=JAVA${i}_HOME
   TEST_HOME=$(eval echo \$$JAVA_HOME_ENV)
   if [ -d "$TEST_HOME" ]; then
-    export JAVA_HOME=$TEST_HOME
+    VERSION_OUTPUT=$($TEST_HOME/bin/java -version 2>&1)
+    if ! [[ $VERSION_OUTPUT =~ "-ea" ]]; then
+      export JAVA_HOME=$TEST_HOME
+      break
+    fi
   fi
 done
 
