@@ -1,0 +1,6 @@
+---
+- name: set hostname
+  include_role:
+    name: macos
+    tasks_from: hostname
+  when: hostname is defined

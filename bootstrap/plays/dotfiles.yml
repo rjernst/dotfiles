@@ -1,0 +1,9 @@
+---
+- name: setup dotfiles
+  hosts: localhost
+  vars:
+    - username: "{{ ansible_user }}"
+
+  tasks:
+    - include_role:
+        name: dotfiles

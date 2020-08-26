@@ -2,6 +2,7 @@
 
 DOTFILES=$HOME/.dotfiles
 CONFIG_FILES=$DOTFILES/config
+PLATFORM=$($DOTFILES/scripts/detect-platform)
 
 setup_link() {
   SOURCE=$CONFIG_FILES/$1
@@ -13,18 +14,19 @@ setup_link() {
   ln -s $SOURCE $DEST
 }
 
-setup_link "ansible.cfg"                        ".ansible.cfg"
-setup_link "gitconfig"                          ".gitconfig"
 setup_link "tmux/conf"                          ".tmux.conf"
 
-[ ! -d $HOME/.gnupg ] && mkdir $HOME/.gnupg
+setup_link "gitconfig"                          ".gitconfig"
+[ ! -d $HOME/.git ] && mkdir $HOME/.git
+
+mkdir -p $HOME/.gnupg
 for GPGFILE in $CONFIG_FILES/gpg/*; do
   NAME=$(basename $GPGFILE)
   setup_link "gpg/$NAME"                        ".gnupg/$NAME"
 done
 
 setup_link "vim/rc"                             ".vimrc"
-[ ! -d $HOME/.vim ] && mkdir $HOME/.vim
+mkdir -p $HOME/.vim
 for VIMFILE in $CONFIG_FILES/vim/*; do
   NAME=$(basename $VIMFILE)
   if [[ $NAME != "rc" ]]; then
@@ -33,24 +35,60 @@ for VIMFILE in $CONFIG_FILES/vim/*; do
 done
 
 setup_link "zsh/rc"                             ".zshrc"
-[ ! -d $HOME/.zsh ] && mkdir $HOME/.zsh
-for ZSHFILE in $CONFIG_FILES/zsh/*; do
-  NAME=$(basename $ZSHFILE)
-  if [[ $NAME != "rc" && $NAME != "login" ]]; then
-  	setup_link "zsh/$NAME"                      ".zsh/$NAME"
-  fi
+mkdir -p $HOME/.zsh
+mkdir -p $HOME/.zsh/d/
+mkdir -p $HOME/.zsh/plugins/
+mkdir -p $HOME/.zsh/var/
+for file in $CONFIG_FILES/zsh/*.zsh; do
+  name=$(basename $file)
+  setup_link "zsh/$name"                        ".zsh/$name"
 done
 
-setup_link "machines/$HOSTNAME/aliases"         ".zsh/aliases.machine"
-setup_link "machines/$HOSTNAME/env"             ".zsh/env.machine"
+machine_roles=$CONFIG_FILES/hosts/$(hostname).roles
+if [ -f $machine_roles ]; then
+  setup_link "hosts/$(hostname).roles"       ".zsh/roles"
+else
+  touch $HOME/.zsh/roles
+fi
 
-PLATFORM=$($DOTFILES/scripts/detect-platform)
-setup_link "platforms/$PLATFORM/aliases"        ".zsh/aliases.platform"
-setup_link "platforms/$PLATFORM/env"            ".zsh/env.platform"
+link_role() {
+  name=$(basename $1)
+  setup_link $1                               ".zsh/d/$name"
+  install_file=$(echo $1 | sed -e 's/\.zsh/.install/')
+  if [ -f $install_file ]; then
+    source $install_file
+  fi
+}
+
+link_role_or_dir() {
+  rolepath=$CONFIG_FILES/zsh/roles/$1
+  if [ -d $rolepath ]; then
+    for file in $rolepath/*.zsh; do
+      name=$(basename $file)
+      link_role "zsh/roles/$1/$name"
+    done
+  else
+    if [ -f $rolepath.zsh ]; then
+      link_role "zsh/roles/$1.zsh"
+    fi
+  fi
+}
+
+link_role_or_dir $PLATFORM
+while read role; do
+  link_role $role
+done <$HOME/.zsh/roles
 
 # run fzf installation, but don't let it mess with the real zshrc
 ZDOTDIR=/tmp "$DOTFILES/plugins/fzf/install" --key-bindings --completion --no-update-rc --no-bash &> /dev/null
-mv -f $HOME/.fzf.zsh $HOME/.zsh/fzf
+mv -f $HOME/.fzf.zsh $HOME/.zsh/plugins/fzf.zsh
+
+if [ $PLATFORM == "macos" ]; then
+  setup_link "macos/prefs"                      ".prefs"
+  setup_link "macos/Brewfile"                   ".Brewfile"
+fi
 
 echo ""
-echo "Config files are setup. Run 'reload-config' to re-source zsh config."
+echo "Config files are setup."
+echo "Run 'reload-config' to re-source zsh config."
+echo "Run 'reload-prefs' to re-source macos defaults scripts."

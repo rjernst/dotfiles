@@ -1,0 +1,12 @@
+---
+- name: find current hostname
+  shell: hostname
+  register: current_hostname
+
+- pause:
+    prompt: "Enter hostname"
+  register: new_hostname 
+  when: current_hostname.stdout is not match("^[a-z0-9\-]+$")
+
+- set_fact:
+    hostname: "{{ current_hostname.stdout if new_hostname.skipped else new_hostname.user_input }}"

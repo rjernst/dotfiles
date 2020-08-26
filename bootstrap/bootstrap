@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+
+set -e
+set -x
+
+GITHUB_USERNAME=${GITHUB_USERNAME:-rjernst}
+EXTRA_VARS="-e github_username=$GITHUB_USERNAME"
+
+DOTFILES=/tmp/dotfiles
+ANSIBLE_ROOT=$DOTFILES/bootstrap
+export ANSIBLE_CONFIG=$ANSIBLE_ROOT/ansible.cfg
+
+clone_dotfiles() {
+  if [ -d "$DOTFILES" ]; then
+    rm -rf $DOTFILES
+  fi
+  echo "---> cloning ansible scripts"
+  git clone https://github.com/$GITHUB_USERNAME/dotfiles.git $DOTFILES
+}
+
+bootstrap_macos() {
+  command -v brew &> /dev/null || {
+    echo "---> installing homebrew"
+    ruby -e "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/master/install)"
+  }
+  command -v git &> /dev/null || {
+    echo "---> installing git"
+    brew install git
+  }
+  command -v git &> /dev/null || {
+    echo "---> installing python3"
+    brew install python3
+  }
+  command -v ansible &> /dev/null || {
+    echo "---> installing ansible"
+    brew install ansible
+  }
+}
+
+bootstrap_arch() {
+  echo "---> installing git"
+  pacman -S --noconfirm --needed git
+  echo "---> installing python3"
+  pacman -S --noconfirm --needed python3
+  echo "---> installing ansible"
+  pacman -S --noconfirm --needed ansible
+}
+
+BASE_URL=https://raw.githubusercontent.com/$GITHUB_USERNAME/dotfiles/master
+PLATFORM=$(curl -s $BASE_URL/scripts/detect-platform | bash)
+echo "---> detected platform: $PLATFORM"
+EXTRA_VARS="$EXTRA_VARS -e os=$PLATFORM"
+
+eval bootstrap_$PLATFORM
+
+clone_dotfiles
+
+echo "---> running bootstrap playbook" 
+ansible-playbook -vv $ANSIBLE_ROOT/plays/bootstrap.yml $EXTRA_VARS
+

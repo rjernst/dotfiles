@@ -1,0 +1,39 @@
+---
+- name: bootstrap
+  hosts: localhost
+  pre_tasks:
+    - include: "prompts/hostname.yml"  
+      when: hostname is not defined
+
+  tasks:
+    #- include: "bootstrap-{{ os }}.yml"
+
+    #- name: setup dot files
+    #  include_role:
+    #    name: dotfiles
+
+    - name: setup yubikey
+      include_role:
+        name: yubikey
+    
+    #- name: fix checkout to be authenticated
+    #  include_role:
+    #    name: dotfiles
+    #    tasks_from: set-origin
+
+    - name: load roles
+      slurp:
+        src: "{{ ansible_env.HOME }}/.zsh/roles"
+      register: roles_data
+
+    - set_fact:
+        roles: "{{ roles_data.content | b64decode }}"
+
+    - include_role:
+        name: "{{ item }}"
+      with_items: "{{ roles.split('\n') }}"
+
+    #- include: "load-{{ os }}.yml"
+        
+
+

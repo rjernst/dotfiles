@@ -1,9 +1,0 @@
-#!/usr/bin/env zsh
-
-alias cde='cd ~/code/elastic/elasticsearch'
-alias cdxp='cd ~/code/elastic/elasticsearch-extra/x-pack-elasticsearch'
-alias cde5='cd ~/code/elastic/elasticsearch-5.x'
-alias cdxp5='cd ~/code/elastic/elasticsearch-5.x-extra/x-pack-elasticsearch'
-alias cde6='cd ~/code/elastic/elasticsearch-6.x'
-alias cdxp6='cd ~/code/elastic/elasticsearch-6.x-extra/x-pack-elasticsearch'
-alias cds='cd ~/code/elastic/release-manager'

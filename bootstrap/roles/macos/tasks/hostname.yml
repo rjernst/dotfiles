@@ -1,0 +1,14 @@
+---
+- block:
+    - name: set primary hostname
+      shell: "scutil --set HostName {{ hostname }}"
+
+    - name: set bonjour hostname
+      shell: "scutil --set LocalHostName {{ hostname }}"
+
+    - name: set computer name
+      shell: "scutil --set ComputerName {{ hostname }}"
+
+    - name: flush dns cache
+      shell: "dscacheutil -flushcache"
+  become: yes 

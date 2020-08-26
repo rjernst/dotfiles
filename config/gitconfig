@@ -1,6 +1,7 @@
 # allow for someone else to use this config file with their own username
 [include]
-    path = .gitconfig.local
+    path = .git/user.config
+    path = .git/github.config
 
 [color]
     diff = auto
@@ -49,6 +50,8 @@
     p = pull
     f = fetch
     mm = merge master
+
+    es-worktree = "!f() { git worktree add --track -b $1 $HOME/code/elastic/elasticsearch-$1 upstream/$1; }; f"
 
     # scripts
     rev = "!f() { git fetch upstream pull/$1/head:review/$1; }; f"

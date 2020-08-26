@@ -1,0 +1,27 @@
+---
+- name: create repo base dir
+  shell: mkdir -p "{{ ansible_env.HOME }}/code/elastic"
+
+- name: set repo path
+  set_fact:
+    repo_path: "{{ ansible_env.HOME }}/code/elastic/elasticsearch"
+
+- name: clone repo
+  git:
+    repo: "git@github.com:elastic/elasticsearch.git"
+    dest: "{{ repo_path }}"
+    remote: upstream
+    update: no
+
+- name: find origin remote
+  shell: git remote get-url origin
+  register: origin_cmd
+  failed_when: origin_cmd.rc != 0 and origin_cmd.rc != 128
+  args:
+    chdir: "{{ repo_path }}"
+
+- name: add origin remote
+  shell: "git remote add origin git@github.com:{{ github_username }}/elasticsearch.git"
+  when: origin_cmd.rc != 0
+  args:
+    chdir: "{{ repo_path }}"

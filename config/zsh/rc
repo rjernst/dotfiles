@@ -1,13 +1,18 @@
 #!/usr/bin/env zsh
 
 export ZSHFILES=$HOME/.zsh
-source $ZSHFILES/env
-source $ZSHFILES/aliases
-source $ZSHFILES/fzf
-source $ZSHFILES/iterm2
-if [[ "$(uname)" == "Linux" ]]; then
-  eval `dircolors $ZSHFILES/colors`
-fi
+
+
+source $ZSHFILES/env.zsh
+source $ZSHFILES/aliases.zsh
+
+PLATFORM=$($DOTFILES/scripts/detect-platform)
+for plugin in $ZSHFILES/plugins/*.zsh; do
+  source $plugin
+done
+for file in $ZSHFILES/d/*.zsh; do
+  source $file
+done
 
 INCLUDES=$DOTFILES/plugins
 source $INCLUDES/zsh-completions/zsh-completions.plugin.zsh
@@ -24,7 +29,7 @@ else
   gpg-connect-agent updatestartuptty /bye >/dev/null
 fi
 
-HISTFILE=$HOME/.zsh/history
+HISTFILE=$HOME/.zsh/var/history
 HISTSIZE=10000
 SAVEHIST=10000
 
@@ -32,7 +37,7 @@ zstyle ':completion:*' menu select
 zstyle ':completion:*' completer _complete
 zstyle ':completion:*' matcher-list '' 'm:{[:lower:][:upper:]}={[:upper:][:lower:]}' '+l:|=* r:|=*'
 
-autoload -U compinit && compinit -d $HOME/.zsh/compdump
+autoload -U compinit && compinit -d $HOME/.zsh/var/compdump
 zmodload -i zsh/complist
 zmodload -i zsh/zle
 
@@ -55,4 +60,4 @@ setopt share_history
 
 bindkey -v
 
-source $ZSHFILES/prompt
+source $ZSHFILES/prompt.zsh

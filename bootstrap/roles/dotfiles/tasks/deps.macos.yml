@@ -1,0 +1,16 @@
+---
+  # these are available from macos natively, but we want updated versions
+  - name: install vim
+    homebrew:
+      name: vim
+
+  - name: install zsh
+    homebrew:
+      name: zsh
+
+  - name: fix zsh share permissions
+    file:
+      path: /usr/local/share/zsh
+      recurse: yes
+      mode: "g-w"
+
