@@ -1,6 +1,6 @@
+#!/usr/bin/env zsh
+
 jenv enable-plugin gradle
 jenv enable-plugin export
 
 mkdir -p $HOME/.jenv/versions
-
-# vi: set tabstop=2 shiftwidth=2 filetype=sh expandtab:

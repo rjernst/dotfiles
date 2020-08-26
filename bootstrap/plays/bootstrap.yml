@@ -1,9 +1,10 @@
 ---
 - name: bootstrap
   hosts: localhost
-  pre_tasks:
-    - include: "prompts/hostname.yml"  
-      when: hostname is not defined
+  vars_prompt:
+    - name: hostname
+      prompt: "Enter hostname: "
+      private: no
 
   tasks:
     - include: "bootstrap-{{ os }}.yml"

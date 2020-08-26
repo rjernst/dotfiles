@@ -4,8 +4,10 @@ brew install nativefier
 
 cd /tmp
 
-nativefier -n "$1 Inbox" --fast-quit --disable-context-menu --single-instance --darwin-dark-mode-support --icon $DOTFILES/resources/$1\ inbox.icns https://mail.google.com
+nativefier -n "$1 Inbox" --fast-quit --internal-urls "(.*?mail\.google\.com.*?|.*?accounts\.google\.com.*?)" --disable-context-menu --single-instance --darwin-dark-mode-support --icon $DOTFILES/resources/$1\ inbox.icns https://mail.google.com
 
-mv "/tmp/$1 Inbox-darwin-x64/$1 Inbox.app" /Applications
+name="$1 Inbox.app"
+rm -rf /Applications/$name
+mv "/tmp/$1 Inbox-darwin-x64/$name" /Applications
 
 brew rmtree nativefier
