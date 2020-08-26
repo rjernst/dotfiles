@@ -9,4 +9,4 @@
   when: current_hostname.stdout is not match("^[a-z0-9\-]+$")
 
 - set_fact:
-    hostname: "{{ current_hostname.stdout if new_hostname.skipped else new_hostname.user_input }}"
+    hostname: "{{ current_hostname.stdout if not new_hostname.changed else new_hostname.user_input }}"
