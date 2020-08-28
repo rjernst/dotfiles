@@ -21,6 +21,7 @@ nnoremap gk k
 nnoremap gj j
 
 filetype plugin on
+filetype indent on
 
 au BufNewFile,BufRead *.gradle set filetype=groovy
 
@@ -35,3 +36,4 @@ map! jk <ESC>
 """ change viminfo location
 set viminfo+=n~/.vim/viminfo
 
+let g:tex_flavor='latex'
