@@ -86,7 +86,12 @@ mv -f $HOME/.fzf.zsh $HOME/.zsh/plugins/fzf.zsh
 
 if [ $PLATFORM == "macos" ]; then
   setup_link "macos/prefs"                      ".prefs"
-  setup_link "macos/Brewfile"                   ".Brewfile"
+  brewfile=$CONFIG_FILES/hosts/$(hostname).Brewfile
+  if [ -f $brewfile ]; then
+    setup_link "hosts/$(hostname).Brewfile"                   ".Brewfile"
+  else
+    touch $HOME/.Brewfile
+  fi
 fi
 
 echo ""

@@ -3,7 +3,7 @@
   hosts: localhost
   vars_prompt:
     - name: hostname
-      prompt: "Enter hostname: "
+      prompt: "Enter hostname"
       private: no
 
   tasks:
