@@ -13,6 +13,7 @@ set hidden
 syntax on
 set modelines=1
 set viminfo='10000,<10000,s1000
+set backspace=indent,eol,start
 
 nnoremap k gk
 nnoremap j gj
@@ -33,3 +34,4 @@ map! jk <ESC>
 
 """ change viminfo location
 set viminfo+=n~/.vim/viminfo
+
