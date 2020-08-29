@@ -53,3 +53,4 @@ prompt-debug() {
 left_info_functions=()
 right_info_functions=()
 chdir_functions=()
+notify_functions=()

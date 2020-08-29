@@ -90,6 +90,13 @@ precmd() {
   fi
   last_pwd=$PWD
 
+  for notify_function in $notify_functions; do
+    local notification=$($notify_function)
+    if [ ! -z "$notification" ]; then
+      pr_status="$pr_status\n$notification"
+    fi
+  done
+
   _set_right_info
   _debug "right info = $pr_right_info"
   _debug "right info len = $right_info_len"
