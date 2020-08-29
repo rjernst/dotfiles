@@ -40,6 +40,7 @@ mkdir -p $HOME/.zsh
 mkdir -p $HOME/.zsh/d/
 mkdir -p $HOME/.zsh/plugins/
 mkdir -p $HOME/.zsh/var/
+setup_link "zsh/prompt"                         ".zsh/prompt"
 for file in $CONFIG_FILES/zsh/*.zsh; do
   name=$(basename $file)
   setup_link "zsh/$name"                        ".zsh/$name"

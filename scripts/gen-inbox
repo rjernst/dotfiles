@@ -10,4 +10,4 @@ name="$1 Inbox.app"
 rm -rf /Applications/$name
 mv "/tmp/$1 Inbox-darwin-x64/$name" /Applications
 
-brew rmtree nativefier
+brew rmtree --force nativefier

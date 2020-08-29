@@ -1,6 +1,6 @@
 #!/usr/bin/env zsh
 
-export ZSHFILES=$HOME/.zsh
+local ZSHFILES=$HOME/.zsh
 
 
 source $ZSHFILES/env.zsh
@@ -60,4 +60,7 @@ setopt share_history
 
 bindkey -v
 
-source $ZSHFILES/prompt.zsh
+#source $ZSHFILES/prompt/99-prompt.zsh
+for file in $(ls $ZSHFILES/prompt | sort -V); do
+  source $ZSHFILES/prompt/$file
+done
