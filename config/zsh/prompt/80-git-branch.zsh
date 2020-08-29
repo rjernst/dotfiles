@@ -25,15 +25,13 @@ _git_branch_info() {
     fi
     if [ $detached -ne 0 ]; then
       branch="$(_lc 227 $branch)"
-    else
-        if ! git diff-files --quiet --ignore-submodules --; then
-          # unstaged changes
-          branch="$(_lc 215 $branch)"
-        else
-          if ! git diff-index --cached --quiet HEAD --ignore-submodules --; then
-            branch="$(_lc 215 $branch)"
-          fi
-        fi
+    elif ! git diff-files --quiet --ignore-submodules --; then
+      # unstaged changes
+      branch="$(_lc 215 $branch)"
+    elif ! git diff-index --cached --quiet HEAD --ignore-submodules --; then
+      branch="$(_lc 215 $branch)"
+    elif [ ! -z "$(git log -1 @{push}..)" ]; then
+      branch="$(_lc 031 $branch)"
     fi
     echo -n "$len:$branch"
   fi
