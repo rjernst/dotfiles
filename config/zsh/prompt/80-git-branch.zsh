@@ -3,7 +3,9 @@ _git_branch_info() {
   local branch=$(git symbolic-ref --short -q HEAD 2>/dev/null)
 
   if [ ! -z "$branch" ]; then
-    echo -n " $branch"
+    local branch_len="${#branch}"
+    (( len = 2 + branch_len ))
+    echo -n "$len: $branch"
   fi
 }
 

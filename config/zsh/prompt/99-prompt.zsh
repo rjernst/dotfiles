@@ -36,23 +36,20 @@ _set_status() {
   fi
 }
 
-# omit escapes, at least the color ones we may output for prompt
-_visible_strlen() {
-  local str=$1
-  local zero='%([BSUbfksu]|([FK]|){*})'
-  local strlen=${#${(S%%)str//$~zero/}}
-  echo -n $strlen
-}
-
-
 _set_right_info() {
   right_info_values=()
   pr_right_info=
+  right_info_len=0
   for info_getter in $right_info_functions; do
     local info=$($info_getter)
-    if [ ! -z "$info" ]; then
-      right_info_values+=($info)
-      pr_right_info+="[ $info ]"
+    _debug "RIGHT_INFO: $info"
+    local info_parts=("${(@s/:/)info}") # split LEN:VALUE
+    local info_len=${info_parts[1]:-0}
+    local info_value="${info_parts[2]}"
+    if [ $info_len -ne 0 ]; then
+      right_info_values+=($info_value)
+      pr_right_info+="[ $info_value ]"
+      (( right_info_len += info_len + 4))
     fi
   done
 }
@@ -61,14 +58,19 @@ _set_left_info() {
   local chars_left=$1
   left_info_values=()
   pr_left_info=
+  left_info_len=0
   for info_getter in $left_info_functions; do
     local info=$($info_getter $chars_left)
-    if [ ! -z "$info" ]; then
-      local info_len=${#info}
-      (( chars_left -= info_len ))
+    _debug "LEFT_INFO: $info"
+    local info_parts=("${(@s/:/)info}") # split LEN:VALUE
+    local info_len=${info_parts[1]:-0}
+    local info_value="${info_parts[2]}"
+    if [ $info_len -ne 0 ]; then
+      (( chars_left -= $info_len ))
       if [ $chars_left -ge 0 ]; then
-        left_info_values+=($info)
-        pr_left_info+="[ $info ]"
+        left_info_values+=($info_value)
+        pr_left_info+="[ $info_value ]"
+        (( left_info_len += $info_len + 4))
       else
         break
       fi
@@ -81,26 +83,41 @@ precmd() {
   # this must be the first call, so it can capture the last exit status
   _set_status
 
+  if [ ! "$PWD" = "$last_pwd" ]; then
+    for chdir_function in $chdir_functions; do
+      eval $chdir_function
+    done
+  fi
+  last_pwd=$PWD
+
   _set_right_info
-  local right_info_len=$(_visible_strlen $pr_right_info)
-  local termwidth=$(( $COLUMNS - 2 ))
-  local max_left_info_len=$(( $termwidth - 5 - $right_info_len ))
+  _debug "right info = $pr_right_info"
+  _debug "right info len = $right_info_len"
+  local termwidth=$(( $COLUMNS - 1 ))
+  _debug "termwidth = $termwidth"
+  local max_left_info_len=$(( $termwidth - 4 - $right_info_len ))
+  _debug "max left info len = $max_left_info_len"
 
   _set_left_info $max_left_info_len
-  local left_info_len=$(_visible_strlen $pr_left_info)
-  local fillbar_len=$(( $termwidth - 5 - $left_info_len - $right_info_len ))
+  _debug "left info = $pr_left_info"
+  _debug "left info len = $left_info_len"
+  local fillbar_len=$(( $termwidth - 4 - $left_info_len - $right_info_len ))
+  _debug "fillbar len = $fillbar_len"
+  _debug "TERMWIDTH = 2 + LEFT_INFO + FILLBAR + RIGHT_INFO + 2"
+  _debug "$termwidth = 2 + $left_info_len + $fillbar_len + $right_info_len + 2"
 
-  # NOTE: if fillbar size is negative, this blows up. thats a small screen, oh well
+  # NOTE: if fillbar size is negative, this blows up. that's a small screen...oh well
   if [ $fillbar_len -gt 0 ]; then
     fillbar="${sc[shift_in]}${sc[hbar]}"
+    (( fillbar_len -= 1 ))
     while [ $fillbar_len -gt 0 ]; do
       fillbar+="${sc[hbar]}"
       (( fillbar_len -= 1 ))
     done
-    fillbar+="${sc[hbar]}${sc[shift_out]}"
+    fillbar+="${sc[shift_out]}"
   fi
 
-  pr_prompt="➜  "
+  pr_prompt="➜ "
   pr_time=$(_lc 101 "[$(date +%T)]")
 }
 

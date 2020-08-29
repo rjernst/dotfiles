@@ -39,6 +39,17 @@ _nc() {
   echo -n "%{$terminfo[sgr0]%}$1"
 }
 
+_debug() {
+  if [ $PROMPT_DEBUG ]; then
+    echo "prompt: $1" >&2
+  fi
+}
+
+prompt-debug() {
+  PROMPT_DEBUG=1
+}
+
 # --------------- filled in by subsequent scripts ----------------
 left_info_functions=()
 right_info_functions=()
+chdir_functions=()
