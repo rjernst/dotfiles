@@ -64,3 +64,4 @@ bindkey -v
 for file in $(ls $ZSHFILES/prompt | sort -V); do
   source $ZSHFILES/prompt/$file
 done
+
