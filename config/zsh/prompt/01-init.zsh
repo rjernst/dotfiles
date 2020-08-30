@@ -24,6 +24,9 @@ _special() {
   echo -n "${sc[shift_out]}"
 }
 
+# color chart
+# https://upload.wikimedia.org/wikipedia/commons/1/15/Xterm_256color_chart.svg
+
 # bold color
 _bc() {
   echo -n "%B%F{$1}$2%f%b"
