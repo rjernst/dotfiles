@@ -12,6 +12,9 @@ cask 'bartender'
 tap 'homebrew/cask-versions'
 tap 'beeftornado/rmtree'
 
+# automation
+cask 'mysides'
+
 # productivity
 cask 'slack'
 cask 'zoomus'
