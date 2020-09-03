@@ -24,6 +24,9 @@
 [rebase]
     instructionFormat = %s [%an]
 
+[pull]
+  rebase = false
+
 [diff]
 	compactionHeuristic = true
 	rename = copy
