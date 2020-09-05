@@ -1,0 +1,4 @@
+#!/usr/bin/env zsh
+
+git -C $DOTFILES pull --ff-only
+$DOTFILES/setup
