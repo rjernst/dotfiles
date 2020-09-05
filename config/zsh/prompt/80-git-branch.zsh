@@ -22,6 +22,7 @@ _git_branch_info() {
     local stashes=$(git stash list)
     if [ ! -z "$stashes" ]; then
       branch="$branch $(_bc yellow ⚑)"
+      (( len += 2 ))
     fi
     if [ $detached -ne 0 ]; then
       branch="$(_lc 227 $branch)"
