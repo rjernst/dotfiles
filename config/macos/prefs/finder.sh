@@ -1,6 +1,7 @@
 osascript <<EOD
 tell application "Finder"
 	activate
+  delay 1
 end tell
 
 tell application "System Events"
