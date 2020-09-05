@@ -17,7 +17,7 @@ _update_dotfiles_dirty_state() {
     _debug "writing dirty state: \n$dirty_state"
     echo "$dirty_state" > $dirty_state_file
   elif [ -f $dirty_state_file ]; then
-    rm $dirty_state_file
+    rm -f $dirty_state_file
   fi
 }
 
