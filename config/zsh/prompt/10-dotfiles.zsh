@@ -1,5 +1,10 @@
 # alerts for dotfiles being dirty
-# only want to check every hour at most
+
+# only setup detection if checked out for editing
+local origin_url=$(git -C $DOTFILES remote get-url origin)
+if [[ ! $origin_url = "git@"* ]]; then
+  return
+fi
 
 zmodload -i zsh/datetime
 zmodload -F zsh/stat b:zstat
