@@ -90,12 +90,10 @@ precmd() {
   fi
   last_pwd=$PWD
 
-  for notify_function in $notify_functions; do
-    local notification=$($notify_function)
-    if [ ! -z "$notification" ]; then
-      pr_status="$pr_status\n$notification"
-    fi
-  done
+  # additional precmd functions
+  #for precmd_function in $precmd_functions; do
+  #  eval $precmd_function
+  #done
 
   _set_right_info
   _debug "right info = $pr_right_info"
@@ -167,6 +165,18 @@ rewrite_prompt_on_enter() {
 zle -N rewrite_prompt_on_enter
 bindkey "^M" rewrite_prompt_on_enter
 
+_notifications() {
+  notifications=""
+  for notify_function in $notify_functions; do
+    _debug "Running notify function: $notify_function"
+    notification=$($notify_function)
+    if [ ! -z "$notification" ]; then
+      notifications+="\n$notification"
+    fi
+  done
+  echo -n $notifications
+}
+
 _info_line() {
   echo -n "$(_special ul hbar)${pr_left_info}${fillbar}${pr_right_info}$(_special hbar ur)"
 }
@@ -179,7 +189,7 @@ _right_prompt() {
   echo -n "$(_lc yellow $pr_time)$(_special hbar lr)"
 }
 
-PROMPT='${sc[set_charset]}$pr_status
+PROMPT='${sc[set_charset]}${pr_status}$(_notifications)
 $(_info_line)
 $(_left_prompt)'
 
