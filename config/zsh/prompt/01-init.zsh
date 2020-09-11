@@ -3,27 +3,6 @@ if [[ "$terminfo[colors]" -ge 8 ]]; then
   colors
 fi
 
-typeset -A altchar
-set -A altchar ${(s..)terminfo[acsc]}
-
-declare -A sc
-sc[set_charset]="%{$terminfo[enacs]%}"
-sc[shift_in]="%{$terminfo[smacs]%}"
-sc[shift_out]="%{$terminfo[rmacs]%}"
-sc[hbar]=${altchar[q]:--}
-sc[ul]=${altchar[l]:--}
-sc[ll]=${altchar[m]:--}
-sc[lr]=${altchar[j]:--}
-sc[ur]=${altchar[k]:--}
-
-_special() {
-  echo -n "${sc[shift_in]}"
-  for arg in "${@}"; do
-    echo -n "${sc[$arg]}"
-  done
-  echo -n "${sc[shift_out]}"
-}
-
 # color chart
 # https://upload.wikimedia.org/wikipedia/commons/1/15/Xterm_256color_chart.svg
 

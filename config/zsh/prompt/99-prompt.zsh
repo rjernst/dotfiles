@@ -113,10 +113,10 @@ precmd() {
 
   # NOTE: if fillbar size is negative, this blows up. that's a small screen...oh well
   if [ $fillbar_len -gt 0 ]; then
-    fillbar="${sc[shift_in]}${sc[hbar]}"
+    fillbar="─"
     (( fillbar_len -= 1 ))
     while [ $fillbar_len -gt 0 ]; do
-      fillbar+="${sc[hbar]}"
+      fillbar+="─"
       (( fillbar_len -= 1 ))
     done
     fillbar+="${sc[shift_out]}"
@@ -178,18 +178,18 @@ _notifications() {
 }
 
 _info_line() {
-  echo -n "$(_special ul hbar)${pr_left_info}${fillbar}${pr_right_info}$(_special hbar ur)"
+  echo -n "╭─${pr_left_info}${fillbar}${pr_right_info}─╮"
 }
 
 _left_prompt() {
-  echo -n "$(_special ll hbar)$pr_prompt"
+  echo -n "╰─$pr_prompt"
 }
 
 _right_prompt() {
-  echo -n "$(_lc yellow $pr_time)$(_special hbar lr)"
+  echo -n "$(_lc yellow $pr_time)─╯"
 }
 
-PROMPT='${sc[set_charset]}${pr_status}$(_notifications)
+PROMPT='${pr_status}$(_notifications)
 $(_info_line)
 $(_left_prompt)'
 
