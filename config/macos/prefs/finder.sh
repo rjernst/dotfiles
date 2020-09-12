@@ -67,6 +67,7 @@ tell application "System Events"
       tell checkbox "Show warning before removing from iCloud Drive" to if value is 0 then click
       tell checkbox "Show warning before emptying the Trash" to if value is 0 then click
       tell checkbox "Remove items from the Trash after 30 days" to if value is 1 then click
+      tell checkbox "In windows when sorting by name" to if value is 0 then click
     end tell
 
     keystroke "w" using {command down}
