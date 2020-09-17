@@ -1,27 +1,31 @@
 
+# homebrew
+tap 'homebrew/cask-versions'
+tap 'beeftornado/rmtree'
+brew 'mas'
+
 # core
 cask 'alfred'
 cask 'istat-menus'
 cask '1password'
 cask 'firefox'
 cask 'signal'
+cask 'rectangle'
 
 cask 'bartender' 
 
-# homebrew
-tap 'homebrew/cask-versions'
-tap 'beeftornado/rmtree'
+# tools
+brew 'jq'
+brew 'tree'
+brew 'sloccount'
 
 # automation
-cask 'mysides'
 
 # productivity
 cask 'slack'
 cask 'zoomus'
 cask 'omnifocus'
-brew 'jq'
-brew 'tree'
-brew 'sloccount'
+mas 'Drafts', id: 1435957248
 
 # development
 cask 'iterm2'
@@ -36,8 +40,9 @@ brew 'rpm'
 # java versions
 brew 'jenv'
 tap 'AdoptOpenJDK/openjdk'
-cask 'AdoptOpenJDK/openjdk/adoptopenjdk8'
+cask 'adoptopenjdk8'
 cask 'adoptopenjdk11'
+cask 'adoptopenjdk12' # for building 6.8
 cask 'adoptopenjdk14'
 cask 'java-beta'
 
