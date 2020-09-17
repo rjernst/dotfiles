@@ -19,6 +19,12 @@ tell application "System Events"
       tell checkbox "User names and passwords" of group 1 of group 1 to if value is 1 then click
       tell checkbox "Credit cards" of group 1 of group 1 to if value is 1 then click
       tell checkbox "Other forms" of group 1 of group 1 to if value is 1 then click
+
+      click button "Advanced" of toolbar 1
+      delay 0.5
+
+      -- quick access to dev tools
+      tell checkbox "Show Develop menu in menu bar" of group 1 of group 1 to if value is 0 then click
     end tell
 
     keystroke "w" using {command down}
