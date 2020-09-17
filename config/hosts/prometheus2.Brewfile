@@ -7,6 +7,7 @@ brew 'mas'
 # core
 cask 'alfred'
 cask 'istat-menus'
+cask 'intel-power-gadget' # for intel cpu frequency monitoring
 cask '1password'
 cask 'firefox'
 cask 'signal'
