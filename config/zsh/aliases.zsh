@@ -42,4 +42,7 @@ if [ -d $HOME/.prefs ]; then
   alias reload-bundles='_reload_bundles'
 fi
 
+alias yubikey-enable='ykman config usb --enable otp'
+alias yubikey-disable='ykman config usb --disable otp'
+
 # vi: set tabstop=2 shiftwidth=2 filetype=sh expandtab:
