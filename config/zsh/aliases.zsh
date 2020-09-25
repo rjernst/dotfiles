@@ -16,6 +16,11 @@ alias grep='grep --color=auto'
 alias py3='python3'
 alias g='git'
 alias vm='vagrant'
+alias dc='docker-compose'
+alias d='docker'
+alias ap='ansible-playbook'
+alias sc='sudo systemctl'
+alias jc='sudo journalctl'
 
 alias gw='$DOTFILES/scripts/gradlew.sh'
 

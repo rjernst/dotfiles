@@ -37,3 +37,6 @@ map! jk <ESC>
 set viminfo+=n~/.vim/viminfo
 
 let g:tex_flavor='latex'
+
+""" Makefile
+autocmd FileType make set noexpandtab tabstop=4 shiftwidth=4
