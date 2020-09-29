@@ -27,11 +27,18 @@ cask 'slack'
 cask 'zoomus'
 cask 'omnifocus'
 mas 'Drafts', id: 1435957248
+cask 'fantastical'
 
 # development
 cask 'iterm2'
 cask 'intellij-idea'
-cask 'docker'
+#cask 'docker'
+# virtualbox, pinned to version 5.2.18r124319
+#cask 'https://raw.githubusercontent.com/Homebrew/homebrew-cask/a7ef19c35c1185ac7ddab20685877b861f5549a9/Casks/virtualbox.rb'
+# virtualbox-extension-pack, pinned to version 5.2.18r124319
+#cask 'https://raw.githubusercontent.com/Homebrew/homebrew-cask/1b520830faabfcc417ed151d8bb97a85a00157ff/Casks/virtualbox-extension-pack.rb'
+# vagrant, pinned to version 2.2.3
+#cask 'https://raw.githubusercontent.com/Homebrew/homebrew-cask/f62813f433efa4912b9363160d4f9e0da7467719/Casks/vagrant.rb'
 cask 'virtualbox'
 cask 'virtualbox-extension-pack'
 cask 'vagrant'
