@@ -1,17 +1,8 @@
-_pipenv_info() {
-  if [ "$PIPENV_ACTIVE" ]; then
-    # the snake emoji is 2 wide
-    (( len = 3 + ${#PIPENV_NAME} ))
-    echo -n "$len:🐍 $PIPENV_NAME"
-  fi
-}
 
 _pipenv_activate() {
   echo -n "Activating pipenv..."
   export VIRTUAL_ENV=$(pipenv --venv)
-  export PIPENV_ROOT=$1
   local envname=$(cat $VIRTUAL_ENV/pyvenv.cfg | grep prompt | awk '{ print $3 }' | sed 's/[\(\)]//g')
-  echo "$envname"
   export PIPENV_NAME=$envname
   export PIPENV_ACTIVE=1
 
@@ -22,6 +13,7 @@ _pipenv_activate() {
 
   export OLD_PATH=$PATH
   PATH=$VIRTUAL_ENV/bin:$PATH
+  echo "$PIPENV_NAME"
 }
 
 _pipenv_deactivate() {
@@ -39,15 +31,17 @@ _pipenv_deactivate() {
   unset OLD_PATH
 }
 
-_find_pipfile() {
-  dir=$(pwd)
+_find_pipenv() {
+  local dir=$PWD
+  echo "Dir: $dir" > ~/pipenv.log
   while [ ! -f $dir/Pipfile ]; do
-    dir=$(cd $dir/..; pwd)
-    if [ $dir = "/" ]; then
+    if [ "$dir" = "/" ]; then
       return
     fi
-  done 
-  echo -n "$dir/Pipfile"; return
+    dir=$(cd $dir/..; pwd)
+    echo "trying: $dir" >> ~/pipenv.log
+  done
+  export PIPENV_ROOT=$dir
 }
 
 _pipenv_auto() {
@@ -57,15 +51,15 @@ _pipenv_auto() {
       _pipenv_deactivate
     fi
   fi
-  
+
   # do not chain the if/else so that a new env can be activated at the same time
   if [ ! $PIPENV_ACTIVE ]; then
-    local pipfile=$(_find_pipfile)
-    if [ "$pipfile" ]; then
-      _pipenv_activate $(dirname $pipfile)
+    _find_pipenv
+    if [ -d "$PIPENV_ROOT" ]; then
+      _pipenv_activate
     fi
   fi
 }
 
-right_info_functions+=(_pipenv_info)
-chdir_functions+=(_pipenv_auto)
+autoload -U add-zsh-hook
+add-zsh-hook chpwd _pipenv_auto
