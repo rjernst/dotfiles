@@ -10,10 +10,10 @@ cask 'istat-menus'
 cask 'intel-power-gadget' # for intel cpu frequency monitoring
 cask '1password'
 cask 'firefox'
+cask 'google-chrome'
 cask 'signal'
-cask 'rectangle'
-
-cask 'bartender' 
+cask 'hazel'
+cask 'keyboard-maestro'
 
 # tools
 brew 'jq'
@@ -28,6 +28,7 @@ cask 'zoomus'
 cask 'omnifocus'
 mas 'Drafts', id: 1435957248
 cask 'fantastical'
+mas 'Bear', id: 1091189122
 
 # development
 cask 'iterm2'
@@ -44,6 +45,7 @@ cask 'virtualbox-extension-pack'
 cask 'vagrant'
 brew 'dpkg'
 brew 'rpm'
+brew 'pipenv'
 
 # java versions
 brew 'jenv'
@@ -52,6 +54,7 @@ cask 'adoptopenjdk8'
 cask 'adoptopenjdk11'
 cask 'adoptopenjdk12' # for building 6.8
 cask 'adoptopenjdk14'
+cask 'adoptopenjdk15'
 cask 'java-beta'
 
 # yubikey
