@@ -136,7 +136,7 @@ zinit wait lucid for \
 # where gradle looks for gradle.properties
 export GRADLE_USER_HOME=$HOME/.gradle
 # helper for running gradlew from any dir
-alias gw='$DOTFILES/scripts/gradlew.sh'
+alias gw='$DOTFILES/bin/gradlew.sh'
 
 #----------------------------------------------------------------------------
 #                                  python
