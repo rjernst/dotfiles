@@ -144,8 +144,9 @@ alias gw='$DOTFILES/bin/gradlew.sh'
 
 alias py3='python3'
 
-#zinit wait lucid for \
-zinit load $ZDOTDIR/plugins
+for plugin in $ZDOTDIR/plugins/*.zsh; do
+  source $plugin
+done
 
 #----------------------------------------------------------------------------
 #                               basic shortcuts
