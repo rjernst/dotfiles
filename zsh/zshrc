@@ -182,6 +182,7 @@ if [[ $OSTYPE == darwin* ]]; then
     brew bundle --global install 
   }
   alias reload-brewfile='_reload_brewfile'
+  alias edit-brewfile='vim $HOME/.Brewfile'
 fi
 
 # vi: set tabstop=2 shiftwidth=2 filetype=sh expandtab:
