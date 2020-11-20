@@ -185,4 +185,6 @@ if [[ $OSTYPE == darwin* ]]; then
   alias edit-brewfile='vim $HOME/.Brewfile'
 fi
 
+PATH=$HOME/bin:$PATH
+
 # vi: set tabstop=2 shiftwidth=2 filetype=sh expandtab:

@@ -32,6 +32,7 @@ mas 'Bear', id: 1091189122
 
 # development
 cask 'iterm2'
+cask 'jetbrains-toolbox'
 cask 'intellij-idea'
 #cask 'docker'
 # virtualbox, pinned to version 5.2.18r124319

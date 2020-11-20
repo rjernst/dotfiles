@@ -36,8 +36,9 @@ if [ -f $zsh_roles ]; then
   done <$zsh_roles
 fi
 
-setup_link "bin"                                "bin"
 setup_link "tmux/conf"                          ".tmux.conf"
+mkdir -p $HOME/.ssh
+setup_link "ssh/config"                         ".ssh/config"
 
 mkdir -p $HOME/.vim
 for VIMFILE in $DOTFILES/vim/*; do
@@ -64,6 +65,19 @@ if [[ $OSTYPE == darwin* ]]; then
     touch $HOME/.Brewfile
   fi
 fi
+
+mkdir -p $HOME/bin
+for bin_script in $DOTFILES/bin/*; do
+  name=$(basename $bin_script)
+  setup_link "bin/$name"                        "bin/$name"
+done
+for tool in $DOTFILES/tools/*; do
+  tool_name=$(basename $tool)
+  for bin_script in $tool/bin/*; do
+    name=$(basename $bin_script)
+    setup_link "tools/$tool_name/bin/$name"     "bin/$name"
+  done
+done
 
 echo ""
 echo "Config files are setup."
