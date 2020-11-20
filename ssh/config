@@ -1,0 +1,9 @@
+StrictHostKeyChecking no
+CheckHostIP no
+GatewayPorts yes
+TCPKeepAlive yes
+ServerAliveInterval 30
+ServerAliveCountMax 5
+ControlPath ~/.ssh/control-%h-%p-%r
+
+Include ~/.ssh/host_config
