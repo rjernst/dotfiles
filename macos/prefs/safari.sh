@@ -11,6 +11,15 @@ tell application "System Events"
     delay 1
 
     tell window 1
+      click button "General" of toolbar 1
+			repeat until exists pop up button "Safari opens with:" of group 1 of group 1
+			end repeat
+			set opensWithDropdown to pop up button "Safari opens with:" of group 1 of group 1
+			click opensWithDropdown
+			repeat until exists menu 1 of opensWithDropdown
+			end repeat
+			click menu item "All non-private windows from last session" of menu 1 of opensWithDropdown
+
       click button "AutoFill" of toolbar 1
       delay 0.5
 
