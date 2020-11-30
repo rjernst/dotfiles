@@ -8,7 +8,6 @@ cask 'hazel'
 cask 'google-backup-and-sync'
 cask 'dropbox'
 cask 'keyboard-maestro'
-cask 'moom'
 
 # package management
 tap 'homebrew/cask-versions'
