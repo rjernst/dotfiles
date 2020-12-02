@@ -1,0 +1,28 @@
+import org.gradle.util.VersionNumber
+
+def configureBuildScans = { target ->
+    target.buildScan.publishAlways() // comment this out if you don't want to opt-in to publishing scans
+    target.buildScan.server = 'https://gradle-enterprise.elastic.co'
+}
+
+rootProject {
+    project.pluginManager.withPlugin('com.gradle.build-scan') {
+        configureBuildScans(rootProject)
+    } 
+}
+
+gradle.settingsEvaluated { settings ->
+    settings.buildCache {
+        remote(HttpBuildCache) {
+            url = 'https://gradle-enterprise.elastic.co/cache/'
+            push = false
+        }
+    }
+    
+    // Starting with Gradle 6.0 the build scan plugin is applied in settings.gradle
+    if (VersionNumber.parse(gradle.gradleVersion) >= VersionNumber.parse('6.0')) {
+        settings.pluginManager.withPlugin('com.gradle.enterprise') {
+            configureBuildScans(settings.gradleEnterprise)
+        }
+    }
+}

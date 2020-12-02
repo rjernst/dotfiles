@@ -20,6 +20,9 @@ link_role() {
   fi
 }
 
+[ ! -d $HOME/.gradle ] && mkdir $HOME/.gradle
+setup_link "gradle/properties"                  ".gradle/gradle.properties"
+
 setup_link "zsh/zshrc"                          ".zshrc"
 mkdir -p $HOME/.zsh
 mkdir -p $HOME/.zsh/var/

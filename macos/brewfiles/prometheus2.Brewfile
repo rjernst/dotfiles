@@ -33,7 +33,6 @@ mas 'Bear', id: 1091189122
 # development
 cask 'iterm2'
 cask 'jetbrains-toolbox'
-cask 'intellij-idea'
 #cask 'docker'
 # virtualbox, pinned to version 5.2.18r124319
 #cask 'https://raw.githubusercontent.com/Homebrew/homebrew-cask/a7ef19c35c1185ac7ddab20685877b861f5549a9/Casks/virtualbox.rb'

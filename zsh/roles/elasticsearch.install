@@ -1,0 +1,3 @@
+
+[ ! -d $HOME/.gradle/init.d ] && mkdir $HOME/.gradle/init.d
+setup_link "gradle/elasticsearch.gradle"                      ".gradle/init.d/elasticsearch.gradle"
