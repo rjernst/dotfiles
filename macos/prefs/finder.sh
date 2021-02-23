@@ -30,9 +30,9 @@ tell application "System Events"
 
     tell window "Finder Preferences"
       click button "Sidebar" of toolbar 1
-      delay 0.5
+      delay 0.5 
 
-      tell checkbox "Recents" to if value is 1 then click
+      -- tell checkbox "Recents" to if value is 1 then click
       tell checkbox "AirDrop" to if value is 1 then click
       tell checkbox "Applications" to if value is 0 then click
       tell checkbox "Desktop" to if value is 0 then click

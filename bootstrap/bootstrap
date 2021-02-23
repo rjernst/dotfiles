@@ -21,8 +21,12 @@ clone_dotfiles() {
 bootstrap_macos() {
   command -v brew &> /dev/null || {
     echo "---> installing homebrew"
-    ruby -e "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/master/install)"
+    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
   }
+  if [ $ARCH == "arm64" ]; then
+    # homebrew on arm it installed to /opt/homebrew
+    export PATH=/opt/homebrew/bin:$PATH
+  fi
   command -v git &> /dev/null || {
     echo "---> installing git"
     brew install git
@@ -46,9 +50,22 @@ bootstrap_arch() {
   pacman -S --noconfirm --needed ansible
 }
 
-BASE_URL=https://raw.githubusercontent.com/$GITHUB_USERNAME/dotfiles/master
-PLATFORM=$(curl -s $BASE_URL/scripts/detect-platform | bash)
+get_platform() {
+  if [ $(uname) == "Darwin" ]; then
+    echo "macos"
+  else
+    if [ -f /etc/arch-release ]; then
+      echo "arch"
+    else
+      echo "unknown"
+    fi
+  fi
+}
+
+PLATFORM=$(get_platform)
 echo "---> detected platform: $PLATFORM"
+ARCH=$(uname -m)
+echo "---> detected architecture: $ARCH"
 EXTRA_VARS="$EXTRA_VARS -e os=$PLATFORM"
 
 eval bootstrap_$PLATFORM

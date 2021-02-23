@@ -7,9 +7,7 @@ brew 'mas'
 # core
 cask 'alfred'
 cask 'istat-menus'
-cask 'intel-power-gadget' # for intel cpu frequency monitoring
 cask '1password'
-cask 'firefox'
 cask 'google-chrome'
 cask 'signal'
 cask 'hazel'
@@ -36,10 +34,6 @@ mas 'Deliveries', id: 290986013
 # development
 cask 'iterm2'
 cask 'jetbrains-toolbox'
-cask 'docker'
-cask 'virtualbox'
-cask 'virtualbox-extension-pack'
-cask 'vagrant'
 brew 'dpkg'
 brew 'rpm'
 brew 'pipenv'
@@ -48,10 +42,7 @@ brew 'pipenv'
 brew 'jenv'
 cask 'AdoptOpenJDK/openjdk/adoptopenjdk8'
 cask 'adoptopenjdk11'
-cask 'adoptopenjdk12' # for building 6.8
-cask 'adoptopenjdk14'
 cask 'adoptopenjdk15'
-cask 'java-beta'
 
 # yubikey
 cask 'opensc'

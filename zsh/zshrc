@@ -3,6 +3,10 @@ ZDOTDIR=$HOME/.zsh
 DOTFILES=$HOME/.dotfiles
 export EDITOR=/usr/bin/vim
 
+if [[ $OSTYPE == darwin* ]]; then
+  export PATH=/opt/homebrew/bin:$PATH
+fi
+
 #----------------------------------------------------------------------------
 #                           ssh auth from gpg
 #----------------------------------------------------------------------------
@@ -170,7 +174,7 @@ alias cdd='cd $DOTFILES'
 if [[ $OSTYPE == darwin* ]]; then
   function _reload_prefs() {
     echo "Running scripts in $HOME/.prefs"
-    for file in $HOME/.prefs/*.sh; do
+    for file in $DOTFILES/macos/prefs/*.sh; do
       echo "$(basename $file)"
       zsh $file
     done

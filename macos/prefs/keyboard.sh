@@ -17,8 +17,6 @@ tell application "System Events"
     tell window "Keyboard"
       click radio button "Keyboard" of tab group 1
 
-      tell checkbox "Show keyboard and emoji viewers in menu bar" of tab group 1 to if value is 1 then click
-
       # caps lock -> ctrl
       click button "Modifier Keys…" of tab group 1
       repeat until exists sheet 1
