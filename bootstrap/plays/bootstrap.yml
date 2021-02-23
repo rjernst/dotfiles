@@ -24,7 +24,7 @@
 
     - name: load roles
       slurp:
-        src: "{{ ansible_env.HOME }}/.zsh/roles"
+        src: "{{ ansible_env.HOME }}/.dotfiles/zsh/hosts/{{ hostname }}.roles"
       register: roles_data
 
     - set_fact:

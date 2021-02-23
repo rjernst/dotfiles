@@ -8,6 +8,9 @@
     homebrew:
       name: zsh
 
+  - name: init zsh
+    shell: zsh -i -c "echo 'initializing zsh'"
+
   - name: fix zsh share permissions
     file:
       path: /usr/local/share/zsh

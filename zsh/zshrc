@@ -187,6 +187,7 @@ if [[ $OSTYPE == darwin* ]]; then
   }
   alias reload-brewfile='_reload_brewfile'
   alias edit-brewfile='vim $HOME/.Brewfile'
+  alias brew-x86='/usr/local/bin/brew'
 fi
 
 PATH=$HOME/bin:$PATH

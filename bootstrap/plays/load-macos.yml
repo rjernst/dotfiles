@@ -3,4 +3,4 @@
   shell: /bin/zsh -i -c "reload-prefs"
 
 - name: load homebrew packages
-  shell: /bin/zsh -i -c "reload-bundles"
+  shell: /bin/zsh -i -c "reload-brewfile"
