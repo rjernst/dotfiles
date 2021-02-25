@@ -67,6 +67,10 @@ if [[ $OSTYPE == darwin* ]]; then
   else
     touch $HOME/.Brewfile
   fi
+
+  if [ -f $DOTFILES/$brewfile-x86 ]; then
+    setup_link "$brewfile-x86"                  ".Brewfile-x86"
+  fi
 fi
 
 mkdir -p $HOME/bin

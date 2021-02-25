@@ -33,13 +33,11 @@ _pipenv_deactivate() {
 
 _find_pipenv() {
   local dir=$PWD
-  echo "Dir: $dir" > ~/pipenv.log
   while [ ! -f $dir/Pipfile ]; do
     if [ "$dir" = "/" ]; then
       return
     fi
     dir=$(cd $dir/..; pwd)
-    echo "trying: $dir" >> ~/pipenv.log
   done
   export PIPENV_ROOT=$dir
 }

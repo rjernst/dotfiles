@@ -34,18 +34,18 @@ mas 'Deliveries', id: 290986013
 # development
 cask 'iterm2'
 cask 'jetbrains-toolbox'
-brew 'dpkg'
-brew 'rpm'
+#brew 'dpkg'
+#brew 'rpm'
 brew 'pipenv'
 
 # java versions
 brew 'jenv'
-cask 'AdoptOpenJDK/openjdk/adoptopenjdk8'
-cask 'adoptopenjdk11'
-cask 'adoptopenjdk15'
+#cask 'AdoptOpenJDK/openjdk/adoptopenjdk8'
+#cask 'adoptopenjdk11'
+#cask 'adoptopenjdk15'
 
 # yubikey
-cask 'opensc'
+#cask 'opensc'
 brew 'ykman'
 
 

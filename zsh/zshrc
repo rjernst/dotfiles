@@ -184,10 +184,22 @@ if [[ $OSTYPE == darwin* ]]; then
   function _reload_brewfile() {
     echo "Updating homebrew bundles from $HOME/.Brewfile"
     brew bundle --global install 
+
+    x86brewfile=~/.Brewfile-x86
+    if [[ -f $x86brewfile ]]; then
+      arch -x86_64 /bin/bash -c "/usr/local/bin/brew bundle --file $x86brewfile install"
+    fi
   }
   alias reload-brewfile='_reload_brewfile'
   alias edit-brewfile='vim $HOME/.Brewfile'
-  alias brew-x86='/usr/local/bin/brew'
+  alias edit-brewfile-x86='vim $HOME/.Brewfile-x86'
+
+  function _brew_x86() {
+    arch -x86_64 /bin/bash -c "/usr/local/bin/brew $@"
+  }
+  alias brew-x86='_brew_x86'
+
+
 fi
 
 PATH=$HOME/bin:$PATH
