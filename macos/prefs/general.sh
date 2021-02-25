@@ -13,4 +13,7 @@ tell application "System Events"
     end tell
   end tell
 end tell
+
+quit application "System Preferences"
+
 EOD
