@@ -56,6 +56,16 @@ tell application "System Events"
 
         tell checkbox "Show Input menu in menu bar" to if value is 1 then click
       end tell
+
+      click radio button "Text" of tab group 1
+
+      tell tab group 1
+        repeat until exists checkbox "Correct spelling automatically"
+        end repeat
+
+        tell checkbox "Correct spelling automatically" to if value is 1 then click
+      end tell
+      
     end tell
   end tell
 end tell
