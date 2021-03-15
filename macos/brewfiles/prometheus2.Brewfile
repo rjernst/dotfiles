@@ -20,6 +20,7 @@ brew 'gpg'
 brew 'jq'
 brew 'tree'
 brew 'sloccount'
+brew 'graphviz'
 
 # automation
 
