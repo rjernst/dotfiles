@@ -173,7 +173,7 @@ alias reload-config='echo "Reloading $HOME/.zshrc"; source $HOME/.zshrc'
 alias cdd='cd $DOTFILES'
 if [[ $OSTYPE == darwin* ]]; then
   function _reload_prefs() {
-    echo "Running scripts in $HOME/.prefs"
+    echo "Running scripts in $DOTFILES/macos/prefs"
     for file in $DOTFILES/macos/prefs/*.sh; do
       echo "$(basename $file)"
       zsh $file
