@@ -11,9 +11,18 @@
   - name: init zsh
     shell: zsh -i -c "echo 'initializing zsh'"
 
+  - name: check m1 homebrew
+    stat:
+      path: /usr/local/share
+    register: usr_local_share
+
+  - name: set homebrew share path
+    set_fact: 
+    homebrew_share: "{% if usr_local_share.stat.exists %}/usr/local/share{% else %}/opt/homebrew/share{% endif %}"
+
   - name: fix zsh share permissions
     file:
-      path: /usr/local/share/zsh
+      path: "{{ homebrew_share }}/zsh"
       recurse: yes
       mode: "g-w"
 
