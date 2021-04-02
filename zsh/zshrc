@@ -165,6 +165,8 @@ alias grep='grep --color=auto'
 alias vm='vagrant'
 alias yubikey-enable='ykman config usb --enable otp'
 alias yubikey-disable='ykman config usb --disable otp'
+# re-initialize gpg with current yubikey
+alias yubikey-reload='gpg-connect-agent "scd serialno" "learn --force" /bye'
 
 #----------------------------------------------------------------------------
 #                             dotfiles management
