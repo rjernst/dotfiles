@@ -30,6 +30,7 @@ cask 'fantastical'
 mas 'Bear', id: 1091189122
 mas 'MindNode - Mind Map', id: 1289197285
 mas 'Deliveries', id: 290986013
+cask 'moom'
 
 # development
 cask 'iterm2'

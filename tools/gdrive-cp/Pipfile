@@ -5,6 +5,7 @@ name = "pypi"
 
 [packages]
 pydrive2 = "*"
+oauth2client = "*"
 
 [dev-packages]
 
