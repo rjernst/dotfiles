@@ -12,6 +12,8 @@ cask 'google-chrome'
 cask 'signal'
 cask 'hazel'
 cask 'keyboard-maestro'
+cask 'moom'
+cask 'bartender'
 
 # tools
 brew 'gpg'
@@ -30,7 +32,8 @@ cask 'fantastical'
 mas 'Bear', id: 1091189122
 mas 'MindNode - Mind Map', id: 1289197285
 mas 'Deliveries', id: 290986013
-cask 'moom'
+cask 'obsidian'
+cask 'devonthink'
 
 # development
 cask 'iterm2'
