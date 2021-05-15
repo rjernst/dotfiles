@@ -71,6 +71,11 @@ if [[ $OSTYPE == darwin* ]]; then
   if [ -f $DOTFILES/$brewfile-x86 ]; then
     setup_link "$brewfile-x86"                  ".Brewfile-x86"
   fi
+
+  # symlink icloud drive to homedir
+  if [ ! -d $HOME/iCloud ]; then
+    ln -s ~/Library/Mobile\ Documents/com\~apple\~CloudDocs ~/iCloud
+  fi
 fi
 
 mkdir -p $HOME/bin
