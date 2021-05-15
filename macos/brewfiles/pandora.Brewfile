@@ -7,6 +7,7 @@ cask 'signal'
 cask 'hazel'
 cask 'dropbox'
 cask 'keyboard-maestro'
+cask 'bartender'
 
 # package management
 tap 'homebrew/cask-versions'
@@ -23,6 +24,8 @@ mas 'Bear', id: 1091189122
 mas 'Drafts', id: 1435957248
 mas 'Save to Pocket', id: 1477385213
 cask 'fantastical'
+cask 'devonthink'
+cask 'moom'
 
 # apps
 cask 'firefox'
@@ -32,6 +35,7 @@ mas 'MindNode – Mind Map', id: 1289197285
 cask 'mactex'
 mas 'Paprika Recipe Manager 3', id: 1303222628
 mas 'MacFamilyTree 9', id: 1458866808
+mas 'Day One', id: 1055511498
 cask 'vlc'
 
 # development
