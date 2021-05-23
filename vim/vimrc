@@ -61,6 +61,7 @@ autocmd bufenter * if (winnr("$") == 1 && exists("b:NERDTree") && b:NERDTree.isT
 set ts=2
 set shiftwidth=2
 set expandtab
+set backspace=indent,eol,start
 
 """set autoindent
 set number
