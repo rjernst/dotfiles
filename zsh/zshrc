@@ -163,6 +163,8 @@ alias mv='mv -i'       # always ask before moving a file onto another file
 alias cp='cp -i'       # always ask before copying a file onto another file
 alias grep='grep --color=auto'
 alias vm='vagrant'
+alias ap='ansible-playbook'
+alias d='docker'
 alias yubikey-enable='ykman config usb --enable otp'
 alias yubikey-disable='ykman config usb --disable otp'
 # re-initialize gpg with current yubikey
