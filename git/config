@@ -1,7 +1,6 @@
 # allow for someone else to use this config file with their own username
 [include]
     path = .git/user.config
-    path = .git/github.config
 
 [color]
     diff = auto
@@ -40,7 +39,7 @@
 
 [alias]
     co = checkout
-    c = commit
+    ci = commit
     ca = commit -a
     a = add
     b = branch
