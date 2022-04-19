@@ -1,6 +1,7 @@
 
 # homebrew
 tap 'homebrew/cask-versions'
+tap 'homebrew/cask-drivers'
 tap 'beeftornado/rmtree'
 brew 'mas'
 
@@ -14,14 +15,22 @@ cask 'hazel'
 cask 'keyboard-maestro'
 cask 'moom'
 cask 'bartender'
+cask 'elgato-stream-deck'
+cask 'elgato-control-center'
+cask 'logitech-camera-settings'
 
 # tools
 brew 'gpg'
 brew 'jq'
 brew 'tree'
 brew 'sloccount'
+brew 'pinentry-mac'
+brew 'p7zip'
+brew 'pyenv'
 
 # automation
+tap 'hashicorp/tap'
+brew 'hashicorp/tap/vault'
 
 # productivity
 cask 'slack'
@@ -41,12 +50,20 @@ cask 'jetbrains-toolbox'
 #brew 'dpkg'
 #brew 'rpm'
 brew 'pipenv'
+cask 'docker'
+cask 'google-cloud-sdk'
+
+# kibana dev
+brew 'nvm'
+brew 'yarn'
 
 # java versions
 brew 'jenv'
+brew 'openjdk@18'
 #cask 'AdoptOpenJDK/openjdk/adoptopenjdk8'
 #cask 'adoptopenjdk11'
 #cask 'adoptopenjdk15'
+cask 'java-beta'
 
 # yubikey
 #cask 'opensc'
