@@ -37,9 +37,9 @@ fi
 #----------------------------------------------------------------------------
 ### Added by Zinit's installer
 if [[ ! -f $ZDOTDIR/zinit/bin/zinit.zsh ]]; then
-  print -P "%F{33}▓▒░ %F{220}Installing %F{33}DHARMA%F{220} Initiative Plugin Manager (%F{33}zdharma/zinit%F{220})…%f"
+  print -P "%F{33}▓▒░ %F{220}Installing %F{33}DHARMA%F{220} Initiative Plugin Manager (%F{33}zdharma-continuum/zinit%F{220})…%f"
   command mkdir -p "$ZDOTDIR/zinit" && command chmod g-rwX "$ZDOTDIR/zinit"
-  command git clone https://github.com/zdharma/zinit "$ZDOTDIR/zinit/bin" && \
+  command git clone https://github.com/zdharma-continuum/zinit "$ZDOTDIR/zinit/bin" && \
       print -P "%F{33}▓▒░ %F{34}Installation successful.%f%b" || \
       print -P "%F{160}▓▒░ The clone has failed.%f%b"
 fi
@@ -77,7 +77,7 @@ zinit light trapd00r/LS_COLORS
 
 zinit wait lucid for \
   atinit"zicompinit -; zicdreplay" \
-      zdharma/fast-syntax-highlighting \
+      zdharma-continuum/fast-syntax-highlighting \
       OMZP::colored-man-pages \
   atload"_zsh_autosuggest_start" \
       zsh-users/zsh-autosuggestions \
@@ -145,7 +145,6 @@ alias gw='$DOTFILES/bin/gradlew.sh'
 #----------------------------------------------------------------------------
 #                                  python
 #----------------------------------------------------------------------------
-
 alias py3='python3'
 
 for plugin in $ZDOTDIR/plugins/*.zsh; do
@@ -209,3 +208,7 @@ fi
 PATH=$HOME/bin:$PATH
 
 # vi: set tabstop=2 shiftwidth=2 filetype=sh expandtab:
+
+export NVM_DIR="$HOME/.nvm"
+[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"  # This loads nvm
+[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"  # This loads nvm bash_completion
