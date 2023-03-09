@@ -18,7 +18,9 @@
     autocrlf = input
 
 [commit]
-  gpgsign = true
+	gpgsign = true
+[gpg]
+	format = ssh
 
 [rebase]
     instructionFormat = %s [%an]
