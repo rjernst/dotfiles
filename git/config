@@ -17,6 +17,9 @@
     excludesfile = ~/.git/ignore
     autocrlf = input
 
+[submodule]
+  recurse = true
+
 [commit]
 	gpgsign = true
 [gpg]
@@ -40,29 +43,31 @@
 	autocorrect = 1
 
 [alias]
-    co = checkout
-    ci = commit
-    ca = commit -a
-    a = add
-    b = branch
-    s = status
-    cp = cherry-pick
-    ra = rebase --abort
-    rc = rebase --continue
-    pr = push -u origin HEAD
-    pu = push 
-    p = pull
-    f = fetch
-    mm = merge master
+  co = checkout
+  cm = checkout main
+  ci = commit
+  ca = commit -a
+  a = add
+  b = branch
+  s = status
+  cp = cherry-pick
+  ra = rebase --abort
+  rc = rebase --continue
+  pr = push -u origin HEAD
+  pu = push 
+  p = pull
+  f = fetch
+  mm = merge main
+  sm = submodule
 
-    es-worktree = "!f() { git worktree add --track -b $1 $HOME/code/elastic/elasticsearch-$1 upstream/$1; }; f"
+  es-worktree = "!f() { git worktree add --track -b $1 $HOME/code/elastic/elasticsearch-$1 upstream/$1; }; f"
 
-    # scripts
-    rev = "!f() { git fetch upstream pull/$1/head:review/$1; }; f"
-    add-unmerged = "!f() { git ls-files --unmerged | cut -f2 | sort -u ; }; git add `f`"
-    cleanup = "!bash ~/.dotfiles/scripts/git-prune-branches"
-    sync-remotes = "!f() { git co master ; git fetch ; git remote prune origin; }; f"
+  # scripts
+  rev = "!f() { git fetch upstream pull/$1/head:review/$1; }; f"
+  add-unmerged = "!f() { git ls-files --unmerged | cut -f2 | sort -u ; }; git add `f`"
+  cleanup = "!bash ~/.dotfiles/scripts/git-prune-branches"
+  sync-remotes = "!f() { git co main; git fetch ; git remote prune origin; }; f"
 
-    api = !sh -c 'export TOKEN=`cat ~/.elastic/github.token` && curl -s -H \"Authorization: token $TOKEN\" https://api.github.com$1' -
+  api = !sh -c 'export TOKEN=`cat ~/.elastic/github.token` && curl -s -H \"Authorization: token $TOKEN\" https://api.github.com$1' -
 
-    grog = "log --graph --abbrev-commit --decorate --all --format=format:\"%C(bold blue)%h%C(reset) - %C(bold cyan)%aD%C(dim white) - %an%C(reset) %C(bold green)(%ar)%C(reset)%C(bold yellow)%d%C(reset)%n %C(white)%s%C(reset)\""
+  grog = "log --graph --abbrev-commit --decorate --all --format=format:\"%C(bold blue)%h%C(reset) - %C(bold cyan)%aD%C(dim white) - %an%C(reset) %C(bold green)(%ar)%C(reset)%C(bold yellow)%d%C(reset)%n %C(white)%s%C(reset)\""
