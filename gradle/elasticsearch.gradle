@@ -18,6 +18,12 @@ gradle.settingsEvaluated { settings ->
             push = false
         }
     }
+    /*settings.buildCache {
+        local {
+            //directory = new File(rootDir, 'build-cache')
+            removeUnusedEntriesAfterDays = 30
+        }
+    }*/
     
     // Starting with Gradle 6.0 the build scan plugin is applied in settings.gradle
     if (VersionNumber.parse(gradle.gradleVersion) >= VersionNumber.parse('6.0')) {

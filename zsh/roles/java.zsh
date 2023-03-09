@@ -12,14 +12,13 @@ alias jdk='readlink $(jenv javahome)'
  #_jdk_major_versions=("${(@f)$(jenv versions | grep -E "^\s+((\d+(-ea)?)|(1.8))$" | sed -E 's/.* ([0-9]+)\.0$/\1/' | sed -E 's/.* (1.8)$/\1/' | sort -r --unique)}")
 # create a shortcut for setting to each major version
 function _setup_jdk_aliases() {
-  _jdk_major_versions=("${(@f)$(jenv versions | grep -E "^\s+((\d+(-ea)?)|(1.8))$" | sed -E 's/^ *//g' | sort -r --unique)}")
+  _jdk_major_versions=("${(@f)$(jenv versions | grep -E "^\s+((\d+((\.0)|(-ea))?)|(1.8))$" | sed -E 's/^ *//g' | sort -r --unique)}")
   _latest_jdk_version=
   for v in $_jdk_major_versions; do
-    major=$v
+    major=${v:0:(-2)}
     if [ "$v" = '1.8' ]; then
       major=8
-    fi
-    if [[ $v == *-ea ]]; then
+    elif [[ $v == *-ea ]]; then
       major=${v:0:(-3)}
     elif [[ -z "$_latest_jdk_version" ]]; then
       _latest_jdk_version=$major

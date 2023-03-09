@@ -7,6 +7,7 @@ brew 'mas'
 
 # core
 cask 'alfred'
+cask 'raycast'
 cask 'istat-menus'
 cask '1password'
 cask 'google-chrome'
@@ -21,6 +22,7 @@ cask 'logitech-camera-settings'
 
 # tools
 brew 'gpg'
+brew 'ant'
 brew 'jq'
 brew 'tree'
 brew 'sloccount'
