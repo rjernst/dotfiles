@@ -174,7 +174,7 @@ if [[ $OSTYPE == darwin* ]]; then
     brew bundle --global install 
 
     x86brewfile=~/.Brewfile-x86
-    if [[ -f $x86brewfile ]]; then
+    if [[ -f $x86brewfile && -f /usr/local/bin/brew ]]; then
       arch -x86_64 /bin/bash -c "/usr/local/bin/brew bundle --file $x86brewfile install"
     fi
   }

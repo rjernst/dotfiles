@@ -13,7 +13,7 @@ cask 'bartender'
 tap 'homebrew/cask-versions'
 tap 'beeftornado/rmtree'
 brew 'mas'
-brew 'pipenv'
+#brew 'pipenv'
 
 tap 'homebrew/cask-fonts'
 cask 'font-meslo-for-powerline'
@@ -21,7 +21,6 @@ cask 'font-meslo-for-powerline'
 # productivity
 cask 'omnifocus'
 mas 'Drafts', id: 1435957248
-mas 'Save to Pocket', id: 1477385213
 cask 'fantastical'
 cask 'devonthink'
 cask 'moom'
@@ -31,13 +30,13 @@ cask 'firefox'
 cask 'zoom'
 cask 'discord'
 mas 'MindNode – Mind Map', id: 1289197285
-cask 'mactex'
+#cask 'mactex'
 mas 'Paprika Recipe Manager 3', id: 1303222628
 mas 'MacFamilyTree 9', id: 1458866808
 mas 'Day One', id: 1055511498
 cask 'vlc'
-cask 'audacity'
-brew 'ffmpeg'
+#cask 'audacity'
+#brew 'ffmpeg'
 
 # development
 cask 'iterm2'
@@ -46,6 +45,8 @@ mas 'Xcode', id: 497799835
 brew 'jq'
 brew 'tree'
 cask 'jetbrains-toolbox'
+brew 'awscli'
+cask 'docker'
 
 # java versions
 brew 'jenv'
