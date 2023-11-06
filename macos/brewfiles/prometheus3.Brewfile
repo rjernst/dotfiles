@@ -29,6 +29,7 @@ brew 'sloccount'
 brew 'pinentry-mac'
 brew 'p7zip'
 brew 'pyenv'
+brew 'jless'
 
 # automation
 tap 'hashicorp/tap'
@@ -54,6 +55,7 @@ cask 'jetbrains-toolbox'
 brew 'pipenv'
 cask 'docker'
 cask 'google-cloud-sdk'
+cask 'insomnia'
 
 # kibana dev
 brew 'nvm'
@@ -66,6 +68,8 @@ brew 'openjdk@18'
 #cask 'adoptopenjdk11'
 #cask 'adoptopenjdk15'
 cask 'java-beta'
+brew 'kubectl'
+brew 'teleport'
 
 # yubikey
 #cask 'opensc'

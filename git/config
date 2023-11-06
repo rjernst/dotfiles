@@ -40,7 +40,7 @@
 	default = simple
 
 [help]
-	autocorrect = 1
+	autocorrect = 0
 
 [alias]
   co = checkout
@@ -67,6 +67,8 @@
   add-unmerged = "!f() { git ls-files --unmerged | cut -f2 | sort -u ; }; git add `f`"
   cleanup = "!bash ~/.dotfiles/scripts/git-prune-branches"
   sync-remotes = "!f() { git co main; git fetch ; git remote prune origin; }; f"
+
+  recommit = "!git commit -eF $(git rev-parse --git-dir)/COMMIT_EDITMSG"
 
   api = !sh -c 'export TOKEN=`cat ~/.elastic/github.token` && curl -s -H \"Authorization: token $TOKEN\" https://api.github.com$1' -
 
