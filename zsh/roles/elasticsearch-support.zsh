@@ -19,14 +19,36 @@ function _set_env() {
     echo "Illegal env name, should be one of [$envs]"
     return 2
   fi
-  echo "Setting up $1 support environment"
-  if [[ $1 == prod ]]; then
-    ENV_URL=https://global.elastic.cloud
+  echo "Setting up $ENV_NAME support environment"
+  if [[ $ENV_NAME == prod ]]; then
     TSH_PROXY=teleport-proxy.secops.elstc.co
+    ENV_URL=https://admin.global.elastic.cloud
     ENV_LINKS="
-    Cloud UI: https://cloud.elastic.co/
-    Admin UI: https://admin.found.no/projects/
-    Observability overview: https://overview.elastic-cloud.com/"
+    Cloud UI:      https://cloud.elastic.co/
+    Admin UI:      https://admin.found.no/projects/
+    Observability: https://overview.elastic-cloud.com/
+    Logs:          https://overview.elastic-cloud.com/app/discover#/view/bd378440-4e26-11ee-9def-2f88d8044fe2
+    "
+  fi
+  if [[ $ENV_NAME == staging ]]; then
+    TSH_PROXY=teleport-proxy.staging.getin.cloud
+    ENV_URL=https://admin.global.staging.cld.elstc.co
+    ENV_LINKS="
+    Cloud UI:      https://staging.found.no/
+    Admin UI:      https://admin.staging.foundit.no/
+    Observability: https://overview.aws.staging.foundit.no/
+    Logs:          https://overview.aws.staging.foundit.no/app/discover#/view/b3e75f40-4e27-11ee-9d5f-69c5746c998f
+    "
+  fi
+  if [[ $ENV_NAME == qa ]]; then
+    TSH_PROXY=teleport-proxy.staging.getin.cloud
+    ENV_URL=https://admin.global.qa.cld.elstc.co
+    ENV_LINKS="
+    Cloud UI:      https://console.qa.cld.elstc.co/
+    Admin UI:      https://admin.qa.cld.elstc.co/projects/
+    Observability: https://overview.qa.cld.elstc.co/
+    Logs:          https://overview.qa.cld.elstc.co/app/discover#/view/df2a5ec0-4e20-11ee-889b-75400a7667fb?_g=h@2294574&_a=h@38de511
+    "
   fi
 
   API_KEY=$(security find-generic-password -a $USER -s admin-console-api-key-$ENV_NAME -w 2> /dev/null)
