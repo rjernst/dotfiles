@@ -24,6 +24,7 @@
   shell: "git config remote.origin.url"
   args:
     chdir: "{{ repo_path }}"
+  ignore_errors: yes
   register: origin_cmd
 
 - name: add origin remote
