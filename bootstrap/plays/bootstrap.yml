@@ -7,7 +7,7 @@
       private: no
 
   tasks:
-    - include: "bootstrap-{{ os }}.yml"
+    - include_tasks: "bootstrap-{{ os }}.yml"
 
     - name: setup dot files
       include_role:
@@ -34,7 +34,7 @@
         name: "{{ item }}"
       with_items: "{{ roles.split('\n') }}"
 
-    - include: "load-{{ os }}.yml"
+    - include_tasks: "load-{{ os }}.yml"
         
 
 
