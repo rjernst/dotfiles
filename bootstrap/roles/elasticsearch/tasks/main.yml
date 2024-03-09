@@ -21,7 +21,7 @@
   when: clone.changed
 
 - name: find origin remote
-  shell: git remote get-url origin
+  shell: "git config remote.origin.url"
   args:
     chdir: "{{ repo_path }}"
   register: origin_cmd
@@ -30,4 +30,4 @@
   shell: "git remote add origin git@github.com:{{ github_username }}/elasticsearch.git"
   args:
     chdir: "{{ repo_path }}"
-  when: origin_cmd.rc != 0
+  when: origin_cmd.stdout != ""
