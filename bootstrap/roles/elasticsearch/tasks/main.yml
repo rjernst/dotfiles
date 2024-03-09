@@ -25,7 +25,6 @@
   args:
     chdir: "{{ repo_path }}"
   register: origin_cmd
-  failed_when: origin_cmd.rc != 0 and origin_cmd.rc != 128
 
 - name: add origin remote
   shell: "git remote add origin git@github.com:{{ github_username }}/elasticsearch.git"
