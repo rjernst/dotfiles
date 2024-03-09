@@ -26,8 +26,15 @@
     - set_fact:
         roles: "{{ roles_data.content | b64decode }}"
 
-    - include_role:
-        name: "{{ item }}"
+    - name: apply roles setup 
+      tasks:
+        - stat:
+            path: "{{ ansible_env.HOME }}/.dotfiles/bootstrap/roles/{{ item }}"
+          register: role_file
+        - include_role:
+            name: "{{ item }}"
+          when: role_file.stat.exists
+
       with_items: "{{ roles.split('\n') }}"
 
     - include_tasks: "load-{{ os }}.yml"
