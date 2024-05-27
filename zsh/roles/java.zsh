@@ -54,6 +54,12 @@ function _reload_jenv() {
       jenv add $jdk
     done
   fi
+  if [[ $OSTYPE == linux* ]]; then
+    for jdk in /usr/lib/jdk/*; do
+      echo "Adding jdk at $jdk"
+      jenv add $jdk
+    done
+  fi
 
   _setup_jdk_aliases
 
@@ -65,5 +71,28 @@ function _reload_jenv() {
 
 }
 alias reload-jenv='_reload_jenv'
+
+alias install-jdk='_install_jdk'
+function _install_jdk() {
+  if [ $# -eq 0]; then
+    echo "Must provide jdk major version"
+    return
+  fi
+
+  if [[ $OSTYPE == darwin* ]]; then
+    OS_SUFFIX=macos-aarch64
+    JDKS_DIR=/Library/Java/JavaVirtualMachines
+  fi
+  if [[ $OSTYPE == linux* ]]; then
+    OS_SUFFIX=linux-x64
+    JDKS_DIR=/usr/lib/jdk
+  fi
+  DOWNLOAD_URL="https://download.oracle.com/java/$1/latest/jdk-$1_$OS_SUFFIX_bin.tar.gz"
+  curl -o /tmp/jdk$1.tar.gz $DOWNLOAD_URL
+  if [ $? -neq 0 ]; then
+    echo "Failed to download jdk $1"
+  fi
+  sudo tar -xvzf /tmp/jdk$1.tar.gz -C $JDKS_DIR
+}
 
 # vi: set tabstop=2 shiftwidth=2 filetype=zsh expandtab:
