@@ -97,7 +97,7 @@ function _install_jdk() {
     return
   fi
   sudo tar -xvzf $TMP_FILE -C $JDKS_DIR
-  if ( $? -ne 0 ]; then
+  if [ $? -ne 0 ]; then
     echo "Failed to install jdk to $JDKS_DIR"
     return
   fi
