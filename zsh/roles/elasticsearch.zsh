@@ -14,6 +14,7 @@ export AWS_PROFILE=okta-elastic-dev
 
 # shortcuts to projects
 alias cde='cd ~/code/elastic/elasticsearch'
+alias cdes='cd ~/code/elastic/elasticsearch-serverless'
 alias cde7='cd ~/code/elastic/elasticsearch-7.x'
 alias cde6='cd ~/code/elastic/elasticsearch-6.x'
 alias cdb='cd ~/code/elastic/elasticsearch-benchmarks'
