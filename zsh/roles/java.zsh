@@ -74,10 +74,11 @@ alias reload-jenv='_reload_jenv'
 
 alias install-jdk='_install_jdk'
 function _install_jdk() {
-  if [ $# -eq 0]; then
+  if [ $# -eq 0 ]; then
     echo "Must provide jdk major version"
     return
   fi
+  echo "Installing Oracle JDK $1"
 
   if [[ $OSTYPE == darwin* ]]; then
     OS_SUFFIX=macos-aarch64
@@ -87,9 +88,10 @@ function _install_jdk() {
     OS_SUFFIX=linux-x64
     JDKS_DIR=/usr/lib/jdk
   fi
-  DOWNLOAD_URL="https://download.oracle.com/java/$1/latest/jdk-$1_$OS_SUFFIX_bin.tar.gz"
+  DOWNLOAD_URL="https://download.oracle.com/java/$1/latest/jdk-${1}_${OS_SUFFIX}_bin.tar.gz"
+  echo "Downloading $DOWNLOAD_URL"
   curl -o /tmp/jdk$1.tar.gz $DOWNLOAD_URL
-  if [ $? -neq 0 ]; then
+  if [ $? -ne 0 ]; then
     echo "Failed to download jdk $1"
   fi
   sudo tar -xvzf /tmp/jdk$1.tar.gz -C $JDKS_DIR
