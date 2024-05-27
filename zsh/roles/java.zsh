@@ -79,6 +79,7 @@ function _install_jdk() {
     return
   fi
   echo "Installing Oracle JDK $1"
+  TMP_FILE=/tmp/jdk$1.tar.gz
 
   if [[ $OSTYPE == darwin* ]]; then
     OS_SUFFIX=macos-aarch64
@@ -90,11 +91,17 @@ function _install_jdk() {
   fi
   DOWNLOAD_URL="https://download.oracle.com/java/$1/latest/jdk-${1}_${OS_SUFFIX}_bin.tar.gz"
   echo "Downloading $DOWNLOAD_URL"
-  curl -o /tmp/jdk$1.tar.gz $DOWNLOAD_URL
+  curl -o $TMP_FILE $DOWNLOAD_URL
   if [ $? -ne 0 ]; then
     echo "Failed to download jdk $1"
+    return
   fi
-  sudo tar -xvzf /tmp/jdk$1.tar.gz -C $JDKS_DIR
+  sudo tar -xvzf $TMP_FILE -C $JDKS_DIR
+  if ( $? -ne 0 ]; then
+    echo "Failed to install jdk to $JDKS_DIR"
+    return
+  fi
+  rm $TMP_FILE
 }
 
 # vi: set tabstop=2 shiftwidth=2 filetype=zsh expandtab:
