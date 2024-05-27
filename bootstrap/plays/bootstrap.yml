@@ -18,19 +18,7 @@
         name: dotfiles
         tasks_from: set-origin
 
-    - name: load roles
-      slurp:
-        src: "{{ ansible_env.HOME }}/.dotfiles/zsh/hosts/{{ hostname }}.roles"
-      register: roles_data
-
-    - set_fact:
-        roles: "{{ roles_data.content | b64decode }}"
-
-    - name: setup roles
-      include_role:      
-        name: "{{ item }}"
-      when: (ansible_env.HOME + "/.dotfiles/bootstrap/roles/" + item) is directory
-      loop: "{{ roles.split('\n')|flatten(levels=1) }}"
+    - include_tasks: "setup-roles.yml"
 
     - include_tasks: "load-{{ os }}.yml"
         

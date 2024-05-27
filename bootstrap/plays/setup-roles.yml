@@ -1,0 +1,16 @@
+---
+- name: setup roles
+  hosts: all
+  tasks:
+    - name: load roles
+      slurp:
+        src: "{{ ansible_env.HOME }}/.dotfiles/zsh/hosts/{{ hostname }}.roles"
+      register: roles_data
+
+    - set_fact:
+        roles: "{{ roles_data.content | b64decode }}"
+
+    - include_role:
+        name: "{{ item }}"
+      with_items: "{{ roles.split('\n') }}"
+

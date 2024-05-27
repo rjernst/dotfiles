@@ -17,3 +17,11 @@ alias cde='cd ~/code/elastic/elasticsearch'
 alias cde7='cd ~/code/elastic/elasticsearch-7.x'
 alias cde6='cd ~/code/elastic/elasticsearch-6.x'
 alias cdb='cd ~/code/elastic/elasticsearch-benchmarks'
+
+function _reload_ssh_keys() {
+  keys=('id_ed25519' 'github_ed25519')
+  for key in $keys; do
+    ssh-add --apple-use-keychain ~/.ssh/$key
+  done
+}
+alias reload-ssh-keys='_reload_ssh_keys'

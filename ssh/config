@@ -5,6 +5,5 @@ TCPKeepAlive yes
 ServerAliveInterval 30
 ServerAliveCountMax 5
 ControlPath ~/.ssh/control-%h-%p-%r
-UseKeychain yes
 
 Include ~/.ssh/host_config

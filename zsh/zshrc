@@ -189,6 +189,10 @@ if [[ $OSTYPE == darwin* ]]; then
 
 
 fi
+function _reload_roles() {
+  echo "Loading roles in $DOTFILES/zsh/roles/prefs"
+}
+alias reload-roles='_reload_roles'
 
 PATH=$HOME/bin:$PATH
 
