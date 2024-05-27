@@ -34,6 +34,9 @@ for ZSH_PLUGIN in $DOTFILES/zsh/plugins/*; do
   setup_link "zsh/plugins/$NAME"                ".zsh/plugins/$NAME"
 done
 zsh_roles=$DOTFILES/zsh/hosts/$(hostname).roles
+if [ ! -f $zsh_roles ]; then
+  zsh_roles=$HOME/.zshroles
+fi
 if [ -f $zsh_roles ]; then
   while read role; do
     link_role $role
