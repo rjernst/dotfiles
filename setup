@@ -3,13 +3,14 @@
 DOTFILES=$HOME/.dotfiles
 
 setup_link() {
-  SOURCE=$DOTFILES/$1
-  DEST=$HOME/$2
-  if [ -L "$DEST" ]; then
-    rm -f $DEST
+  src=$DOTFILES/$1
+  dst=$HOME/$2
+  if [ -f "$dst" ]; then
+    ln_opts=-f
+    echo "$src exists, overwriting"
   fi 
-  echo "$SOURCE -> $DEST"
-  ln -s $SOURCE $DEST
+  echo "$src -> $dst"
+  ln $ln_opts -s $src $dst
 }
 
 link_role() {
@@ -46,6 +47,10 @@ fi
 setup_link "tmux/conf"                          ".tmux.conf"
 mkdir -p $HOME/.ssh
 setup_link "ssh/config"                         ".ssh/config"
+ssh_host_config=$DOTFILES/ssh/host_configs/$(hostname)
+if [ -f $ssh_host_config ]; then
+  setup_link "$ssh_host_config"                 ".ssh/host_config"
+fi
 
 mkdir -p $HOME/.vim
 for VIMFILE in $DOTFILES/vim/*; do

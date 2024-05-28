@@ -21,7 +21,7 @@ alias cdb='cd ~/code/elastic/elasticsearch-benchmarks'
 
 function _reload_ssh_keys() {
   if [[ $(uname) == "Darwin" ]]; then
-    SSH_ADD_OPTIONS=--apple-use-keychain
+    SSH_ADD_OPTIONS=--apple-use-keychain --apple-load-keychain
   fi
   keys=('id_ed25519' 'github_ed25519')
   for key in $keys; do
