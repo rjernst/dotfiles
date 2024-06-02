@@ -1,6 +1,0 @@
----
-#- name: load macos prefs
-#  shell: /bin/zsh -i -c "reload-prefs"
-
-- name: load homebrew packages
-  shell: /bin/zsh -i -c "reload-brewfile"

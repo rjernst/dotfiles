@@ -1,3 +1,0 @@
-#!/usr/bin/env zsh
-
-git worktree add --track -b $1 $HOME/code/elastic/elasticsearch-$1 upstream/$1

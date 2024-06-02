@@ -125,14 +125,14 @@ zinit wait lucid for \
 # where gradle looks for gradle.properties
 export GRADLE_USER_HOME=$HOME/.gradle
 # helper for running gradlew from any dir
-alias gw='$DOTFILES/bin/gradlew.sh'
+alias gw='$DOTFILES/scripts/gradlew.sh'
 
 #----------------------------------------------------------------------------
 #                                  python
 #----------------------------------------------------------------------------
 alias py3='python3'
 
-for plugin in $ZDOTDIR/plugins/*.zsh; do
+for plugin in $ZDOTDIR/plugins/*.zsh(N); do
   source $plugin
 done
 
@@ -146,13 +146,7 @@ alias rm='rm -i'       # always ask before removing a file
 alias mv='mv -i'       # always ask before moving a file onto another file
 alias cp='cp -i'       # always ask before copying a file onto another file
 alias grep='grep --color=auto'
-alias vm='vagrant'
-alias ap='ansible-playbook'
 alias d='docker'
-alias yubikey-enable='ykman config usb --enable otp'
-alias yubikey-disable='ykman config usb --disable otp'
-# re-initialize gpg with current yubikey
-alias yubikey-reload='gpg-connect-agent "scd serialno" "learn --force" /bye'
 
 #----------------------------------------------------------------------------
 #                             dotfiles management
@@ -160,14 +154,6 @@ alias yubikey-reload='gpg-connect-agent "scd serialno" "learn --force" /bye'
 alias reload-config='echo "Reloading $HOME/.zshrc"; source $HOME/.zshrc'
 alias cdd='cd $DOTFILES'
 if [[ $OSTYPE == darwin* ]]; then
-  function _reload_prefs() {
-    echo "Running scripts in $DOTFILES/macos/prefs"
-    for file in $DOTFILES/macos/prefs/*.sh; do
-      echo "$(basename $file)"
-      zsh $file
-    done
-  }
-  alias reload-prefs='_reload_prefs'
 
   function _reload_brewfile() {
     echo "Updating homebrew bundles from $HOME/.Brewfile"
@@ -186,13 +172,17 @@ if [[ $OSTYPE == darwin* ]]; then
     arch -x86_64 /bin/bash -c "/usr/local/bin/brew $@"
   }
   alias brew-x86='_brew_x86'
-
-
 fi
-function _reload_roles() {
-  echo "Loading roles in $DOTFILES/zsh/roles/prefs"
+function _reload_ssh_keys() {
+  if [[ $(uname) == "Darwin" ]]; then
+    SSH_ADD_OPTIONS="--apple-use-keychain"
+  fi
+  keys=('id_ed25519' 'github_ed25519')
+  for key in $keys; do
+    ssh-add $SSH_ADD_OPTIONS ~/.ssh/$key
+  done
 }
-alias reload-roles='_reload_roles'
+alias reload-ssh-keys='_reload_ssh_keys'
 
 PATH=$HOME/bin:$PATH
 

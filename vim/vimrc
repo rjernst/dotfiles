@@ -1,6 +1,24 @@
 
 set nocompatible
 
+""" basic settings
+set ts=2
+set shiftwidth=2
+set expandtab
+set backspace=indent,eol,start
+
+""" use jk as escape
+nnoremap k gk
+nnoremap j gj
+nnoremap gk k
+nnoremap gj j
+map! jk <ESC> 
+
+
+"""set autoindent
+set number
+set hlsearch
+
 """ automatically install vim-plug
 if empty(glob('~/.vim/autoload/plug.vim'))
   silent !curl -fLo ~/.vim/autoload/plug.vim --create-dirs
@@ -24,13 +42,6 @@ call plug#end()
 
 """ change viminfo location
 set viminfo+=n~/.vim/viminfo
-
-""" use jk as escape
-nnoremap k gk
-nnoremap j gj
-nnoremap gk k
-nnoremap gj j
-map! jk <ESC> 
 
 """ configure lightline statusbar
 set laststatus=2
@@ -56,13 +67,3 @@ map <C-o> :NERDTreeToggle<CR>
 " close if nerdtree is only buffer left
 autocmd bufenter * if (winnr("$") == 1 && exists("b:NERDTree") && b:NERDTree.isTabTree()) | q | endif
 
-
-""" basic settings
-set ts=2
-set shiftwidth=2
-set expandtab
-set backspace=indent,eol,start
-
-"""set autoindent
-set number
-set hlsearch

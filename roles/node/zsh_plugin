@@ -1,0 +1,6 @@
+
+export NVM_DIR=~/.nvm
+
+mkdir -p $NVM_DIR
+
+source $(brew --prefix nvm)/nvm.sh

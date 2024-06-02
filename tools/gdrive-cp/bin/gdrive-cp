@@ -1,6 +1,0 @@
-#!/usr/bin/env zsh
-
-cd $(dirname $(readlink ${0:a}))/..
-# hack for M1...why doesn't hazel run with my user?
-PATH=/opt/homebrew/bin:$PATH
-pipenv run python3 ./gdrive-copy.py $@

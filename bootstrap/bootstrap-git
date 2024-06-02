@@ -1,0 +1,28 @@
+#!/usr/bin/env zsh
+
+echo "Setting up git"
+git_userconfig=~/.git/user.config
+ssh_allowed_signers=~/.ssh/allowed_signers
+if [ ! -f $git_userconfig ]; then
+  echo "---> generating $git_userconfig"
+  NAME="Ryan Ernst"
+  if [ "$USER" != "rjernst" ]; then
+    read -q "NAME?Enter full name for git commits:"
+  fi
+  email=$(cat ~/.ssh/github_ed25519.pub | cut -f 3 -d ' ')
+  cat << EOF > $git_userconfig
+[user]
+    name = $NAME
+    email = $email
+    signingkey = $HOME/.ssh/github_ed25519.pub
+[gpg "ssh"]
+  allowedSignersFile = $ssh_allowed_signers
+EOF
+fi
+if [ ! -f $ssh_allowed_signers ]; then
+  keyfile=$(cat ~/.ssh/id_ed25519.pub)
+  email=$(echo $keyfile | cut -f 3 -d ' ')
+  key=$(echo $keyfile | cut -f 1,2 -d ' ')
+  echo "---> generating $ssh_allowed_signers"
+  echo "$email $key" > $ssh_allowed_signers
+fi

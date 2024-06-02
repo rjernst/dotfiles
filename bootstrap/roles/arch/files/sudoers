@@ -1,9 +1,0 @@
-## sudo for root is a noop
-root ALL=(ALL) ALL
-
-## wheel can sudo, but with a password!
-%wheel ALL=(ALL) ALL
-
-## Read drop-in files from /etc/sudoers.d
-## (the '#' here does not indicate a comment)
-#includedir /etc/sudoers.d

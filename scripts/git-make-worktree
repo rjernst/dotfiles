@@ -1,0 +1,20 @@
+#!/usr/bin/env zsh
+
+if [ "$#" -ne 2 ]; then
+  echo "usage: git make-worktree BRANCH PATH"
+  exit 1
+fi
+
+branch_exists=$(git ls-remote --exit-code --heads upstream refs/heads/$1)
+if [ "$branch_exists" -ne 0 ]; then
+  echo "remote branch upstream/$1 does not exist"
+  exit 2
+fi
+
+if [ -f $2 ]; then
+  echo "directory already exists: $2"
+  exit 3
+fi
+
+
+git worktree add --track -b $1 $2 upstream/$1
