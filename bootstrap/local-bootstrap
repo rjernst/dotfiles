@@ -4,7 +4,7 @@
 script_path="${0:A:h}"
 
 run_script() {
-  $script_path/$1
+  source $script_path/$1
 }
 
 run_script bootstrap-ssh-keys

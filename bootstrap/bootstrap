@@ -76,6 +76,6 @@ install_dependencies
 
 clone_dotfiles
 
-echo "---> running bootstrap playbook" 
-ansible-playbook -vv $ANSIBLE_ROOT/plays/bootstrap.yml $EXTRA_VARS
+echo "---> running local bootstrap" 
+source $DOTFILES/bootstrap/local-bootstrap
 
