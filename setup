@@ -19,7 +19,7 @@ setup_link() {
 link_role() {
   echo "Adding role $1"
   role_dir=$DOTFILES/roles/$1
-  if [ ! -f $role_dir ]; then
+  if [ ! -d $role_dir ]; then
     echo "ERROR: No role dir at $role_dir"
     return
   fi
@@ -27,7 +27,10 @@ link_role() {
   if [ -f $setup_file ]; then
     source $setup_file
   fi
-  setup_link "$role_dir/zsh_plugin"             ".zsh/plugins/$1.zsh"
+  zsh_plugin_file="$role_dir/zsh_plugin"
+  if [ -f $zsh_plugin_file ]; then
+    setup_link $zsh_plugin_file                 ".zsh/plugins/$1.zsh"
+  fi
 }
 
 mkdir -p $HOME/.gradle

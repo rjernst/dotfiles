@@ -183,6 +183,7 @@ function _reload_ssh_keys() {
   done
 }
 alias reload-ssh-keys='_reload_ssh_keys'
+alias reload-dotfiles='$DOTFILES/setup'
 
 PATH=$HOME/bin:$PATH
 

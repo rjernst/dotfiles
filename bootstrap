@@ -1,7 +1,4 @@
-#!/usr/bin/env bash
-
-set -e
-set -x
+#!/usr/bin/env zsh
 
 GITHUB_USERNAME=${GITHUB_USERNAME:-rjernst}
 DOTFILES=$HOME/.dotfiles
@@ -11,7 +8,7 @@ bootstrap_macos() {
     echo "---> installing homebrew"
     /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
   }
-  if [ $ARCH == "arm64" ]; then
+  if [[ "$ARCH" == "arm64" ]]; then
     # homebrew on arm it installed to /opt/homebrew
     export PATH=/opt/homebrew/bin:$PATH
   fi
@@ -34,8 +31,8 @@ bootstrap_unknown() {
   }
 }
 
-get_platform() {
-  if [ $(uname) == "Darwin" ]; then
+identify_platform() {
+  if [[ "$(uname)" == "Darwin" ]]; then
     echo "macos"
   else
     if [ -f /etc/arch-release ]; then
@@ -77,8 +74,8 @@ check_ssh_keys() {
     echo "---> setting permissions on $ssh_dir"
     chmod 700 $ssh_dir
   fi
-  ensure_key_exists id_ed25519
-  ensure_key_exists github_ed25519
+  ensure_ssh_key_exists id_ed25519
+  ensure_ssh_key_exists github_ed25519
 }
 
 clone_dotfiles() {
@@ -102,7 +99,7 @@ clone_dotfiles() {
   git clone $dotfiles_url $DOTFILES
 }
 
-PLATFORM=$(get_platform)
+PLATFORM=$(identify_platform)
 echo "---> detected platform: $PLATFORM"
 ARCH=$(uname -m)
 echo "---> detected architecture: $ARCH"
@@ -113,4 +110,4 @@ install_dependencies
 check_ssh_keys
 clone_dotfiles
 
-source $DOTFILES/setup
+$DOTFILES/setup
