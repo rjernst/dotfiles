@@ -7,3 +7,4 @@ ServerAliveCountMax 5
 ControlPath ~/.ssh/control-%h-%p-%r
 
 Include ~/.ssh/host_config
+Include ~/.ssh/local_config
