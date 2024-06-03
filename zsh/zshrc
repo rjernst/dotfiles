@@ -183,7 +183,12 @@ function _reload_ssh_keys() {
   done
 }
 alias reload-ssh-keys='_reload_ssh_keys'
-alias reload-dotfiles='$DOTFILES/setup'
+function _refresh_dotfiles() {
+  git -C $DOTFILES pull
+  $DOTFILES/setup
+  reload-config
+}
+alias refresh-dotfiles=_refresh_dotfiles
 
 PATH=$HOME/bin:$PATH
 
