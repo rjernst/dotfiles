@@ -1,0 +1,8 @@
+#!/usr/bin/env zsh
+
+if command -v gcloud &> /dev/null; then
+  echo "---> installing gcloud auth plugin"
+  gcloud -q components install gke-gcloud-auth-plugin
+else
+  >&2 echo "WARNING: gcloud missing, cannot install auth plugin for serverless tools authentication"
+fi

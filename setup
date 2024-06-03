@@ -3,32 +3,32 @@
 DOTFILES=$HOME/.dotfiles
 
 setup_link() {
-  src=$DOTFILES/$1
-  dst=$HOME/$2
-  echo "$src -> $dst"
+  src="$DOTFILES/$1"
+  dst="$HOME/$2"
   if [ "$src" -ef "$dst" ]; then
     return
   fi
-  if [ -f "$dst" ]; then
-    ln_opts=-f
-    >&2 echo "WARNING: $src exists, overwriting"
+  if [[ -f "$dst" || -h "$dst" ]]; then
+    >&2 echo "WARNING: $dst exists, overwriting"
+    rm -f "$dst"
   fi 
-  ln $ln_opts -s $src $dst
+  echo "$src -> $dst"
+  ln -s $src $dst
 }
 
 link_role() {
   echo "Adding role $1"
-  role_dir=$DOTFILES/roles/$1
-  if [ ! -d $role_dir ]; then
+  role_dir=roles/$1
+  if [ ! -d $DOTFILES/$role_dir ]; then
     echo "ERROR: No role dir at $role_dir"
     return
   fi
-  setup_file=$role_dir/setup
+  setup_file=$DOTFILES/$role_dir/setup
   if [ -f $setup_file ]; then
     source $setup_file
   fi
   zsh_plugin_file="$role_dir/zsh_plugin"
-  if [ -f $zsh_plugin_file ]; then
+  if [ -f $DOTFILES/$zsh_plugin_file ]; then
     setup_link $zsh_plugin_file                 ".zsh/plugins/$1.zsh"
   fi
 }
@@ -40,6 +40,8 @@ setup_link "zsh/zshrc"                          ".zshrc"
 mkdir -p $HOME/.zsh
 mkdir -p $HOME/.zsh/var/
 mkdir -p $HOME/.zsh/plugins/
+# clear any existing plugin links
+rm -f $HOME/.zsh/plugins/*
 setup_link "zsh/p10k.zsh"                       ".zsh/p10k.zsh"
 for ZSH_PLUGIN in $DOTFILES/zsh/plugins/*; do
   NAME=$(basename $ZSH_PLUGIN)
@@ -57,8 +59,8 @@ fi
 
 mkdir -p $HOME/.ssh
 setup_link "ssh/config"                         ".ssh/config"
-ssh_host_config=$DOTFILES/hosts/$(hostname)/ssh_host_config
-if [ -f $ssh_host_config ]; then
+ssh_host_config=hosts/$(hostname)/ssh_host_config
+if [ -f $DOTFILES/$ssh_host_config ]; then
   setup_link "$ssh_host_config"                 ".ssh/host_config"
 fi
 

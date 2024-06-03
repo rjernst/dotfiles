@@ -2,7 +2,7 @@
 
 mkdir -p $HOME/.jenv/versions
 
-source ${0:a:h}/java.zsh
+source ${0:a:h}/zsh_plugin
 
 jenv enable-plugin gradle
 jenv enable-plugin export
