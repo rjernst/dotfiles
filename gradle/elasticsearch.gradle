@@ -1,13 +1,18 @@
 import org.gradle.util.GradleVersion
 
-def configureBuildScans = { target ->
+def configureGeBuildScans = { target ->
     target.buildScan.publishAlways() // comment this out if you don't want to opt-in to publishing scans
     target.buildScan.server = 'https://gradle-enterprise.elastic.co'
 }
 
+def configureDevelocityBuildScans = { target ->
+    target.buildScan.publishing.onlyIf { true } // comment this out if you don't want to opt-in to publishing scans
+    target.server = 'https://gradle-enterprise.elastic.co'
+}
+
 rootProject {
     project.pluginManager.withPlugin('com.gradle.build-scan') {
-        configureBuildScans(rootProject)
+        configureGeBuildScans(rootProject)
     } 
 }
 
@@ -26,9 +31,19 @@ gradle.settingsEvaluated { settings ->
     }*/
     
     // Starting with Gradle 6.0 the build scan plugin is applied in settings.gradle
+    // With version 3.7 the plugin was rebranded as develocity plugin. We deal with
+    // both versions here to make sure working on older branches or other non elasticsearch
+    // projects that use older build scan plugin versions do not break.
     if (GradleVersion.current().compareTo(GradleVersion.version('6.0.0')) >= 0) {
+      boolean devCityUsed = false
+      settings.pluginManager.withPlugin('com.gradle.develocity') {
+        devCityUsed = true
+        configureDevelocityBuildScans(settings.develocity)
+      }
+      if(devCityUsed == false) {
         settings.pluginManager.withPlugin('com.gradle.enterprise') {
-            configureBuildScans(settings.gradleEnterprise)
+          configureGeBuildScans(settings.gradleEnterprise)
         }
+      }
     }
 }
