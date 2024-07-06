@@ -9,7 +9,9 @@ _pipenv_activate() {
   export PYTHONDONTWRITEBYTECODE=1
   export PIP_DISABLE_PIP_VERSION_CHECK=1
   local python_path=$(pipenv run env | grep PIP_PYTHON_PATH)
-  export $python_path
+  if [ -n "$python_path" ]; then
+    export $python_path
+  fi
 
   export OLD_PATH=$PATH
   PATH=$VIRTUAL_ENV/bin:$PATH
