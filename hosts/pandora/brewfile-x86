@@ -1,8 +1,0 @@
-
-# java versions
-cask 'adoptopenjdk11'
-cask 'adoptopenjdk15'
-
-# yubikey
-cask 'opensc'
-

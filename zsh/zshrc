@@ -6,6 +6,7 @@ export EDITOR=/usr/bin/vim
 if [[ $OSTYPE == darwin* ]]; then
   export PATH=/opt/homebrew/bin:$PATH
 fi
+export PATH=~/bin:$PATH
 
 #----------------------------------------------------------------------------
 #                      powerlevel10k instant prompt

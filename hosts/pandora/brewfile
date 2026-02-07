@@ -8,6 +8,7 @@ cask 'hazel'
 cask 'dropbox'
 cask 'keyboard-maestro'
 cask 'bartender'
+cask 'tailscale'
 
 # package management
 tap 'homebrew/cask-versions'
@@ -47,17 +48,13 @@ brew 'tree'
 cask 'jetbrains-toolbox'
 brew 'awscli'
 cask 'docker'
+cask 'claude-code'
 
 # java versions
 brew 'jenv'
 # NOTE java versions in x86 brewfile
 
-# yubikey
-# TODO: m1 fails to install
-# cask 'opensc'
-brew 'ykman'
-
 cask 'tor-browser'
-
 cask 'google-chrome' # for youtube tv
+brew 'yt-dlp'
 
