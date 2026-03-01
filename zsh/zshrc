@@ -168,8 +168,24 @@ function _reload_ssh_keys() {
 }
 alias reload-ssh-keys='_reload_ssh_keys'
 function _refresh_dotfiles() {
-  git -C $DOTFILES pull
-  $DOTFILES/setup
+  echo "Pulling latest dotfiles..."
+  if ! git -C "$DOTFILES" pull --ff-only; then
+    echo "Pull failed. Your local branch may have diverged."
+    echo "  cd $DOTFILES && git status"
+    return 1
+  fi
+
+  echo "Running setup..."
+  if ! "$DOTFILES/setup"; then
+    echo ""
+    echo "Setup had errors (see above). Your shell should still work."
+    echo "Fix the issue and run 'refresh-dotfiles' again."
+    return 1
+  fi
+
+  # Clear any stale update notification
+  rm -f "$ZDOTDIR/var/dotfiles-behind-count"
+
   reload-config
 }
 alias refresh-dotfiles=_refresh_dotfiles

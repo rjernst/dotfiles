@@ -1,4 +1,21 @@
 #!/usr/bin/env zsh
+# Pull and re-run setup for dotfiles. Suitable for automated/cron use.
+# Uses --ff-only to avoid creating merge commits — if the local branch
+# has diverged the pull will fail safely rather than creating a mess.
 
-git -C $DOTFILES pull --ff-only
-$DOTFILES/setup
+DOTFILES=${DOTFILES:-$HOME/.dotfiles}
+
+if ! git -C "$DOTFILES" pull --ff-only; then
+  echo "ERROR: pull failed (local branch may have diverged)" >&2
+  exit 1
+fi
+
+if ! "$DOTFILES/setup"; then
+  echo "ERROR: setup failed (see output above)" >&2
+  exit 1
+fi
+
+# Clear stale update notification
+rm -f "$HOME/.zsh/var/dotfiles-behind-count" 2>/dev/null
+
+echo "Dotfiles updated successfully."

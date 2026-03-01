@@ -26,7 +26,8 @@ link_role() {
   fi
   setup_file=$DOTFILES/$role_dir/setup
   if [ -f $setup_file ]; then
-    source $setup_file
+    # Run role setup in a subshell so failures don't abort the entire setup
+    (source $setup_file) || >&2 echo "WARNING: setup for role '$1' failed (exit $?), continuing..."
   fi
   zsh_plugin_file="$role_dir/zsh_plugin"
   if [ -f $DOTFILES/$zsh_plugin_file ]; then
