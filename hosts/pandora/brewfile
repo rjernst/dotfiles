@@ -38,6 +38,7 @@ cask 'vlc'
 
 # development
 cask 'iterm2'
+brew 'fnm'
 cask 'dash'
 mas 'Xcode', id: 497799835
 brew 'jq'

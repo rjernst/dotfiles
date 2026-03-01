@@ -58,7 +58,7 @@ cask 'memoryanalyzer'
 cask 'aviatrix-vpn-client'
 
 # kibana dev
-brew 'nvm'
+brew 'fnm'
 brew 'yarn'
 
 # java versions

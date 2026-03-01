@@ -2,9 +2,13 @@
 # install jenv
 export PATH="$HOME/.jenv/bin:$PATH"
 _init_jenv() {
-  eval "$(jenv init -)"
+  unfunction jenv
+  eval "$(command jenv init -)"
 }
-_init_jenv
+jenv() {
+  _init_jenv
+  jenv "$@"
+}
 
 # shortcut to current java home
 alias jdk='readlink $(jenv javahome)'

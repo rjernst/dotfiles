@@ -52,9 +52,9 @@ zinit light romkatv/powerlevel10k
 #----------------------------------------------------------------------------
 # turn on colors in both output, and completions
 export CLICOLOR=1
-zinit ice atclone"dircolors -b LS_COLORS > clrs.zsh" \
-    atpull'%atclone' pick"clrs.zsh" nocompile'!' \
-    atload'zstyle ":completion:*" list-colors “${(s.:.)LS_COLORS}”'
+zinit ice wait lucid atclone”dircolors -b LS_COLORS > clrs.zsh” \
+    atpull'%atclone' pick”clrs.zsh” nocompile'!' \
+    atload'zstyle “:completion:*” list-colors “${(s.:.)LS_COLORS}”'
 zinit light trapd00r/LS_COLORS
 
 #----------------------------------------------------------------------------
@@ -85,7 +85,7 @@ SAVEHIST=10000
 setopt hist_expire_dups_first
 setopt hist_ignore_space
 
-# share history across terminals
+# append history immediately, but don't share across terminals
 setopt inc_append_history
 
 # don't pollute history
@@ -191,13 +191,7 @@ function _refresh_dotfiles() {
 }
 alias refresh-dotfiles=_refresh_dotfiles
 
-PATH=$HOME/bin:$PATH
-
 # vi: set tabstop=2 shiftwidth=2 filetype=sh expandtab:
-
-export NVM_DIR="$HOME/.nvm"
-[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"  # This loads nvm
-[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"  # This loads nvm bash_completion
 
 if [ -f $HOME/.zshrc.local ]; then
   source $HOME/.zshrc.local

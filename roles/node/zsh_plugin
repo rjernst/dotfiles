@@ -1,6 +1,2 @@
 
-export NVM_DIR=~/.nvm
-
-mkdir -p $NVM_DIR
-
-source $(brew --prefix nvm)/nvm.sh
+eval "$(fnm env --use-on-cd)"
