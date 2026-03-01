@@ -3,7 +3,7 @@ A set of developer dotfiles for use on any machine
 ## Installation
 Run the following command to bootstrap a system with these dotfiles and configuration:
 ```
-zsh <(curl -s https://raw.githubusercontent.com/rjernst/dotfiles/master/bootstrap)
+zsh <(curl -s https://raw.githubusercontent.com/rjernst/dotfiles/main/bootstrap)
 ```
 
 ## Updates
