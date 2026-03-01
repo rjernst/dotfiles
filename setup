@@ -70,6 +70,9 @@ for VIMFILE in $DOTFILES/vim/*; do
   setup_link "vim/$NAME"                        ".vim/$NAME"
 done
 
+mkdir -p $HOME/.claude
+setup_link "claude/CLAUDE.md"                     ".claude/CLAUDE.md"
+
 mkdir -p $HOME/.git
 setup_link "git/config"                         ".gitconfig"
 setup_link "git/ignore"                         ".git/ignore"
