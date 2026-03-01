@@ -20,11 +20,8 @@ tap 'homebrew/cask-fonts'
 cask 'font-meslo-for-powerline'
 
 # productivity
-cask 'omnifocus'
 mas 'Drafts', id: 1435957248
 cask 'fantastical'
-cask 'devonthink'
-cask 'moom'
 
 # apps
 cask 'firefox'
@@ -48,7 +45,9 @@ brew 'tree'
 cask 'jetbrains-toolbox'
 brew 'awscli'
 cask 'docker'
+cask 'claude'
 cask 'claude-code'
+brew 'gh'
 
 # java versions
 brew 'jenv'
