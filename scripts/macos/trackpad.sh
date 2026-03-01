@@ -1,3 +1,4 @@
+#!/usr/bin/env zsh
 
 # inverted scroll direction
 defaults write -g com.apple.swipescrolldirection -bool FALSE

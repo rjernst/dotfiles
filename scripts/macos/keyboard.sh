@@ -1,3 +1,4 @@
+#!/usr/bin/env zsh
 
 # fast movement
 defaults write -g KeyRepeat -int 2

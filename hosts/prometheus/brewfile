@@ -65,4 +65,6 @@ brew 'yarn'
 brew 'jenv'
 brew 'kubectl'
 brew 'teleport'
+brew 'starship'
+brew 'gh'
 

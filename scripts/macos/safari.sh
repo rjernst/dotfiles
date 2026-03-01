@@ -1,3 +1,5 @@
+#!/usr/bin/env zsh
+
 osascript <<EOD
 tell application "Safari"
   activate

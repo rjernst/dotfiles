@@ -1,4 +1,5 @@
 #!/usr/bin/env zsh
+set -e
 
 DOTFILES=$HOME/.dotfiles
 
@@ -13,7 +14,7 @@ setup_link() {
     rm -f "$dst"
   fi 
   echo "$src -> $dst"
-  ln -s $src $dst
+  ln -s "$src" "$dst"
 }
 
 link_role() {
@@ -42,7 +43,6 @@ mkdir -p $HOME/.zsh/var/
 mkdir -p $HOME/.zsh/plugins/
 # clear any existing plugin links
 rm -f $HOME/.zsh/plugins/*
-setup_link "zsh/p10k.zsh"                       ".zsh/p10k.zsh"
 for ZSH_PLUGIN in $DOTFILES/zsh/plugins/*; do
   NAME=$(basename $ZSH_PLUGIN)
   setup_link "zsh/plugins/$NAME"                ".zsh/plugins/$NAME"
@@ -96,8 +96,8 @@ if [[ $OSTYPE == darwin* ]]; then
   fi
 fi
 
-# Compile large zsh files for faster loading
-zcompile $HOME/.zsh/p10k.zsh 2>/dev/null
+mkdir -p $HOME/.config
+setup_link "starship/starship.toml"              ".config/starship.toml"
 
 echo ""
 echo "Config files are setup."

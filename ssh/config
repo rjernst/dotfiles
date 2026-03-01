@@ -1,5 +1,4 @@
-StrictHostKeyChecking no
-CheckHostIP no
+StrictHostKeyChecking accept-new
 GatewayPorts yes
 TCPKeepAlive yes
 ServerAliveInterval 30

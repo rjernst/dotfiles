@@ -1,0 +1,70 @@
+"$schema" = 'https://starship.rs/config-schema.json'
+
+format = """\
+[╭─](blue)$username$hostname$directory$fill$git_branch$git_status$java$kubernetes$gcloud$cmd_duration$jobs$status$time
+[╰─](blue) $character"""
+
+[fill]
+symbol = '─'
+style = 'blue'
+
+[character]
+success_symbol = '[❯](bold green)'
+error_symbol = '[❯](bold red)'
+
+[username]
+show_always = false
+format = "[\ue0b6](fg:240)[ $user](bg:240 yellow)"
+
+[hostname]
+ssh_only = true
+format = "[@$hostname ](bg:240 yellow)[\ue0b4](fg:240)"
+ssh_symbol = ''
+
+[directory]
+truncation_length = 4
+truncation_symbol = '…/'
+format = "[\ue0b6](fg:240)[ $path ](bg:240 bold cyan)[\ue0b4](fg:240)"
+
+[git_branch]
+format = "[\ue0b6](fg:240)[ $symbol$branch(:$remote_branch)](bg:240 bold purple)"
+symbol = "\ue0a0 "
+
+[git_status]
+format = "([ $all_status$ahead_behind](bg:240 bold purple))[ ](bg:240)[\ue0b4](fg:240)[─](blue)"
+ahead = '⇡${count}'
+behind = '⇣${count}'
+diverged = '⇡${ahead_count}⇣${behind_count}'
+conflicted = '~${count}'
+untracked = '?${count}'
+stashed = '*${count}'
+modified = '!${count}'
+staged = '+${count}'
+deleted = '✘${count}'
+
+[java]
+format = "[\ue0b6](fg:240)[ ☕ $version ](bg:240 red)[\ue0b4](fg:240)[─](blue)"
+
+[kubernetes]
+disabled = false
+format = "[\ue0b6](fg:240)[ ⎈ $context( \\($namespace\\)) ](bg:240 bold blue)[\ue0b4](fg:240)[─](blue)"
+detect_env_vars = ['KUBECONFIG']
+
+[gcloud]
+format = "[\ue0b6](fg:240)[ ☁️ $project ](bg:240 bold blue)[\ue0b4](fg:240)[─](blue)"
+
+[cmd_duration]
+format = "[\ue0b6](fg:240)[ took $duration ](bg:240 bold yellow)[\ue0b4](fg:240)[─](blue)"
+min_time = 2_000
+
+[jobs]
+format = "[\ue0b6](fg:240)[ ✦ $number ](bg:240 bold blue)[\ue0b4](fg:240)[─](blue)"
+
+[status]
+disabled = false
+format = "[\ue0b6](fg:240)[ ✘ $status ](bg:240 bold red)[\ue0b4](fg:240)[─](blue)"
+
+[time]
+disabled = false
+format = "[\ue0b6](fg:240)[ at $time ](bg:240 dimmed white)[\ue0b4](fg:240)"
+time_format = '%H:%M:%S'

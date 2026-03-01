@@ -36,7 +36,6 @@ call plug#begin('~/.vim/plugged')
 
 Plug 'itchyny/lightline.vim'
 Plug 'preservim/nerdtree'
-Plug 'tfnico/vim-gradle'
 
 call plug#end()
 

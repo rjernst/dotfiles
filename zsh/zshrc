@@ -9,16 +9,6 @@ fi
 export PATH=~/bin:$PATH
 
 #----------------------------------------------------------------------------
-#                      powerlevel10k instant prompt
-#----------------------------------------------------------------------------
-# Enable Powerlevel10k instant prompt. Should stay close to the top of ~/.zshrc.
-# Initialization code that may require console input (password prompts, [y/n]
-# confirmations, etc.) must go above this block; everything else may go below.
-if [[ -r "${XDG_CACHE_HOME:-$HOME/.cache}/p10k-instant-prompt-${(%):-%n}.zsh" ]]; then
-  source "${XDG_CACHE_HOME:-$HOME/.cache}/p10k-instant-prompt-${(%):-%n}.zsh"
-fi
-
-#----------------------------------------------------------------------------
 #                                 zinit
 #----------------------------------------------------------------------------
 ### Added by Zinit's installer
@@ -39,13 +29,6 @@ autoload -Uz _zinit
 (( ${+_comps} )) && _comps[zinit]=_zinit
 ### End of Zinit's installer chunk
 
-
-#----------------------------------------------------------------------------
-#                              powerlevel10k
-#----------------------------------------------------------------------------
-source $ZDOTDIR/p10k.zsh
-zinit ice depth=1
-zinit light romkatv/powerlevel10k
 
 #----------------------------------------------------------------------------
 #                                 colors
@@ -190,6 +173,23 @@ function _refresh_dotfiles() {
   reload-config
 }
 alias refresh-dotfiles=_refresh_dotfiles
+
+#----------------------------------------------------------------------------
+#                               starship prompt
+#----------------------------------------------------------------------------
+eval "$(starship init zsh)"
+
+# Transient prompt: collapse previous prompts to just ❯
+__starship_saved_prompt="$PROMPT"
+__starship_saved_rprompt="$RPROMPT"
+zle-line-finish() {
+  PROMPT='%(?.%F{green}.%F{red})❯%f '
+  RPROMPT=''
+  zle reset-prompt
+  PROMPT="$__starship_saved_prompt"
+  RPROMPT="$__starship_saved_rprompt"
+}
+zle -N zle-line-finish
 
 # vi: set tabstop=2 shiftwidth=2 filetype=sh expandtab:
 

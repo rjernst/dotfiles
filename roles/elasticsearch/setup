@@ -1,3 +1,4 @@
+#!/usr/bin/env zsh
 
 mkdir -p $HOME/.gradle/init.d
 setup_link "gradle/elasticsearch.gradle"  ".gradle/init.d/elasticsearch.gradle"

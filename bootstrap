@@ -1,4 +1,4 @@
-#!/usr/bin/env zsh
+#!/usr/bin/env bash
 
 GITHUB_USERNAME=${GITHUB_USERNAME:-rjernst}
 DOTFILES=$HOME/.dotfiles
@@ -92,7 +92,7 @@ clone_dotfiles() {
       echo "---> SSH authentication failed with github. Add the following ssh key to github:\n"
       cat ~/.ssh/id_ed25519.pub
       echo ""
-      read -s -k "?Press any key when ready to continue"
+      read -s -n 1 -p "Press any key when ready to continue"
     fi
   fi
   echo "---> cloning $dotfiles_url"
