@@ -62,7 +62,7 @@ zinit light trapd00r/LS_COLORS
 #----------------------------------------------------------------------------
 
 zinit wait lucid for \
-  atinit"zicompinit -; zicdreplay" \
+  atinit"zicompinit -; zicdreplay; zcompile -U \$ZDOTDIR/var/zcompdump" \
       zdharma-continuum/fast-syntax-highlighting \
       OMZP::colored-man-pages \
   atload"_zsh_autosuggest_start" \

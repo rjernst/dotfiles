@@ -96,6 +96,9 @@ if [[ $OSTYPE == darwin* ]]; then
   fi
 fi
 
+# Compile large zsh files for faster loading
+zcompile $HOME/.zsh/p10k.zsh 2>/dev/null
+
 echo ""
 echo "Config files are setup."
 echo "Run 'reload-config' to re-source zsh config."

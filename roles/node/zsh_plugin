@@ -1,2 +1,13 @@
 
-eval "$(fnm env --use-on-cd)"
+# Lazy-load fnm: defer the expensive `fnm env` call until first use of node/npm/npx
+export PATH="$HOME/.local/share/fnm:$PATH"
+
+_init_fnm() {
+  unfunction node npm npx corepack 2>/dev/null
+  eval "$(command fnm env --use-on-cd)"
+}
+
+node()     { _init_fnm; node "$@" }
+npm()      { _init_fnm; npm "$@" }
+npx()      { _init_fnm; npx "$@" }
+corepack() { _init_fnm; corepack "$@" }
