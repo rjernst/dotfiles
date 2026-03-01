@@ -99,6 +99,13 @@ fi
 mkdir -p $HOME/.config
 setup_link "starship/starship.toml"              ".config/starship.toml"
 
+mkdir -p $HOME/.config/gh
+setup_link "gh/config.yml"                       ".config/gh/config.yml"
+
+mkdir -p $HOME/.codex/rules
+setup_link "codex/config.toml"                   ".codex/config.toml"
+setup_link "codex/rules/default.rules"           ".codex/rules/default.rules"
+
 echo ""
 echo "Config files are setup."
 echo "Run 'reload-config' to re-source zsh config."

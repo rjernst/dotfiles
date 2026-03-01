@@ -1,0 +1,6 @@
+prefix_rule(pattern=["xcodebuild", "-project", "Lexie.xcodeproj", "-scheme", "Lexie", "-sdk", "iphonesimulator", "-destination", "generic/platform=iOS Simulator", "-derivedDataPath", "/tmp/lexie-dd", "build"], decision="allow")
+prefix_rule(pattern=["git", "commit"], decision="allow")
+prefix_rule(pattern=["git", "add"], decision="allow")
+prefix_rule(pattern=["npm", "install"], decision="allow")
+prefix_rule(pattern=["npm", "test"], decision="allow")
+prefix_rule(pattern=["scripts/test-ios.sh"], decision="allow")

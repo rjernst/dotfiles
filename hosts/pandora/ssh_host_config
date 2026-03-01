@@ -1,0 +1,17 @@
+Host seedbox
+  HostName  apps.plato.box.ca
+  IdentityFile ~/.ssh/seedbox_ed25519
+
+Host kvm
+  HostName bender-kvm
+  User root
+  IdentityFile ~/.ssh/id_ed25519
+
+Host nas
+  Port 2222
+
+Host backup-nas
+  Port 2222
+
+Host gateway
+  User root
