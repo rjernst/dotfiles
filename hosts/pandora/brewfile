@@ -11,12 +11,10 @@ cask 'bartender'
 cask 'tailscale'
 
 # package management
-tap 'homebrew/cask-versions'
 tap 'beeftornado/rmtree'
 brew 'mas'
 #brew 'pipenv'
 
-tap 'homebrew/cask-fonts'
 cask 'font-meslo-lg-nerd-font'
 
 # productivity

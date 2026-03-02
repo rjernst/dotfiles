@@ -89,7 +89,8 @@ clone_dotfiles() {
     echo "---> Checking authentication with github"
     ssh -T git@github.com &> /dev/null
     if [ $? -ne 1 ]; then
-      echo "---> SSH authentication failed with github. Add the following ssh key to github:\n"
+      echo "---> SSH authentication failed with github. Add the following ssh key to github:"
+      echo ""
       cat ~/.ssh/id_ed25519.pub
       echo ""
       read -s -n 1 -p "Press any key when ready to continue"

@@ -35,7 +35,7 @@
   rebase = false
 
 [diff]
-	compactionHeuristic = true
+	indentHeuristic = true
 	rename = copy
 	check = true
 
@@ -66,9 +66,9 @@
 
   # complex aliases
   recommit = "!git commit -eF $(git rev-parse --git-dir)/COMMIT_EDITMSG"
-  review = "!git fetch upstream pull/$1/head:review/$1"
+  review = "!f() { git fetch upstream pull/$1/head:review/$1; }; f"
   add-unmerged = "!f() { git ls-files --unmerged | cut -f2 | sort -u ; }; git add `f`"
-  sync-remotes = "!f() { git co main; git fetch ; git remote prune origin; }; f"
+  sync-remotes = "!f() { git co main; git fetch; git pull --ff-only; git remote prune origin; }; f"
 
   # scripts
   make-worktree = "!zsh ~/.dotfiles/scripts/git-make-worktree"

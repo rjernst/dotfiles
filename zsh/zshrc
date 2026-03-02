@@ -136,7 +136,6 @@ alias d='docker'
 #                             dotfiles management
 #----------------------------------------------------------------------------
 alias reload-config='echo "Reloading $HOME/.zshrc"; source $HOME/.zshrc'
-alias cdd='cd $DOTFILES'
 if [[ $OSTYPE == darwin* ]]; then
 
   function _reload_brewfile() {

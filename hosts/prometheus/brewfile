@@ -1,6 +1,5 @@
 
 # homebrew
-tap 'homebrew/cask-versions'
 tap 'beeftornado/rmtree'
 brew 'mas'
 
