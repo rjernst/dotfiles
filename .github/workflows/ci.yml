@@ -1,0 +1,40 @@
+name: CI
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install BATS
+        run: |
+          git clone --depth 1 --branch v1.11.0 https://github.com/bats-core/bats-core.git /tmp/bats
+          sudo /tmp/bats/install.sh /usr/local
+
+      - name: Install zsh (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y zsh
+
+      - name: Run BATS tests
+        run: bats tests/
+
+      - name: Shellcheck bootstrap
+        run: shellcheck --severity=warning bootstrap
+
+      - name: Zsh syntax check
+        run: |
+          errors=0
+          for f in $(find . -name '*.zsh' -o -name 'zshrc' -o -name 'zsh_plugin' | grep -v '.git/'); do
+            if ! zsh -n "$f" 2>/dev/null; then
+              echo "FAIL: $f"
+              errors=$((errors + 1))
+            fi
+          done
+          exit $errors

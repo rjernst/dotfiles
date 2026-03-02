@@ -84,7 +84,7 @@ clone_dotfiles() {
     return
   fi
   dotfiles_url=https://github.com/rjernst/dotfiles.git
-  if [ "$USER"=="rjernst" ]; then
+  if [ "$USER" == "rjernst" ]; then
     dotfiles_url=git@github.com:rjernst/dotfiles.git
     echo "---> Checking authentication with github"
     ssh -T git@github.com &> /dev/null
@@ -99,15 +99,17 @@ clone_dotfiles() {
   git clone $dotfiles_url $DOTFILES
 }
 
-PLATFORM=$(identify_platform)
-echo "---> detected platform: $PLATFORM"
-ARCH=$(uname -m)
-echo "---> detected architecture: $ARCH"
-EXTRA_VARS="$EXTRA_VARS -e os=$PLATFORM"
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  PLATFORM=$(identify_platform)
+  echo "---> detected platform: $PLATFORM"
+  ARCH=$(uname -m)
+  echo "---> detected architecture: $ARCH"
+  EXTRA_VARS="$EXTRA_VARS -e os=$PLATFORM"
 
-eval bootstrap_$PLATFORM
-install_dependencies
-check_ssh_keys
-clone_dotfiles
+  eval bootstrap_$PLATFORM
+  install_dependencies
+  check_ssh_keys
+  clone_dotfiles
 
-$DOTFILES/setup
+  $DOTFILES/setup
+fi
