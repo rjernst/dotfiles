@@ -42,7 +42,7 @@ function _reload_jenv() {
     done
 
     # user jdks
-    if [ -d $HOME/Library/Java/JavaVirtualMachines]; then
+    if [ -d $HOME/Library/Java/JavaVirtualMachines ]; then
       for jdk in $HOME/Library/Java/JavaVirtualMachines/*; do
         echo "Adding user jdk at $jdk"
         jenv add $jdk/Contents/Home

@@ -40,7 +40,7 @@ The `setup` script reads `hosts/$(hostname)/roles` to determine which roles to a
 | elasticsearch-support  | GCloud auth plugin, Teleport/k8s env switching             |
 | java                   | jenv initialization, JDK scanning/installation helpers     |
 | jdk                    | OpenJDK development shortcut (`cdj`)                       |
-| node                   | NVM initialization from Homebrew                           |
+| node                   | fnm (Fast Node Manager) initialization                     |
 
 ## Directory Structure
 
@@ -62,7 +62,6 @@ git/
   ignore               # Global gitignore
 zsh/
   zshrc                # Main shell config (symlinked to ~/.zshrc)
-  p10k.zsh             # Powerlevel10k prompt config
   plugins/             # Shared zsh plugins (always loaded)
     pipenv.zsh         # Auto-activates pipenv environments on cd
 ssh/
@@ -84,7 +83,7 @@ scripts/
 ## Key Conventions
 
 - **Symlink-based**: All config files live in this repo and are symlinked to `$HOME`. Never edit config files in `$HOME` directly.
-- **Shell**: Zsh with Zinit plugin manager, Powerlevel10k prompt.
+- **Shell**: Zsh with Zinit plugin manager, Starship prompt.
 - **Git signing**: Commits are signed with SSH keys (not GPG). The `git` role sets up `~/.git/user.config` and `~/.ssh/allowed_signers`.
 - **Git aliases**: Single-char shortcuts (`s`=status, `co`=checkout, `ci`=commit, `pr`=push -u origin HEAD, etc.) defined in `git/config`.
 - **Homebrew**: Per-host `brewfile` is symlinked to `~/.Brewfile`. Supports x86 Rosetta packages via `brewfile-x86`.

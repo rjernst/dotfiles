@@ -11,9 +11,7 @@
 # remote.
 
 username=`git config --get github.user`
-echo $username
 repo=`git config --get remote.upstream.url | sed 's/git@github.com://' | sed 's/\.git//'`
-echo $repo
 
 branches=`git branch --no-color | grep -v -E "^\\W*main$|^\\W*\\d+\\.x$|^\\W*\\d+.\\d+$" | sed 's/\*/ /'`
 remotes="origin
@@ -28,7 +26,6 @@ if [ ! -z "$branches" ] ; then
       if [ $all = 'n' ] ; then
         delete=n
         read -p "Delete $branch (y=yes, n=no, a=all)? " prompt
-        echo "all=$all delete=$delete prompt=$prompt"
         if [ "$prompt" = 'a' ] ; then
           delete=y
           all=y
@@ -48,5 +45,3 @@ if [ ! -z "$branches" ] ; then
     fi
   done
 fi
-
-        
