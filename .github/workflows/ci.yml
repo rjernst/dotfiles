@@ -29,13 +29,33 @@ jobs:
         if: runner.os == 'macOS'
         run: brew install shellcheck
 
-      - name: Shellcheck bootstrap
-        run: shellcheck --severity=warning bootstrap
+      - name: Shellcheck scripts
+        run: |
+          errors=0
+          # bootstrap uses /bin/bash
+          if ! shellcheck --severity=warning bootstrap; then
+            errors=$((errors + 1))
+          fi
+          # scripts/ directory (excluding macos/ which are mostly AppleScript)
+          for f in scripts/*; do
+            [ -f "$f" ] || continue
+            if ! shellcheck --shell=bash --severity=warning "$f"; then
+              errors=$((errors + 1))
+            fi
+          done
+          # role install and setup scripts
+          for f in roles/*/install roles/*/setup; do
+            [ -f "$f" ] || continue
+            if ! shellcheck --shell=bash --severity=warning "$f"; then
+              errors=$((errors + 1))
+            fi
+          done
+          exit $errors
 
       - name: Zsh syntax check
         run: |
           errors=0
-          for f in $(find . -name '*.zsh' -o -name 'zshrc' -o -name 'zsh_plugin' | grep -v '.git/'); do
+          for f in $(find . \( -name '*.zsh' -o -name 'zshrc' -o -name 'zsh_plugin' -o -path './roles/*/setup' -o -path './roles/*/install' \) | grep -v '.git/'); do
             if ! zsh -n "$f" 2>/dev/null; then
               echo "FAIL: $f"
               errors=$((errors + 1))

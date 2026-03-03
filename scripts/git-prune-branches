@@ -10,10 +10,10 @@
 # Then it prunes all branches that no longer exist at each upstream
 # remote.
 
-username=`git config --get github.user`
-repo=`git config --get remote.upstream.url | sed 's/git@github.com://' | sed 's/\.git//'`
+username=$(git config --get github.user)
+repo=$(git config --get remote.upstream.url | sed 's/git@github.com://' | sed 's/\.git//')
 
-branches=`git branch --no-color | grep -v -E "^\\W*main$|^\\W*\\d+\\.x$|^\\W*\\d+.\\d+$" | sed 's/\*/ /'`
+branches=$(git branch --no-color | grep -v -E "^\\W*main$|^\\W*\\d+\\.x$|^\\W*\\d+.\\d+$" | sed 's/\*/ /')
 remotes="origin
 upstream"
 
@@ -21,9 +21,9 @@ if [ ! -z "$branches" ] ; then
   all=n
   delete=n
   for branch in $branches; do
-    isMerged=`git api "/repos/$repo/pulls?state=closed&head=$username:$branch" | jq '. | length'`
-    if [ $isMerged = '1' ]; then
-      if [ $all = 'n' ] ; then
+    isMerged=$(git api "/repos/$repo/pulls?state=closed&head=$username:$branch" | jq '. | length')
+    if [ "$isMerged" = '1' ]; then
+      if [ "$all" = 'n' ] ; then
         delete=n
         read -p "Delete $branch (y=yes, n=no, a=all)? " prompt
         if [ "$prompt" = 'a' ] ; then
@@ -35,10 +35,10 @@ if [ ! -z "$branches" ] ; then
       fi
       
       if [ "$delete" = 'y' ] ; then
-        git branch -D $branch
+        git branch -D "$branch"
         for remote in $remotes; do
-          if [[ $(git ls-remote $remote $branch) ]]; then
-            git push -f $remote :$branch
+          if [[ $(git ls-remote "$remote" "$branch") ]]; then
+            git push -f "$remote" :"$branch"
           fi
         done
       fi
