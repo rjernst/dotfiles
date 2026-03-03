@@ -2,3 +2,18 @@
 
 mkdir -p "$HOME/.gradle/init.d"
 setup_link "gradle/elasticsearch.gradle"  ".gradle/init.d/elasticsearch.gradle"
+
+# Install pre-push hook to guard protected branches on upstream
+es_git_dir="$HOME/code/elastic/elasticsearch/.git"
+if [ -d "$es_git_dir/hooks" ]; then
+  hook_src="$DOTFILES/roles/elasticsearch/hooks/pre-push"
+  hook_dst="$es_git_dir/hooks/pre-push"
+  if [ -f "$hook_src" ] && ! [ "$hook_src" -ef "$hook_dst" ]; then
+    if (( DRY_RUN )); then
+      echo "[dry-run] $hook_src -> $hook_dst"
+    else
+      echo "$hook_src -> $hook_dst"
+      ln -sf "$hook_src" "$hook_dst"
+    fi
+  fi
+fi

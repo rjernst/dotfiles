@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# Pre-commit hook for the dotfiles repo.
+# Runs shellcheck and zsh syntax checks on staged files.
+
+set -e
+
+errors=0
+staged=$(git diff --cached --name-only --diff-filter=ACM)
+
+# --- shellcheck ---
+shellcheck_files=()
+while IFS= read -r f; do
+  [[ -z "$f" ]] && continue
+  case "$f" in
+    bootstrap)                   shellcheck_files+=("$f") ;;
+    scripts/*)                   [[ -f "$f" ]] && shellcheck_files+=("$f") ;;
+    roles/*/install|roles/*/setup|roles/*/hooks/*) shellcheck_files+=("$f") ;;
+  esac
+done <<< "$staged"
+
+if (( ${#shellcheck_files[@]} > 0 )) && command -v shellcheck &>/dev/null; then
+  for f in "${shellcheck_files[@]}"; do
+    # Skip files with zsh shebangs (shellcheck only supports sh/bash/dash/ksh)
+    if head -1 "$f" | grep -q 'zsh'; then
+      continue
+    fi
+    if ! shellcheck --severity=warning "$f"; then
+      errors=$((errors + 1))
+    fi
+  done
+fi
+
+# --- zsh syntax check ---
+zsh_files=()
+while IFS= read -r f; do
+  [[ -z "$f" ]] && continue
+  case "$f" in
+    *.zsh|zsh/zshrc|roles/*/zsh_plugin|roles/*/setup|roles/*/install)
+      zsh_files+=("$f") ;;
+  esac
+done <<< "$staged"
+
+if (( ${#zsh_files[@]} > 0 )) && command -v zsh &>/dev/null; then
+  for f in "${zsh_files[@]}"; do
+    if ! zsh -n "$f" 2>/dev/null; then
+      echo "FAIL: zsh -n $f"
+      errors=$((errors + 1))
+    fi
+  done
+fi
+
+exit $errors

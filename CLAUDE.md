@@ -20,6 +20,7 @@ roles/<role>/install      # optional: first-time setup, runs before setup (sourc
 roles/<role>/setup        # optional: runs during setup (sourced)
 roles/<role>/zsh_plugin   # optional: symlinked to ~/.zsh/plugins/<role>.zsh
 roles/<role>/requires     # optional: lists role dependencies, one per line
+roles/<role>/hooks/       # optional: git hooks installed by the role's setup script
 ```
 
 The `setup` script reads `hosts/$(hostname)/roles` to determine which roles to activate. Each role can provide a setup script and/or a zsh plugin that gets sourced on shell startup.
@@ -38,7 +39,7 @@ The `setup` script reads `hosts/$(hostname)/roles` to determine which roles to a
 | Role                   | Purpose                                                    |
 |------------------------|------------------------------------------------------------|
 | git                    | Git user config, SSH commit signing, allowed signers setup |
-| elasticsearch          | Gradle init script for ES builds, project directory aliases|
+| elasticsearch          | Gradle init script for ES builds, project directory aliases, pre-push hook|
 | elasticsearch-support  | GCloud auth plugin, Teleport/k8s env switching             |
 | java                   | jenv initialization, JDK scanning/installation helpers     |
 | jdk                    | OpenJDK development shortcut (`cdj`)                       |
@@ -60,6 +61,7 @@ roles/                 # Modular configuration units
     zsh_plugin         # Sourced in shell (optional)
     install            # First-time install script (optional)
     requires           # Role dependencies (optional)
+    hooks/             # Git hooks installed by setup (optional)
 git/
   config               # Global gitconfig (symlinked to ~/.gitconfig)
   ignore               # Global gitignore
@@ -74,6 +76,8 @@ vim/
 gradle/
   properties           # Global gradle.properties (caching enabled)
   elasticsearch.gradle # Gradle Enterprise / Develocity build scans
+hooks/
+  pre-commit           # Shellcheck + zsh syntax checks on staged files
 scripts/
   gradlew.sh           # Find and run gradlew from any subdirectory
   git-make-worktree    # Create git worktree for upstream branch

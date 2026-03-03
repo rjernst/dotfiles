@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# Pre-push hook for the elasticsearch repo.
+# Blocks accidental pushes to protected branches on the upstream remote.
+# Bypass with: ALLOW_UPSTREAM_PUSH=1 git push upstream main
+
+set -e
+
+remote_name="$1"
+
+# Only guard pushes to the upstream remote
+if [ "$remote_name" != "upstream" ]; then
+  exit 0
+fi
+
+# Allow bypass via environment variable
+if [ "${ALLOW_UPSTREAM_PUSH:-0}" = "1" ]; then
+  exit 0
+fi
+
+# Read push info from stdin: <local ref> <local sha> <remote ref> <remote sha>
+while IFS=' ' read -r _ _ remote_ref _; do
+  if [[ "$remote_ref" =~ ^refs/heads/(main|master|[0-9]+\.x)$ ]]; then
+    branch="${BASH_REMATCH[1]}"
+    echo "BLOCKED: refusing to push to protected branch '$branch' on upstream." >&2
+    echo "If this is intentional, run:" >&2
+    echo "  ALLOW_UPSTREAM_PUSH=1 git push upstream $branch" >&2
+    exit 1
+  fi
+done
+
+exit 0
