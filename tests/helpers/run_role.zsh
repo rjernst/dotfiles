@@ -26,6 +26,10 @@ link_role() {
     echo "ERROR: No role dir at $role_dir"
     return 1
   fi
+  install_file=$DOTFILES/$role_dir/install
+  if [ -f "$install_file" ]; then
+    (source "$install_file") || >&2 echo "WARNING: install for role '$1' failed (exit $?), continuing..."
+  fi
   setup_file=$DOTFILES/$role_dir/setup
   if [ -f "$setup_file" ]; then
     (source "$setup_file") || >&2 echo "WARNING: setup for role '$1' failed (exit $?), continuing..."

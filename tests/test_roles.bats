@@ -13,7 +13,10 @@ setup() {
   mkdir -p "$HOME/.zsh/plugins"
 }
 
-@test "git role succeeds (no setup, no zsh_plugin)" {
+@test "git role succeeds (install script skips when config exists)" {
+  mkdir -p "$HOME/.git" "$HOME/.ssh"
+  touch "$HOME/.git/user.config" "$HOME/.ssh/allowed_signers"
+
   run zsh "$HELPER" git
   [ "$status" -eq 0 ]
   [[ "$output" == *"Adding role git"* ]]

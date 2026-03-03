@@ -24,6 +24,10 @@ link_role() {
     echo "ERROR: No role dir at $role_dir"
     return
   fi
+  install_file=$DOTFILES/$role_dir/install
+  if [ -f $install_file ]; then
+    (source $install_file) || >&2 echo "WARNING: install for role '$1' failed (exit $?), continuing..."
+  fi
   setup_file=$DOTFILES/$role_dir/setup
   if [ -f $setup_file ]; then
     # Run role setup in a subshell so failures don't abort the entire setup

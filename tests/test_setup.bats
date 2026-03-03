@@ -34,6 +34,10 @@ setup() {
       echo "ERROR: No role dir at $role_dir"
       return
     fi
+    install_file=$DOTFILES/$role_dir/install
+    if [ -f "$install_file" ]; then
+      source "$install_file"
+    fi
     setup_file=$DOTFILES/$role_dir/setup
     if [ -f "$setup_file" ]; then
       source "$setup_file"
@@ -94,6 +98,15 @@ setup() {
   run link_role "nonexistent"
 
   [[ "$output" == *"ERROR: No role dir"* ]]
+}
+
+@test "link_role sources install script" {
+  mkdir -p "$DOTFILES/roles/testrole"
+  echo 'export INSTALL_WAS_SOURCED=yes' > "$DOTFILES/roles/testrole/install"
+
+  link_role "testrole"
+
+  [ "$INSTALL_WAS_SOURCED" = "yes" ]
 }
 
 @test "link_role sources setup script" {
