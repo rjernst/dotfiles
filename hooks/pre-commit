@@ -12,18 +12,12 @@ shellcheck_files=()
 while IFS= read -r f; do
   [[ -z "$f" ]] && continue
   case "$f" in
-    bootstrap)                   shellcheck_files+=("$f") ;;
-    scripts/*)                   [[ -f "$f" ]] && shellcheck_files+=("$f") ;;
-    roles/*/install|roles/*/setup|roles/*/hooks/*) shellcheck_files+=("$f") ;;
+    bootstrap|roles/*/hooks/*) shellcheck_files+=("$f") ;;
   esac
 done <<< "$staged"
 
 if (( ${#shellcheck_files[@]} > 0 )) && command -v shellcheck &>/dev/null; then
   for f in "${shellcheck_files[@]}"; do
-    # Skip files with zsh shebangs (shellcheck only supports sh/bash/dash/ksh)
-    if head -1 "$f" | grep -q 'zsh'; then
-      continue
-    fi
     if ! shellcheck --severity=warning "$f"; then
       errors=$((errors + 1))
     fi
@@ -35,7 +29,7 @@ zsh_files=()
 while IFS= read -r f; do
   [[ -z "$f" ]] && continue
   case "$f" in
-    *.zsh|zsh/zshrc|roles/*/zsh_plugin|roles/*/setup|roles/*/install)
+    *.zsh|zsh/zshrc|scripts/*|roles/*/zsh_plugin|roles/*/setup|roles/*/install)
       zsh_files+=("$f") ;;
   esac
 done <<< "$staged"
