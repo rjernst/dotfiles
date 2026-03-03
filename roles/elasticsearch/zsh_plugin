@@ -5,12 +5,16 @@ export VAGRANT_WINDOWS_2012R2_BOX=elastic/windows-2012_r2-x86_64
 # vault address
 export VAULT_ADDR=https://secrets.elastic.co:8200
 
-alias vault-login='vault login -method github token="$(<~/.elastic/github.token)"'
-alias okta-login='okta-awscli --profile=okta-elastic-dev'
+if _dotfiles_require_cmds "elasticsearch vault-login alias" vault; then
+  alias vault-login='vault login -method github token="$(<~/.elastic/github.token)"'
+fi
 
-# aws access
-alias aws='okta-awscli --profile=okta-elastic-dev'
-export AWS_PROFILE=okta-elastic-dev
+if _dotfiles_require_cmds "elasticsearch okta/aws aliases" okta-awscli; then
+  alias okta-login='okta-awscli --profile=okta-elastic-dev'
+  # aws access
+  alias aws='okta-awscli --profile=okta-elastic-dev'
+  export AWS_PROFILE=okta-elastic-dev
+fi
 
 # shortcuts to projects
 alias cde='cd ~/code/elastic/elasticsearch'

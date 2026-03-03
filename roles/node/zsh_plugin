@@ -1,6 +1,7 @@
 
 # Lazy-load fnm: defer the expensive `fnm env` call until first use of node/npm/npx
 export PATH="$HOME/.local/share/fnm:$PATH"
+_dotfiles_require_cmds "node role" fnm || return
 
 _init_fnm() {
   unfunction node npm npx corepack 2>/dev/null

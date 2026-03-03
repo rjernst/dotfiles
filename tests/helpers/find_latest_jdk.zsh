@@ -6,6 +6,14 @@
 set -e
 
 export PATH="$MOCK_BIN:$PATH"
+
+# Provide the helper that zsh_plugin depends on (normally defined in zshrc)
+_dotfiles_require_cmds() {
+  for cmd in "${@:2}"; do
+    (( $+commands[$cmd] )) || return 1
+  done
+}
+
 source "$DOTFILES/roles/java/zsh_plugin"
 
 _find_latest_jdk

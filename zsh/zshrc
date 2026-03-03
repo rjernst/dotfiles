@@ -116,6 +116,71 @@ alias gw='$DOTFILES/scripts/gradlew.sh'
 #----------------------------------------------------------------------------
 alias py3='python3'
 
+#----------------------------------------------------------------------------
+#                        command availability checks
+#----------------------------------------------------------------------------
+# Package install commands per platform, used by _dotfiles_require_cmds
+# to suggest how to install missing tools.
+typeset -gA _dotfiles_brew_pkg=(
+  [jenv]="brew install jenv"
+  [fnm]="brew install fnm"
+  [tsh]="brew install --cask tsh"
+  [kubectl]="brew install kubernetes-cli"
+  [jq]="brew install jq"
+  [vault]="brew install vault"
+  [okta-awscli]="brew install okta-awscli"
+  [starship]="brew install starship"
+)
+typeset -gA _dotfiles_pacman_pkg=(
+  [jenv]="pacman -S jenv"
+  [fnm]="pacman -S fnm"
+  [tsh]="yay -S teleport-bin"
+  [kubectl]="pacman -S kubectl"
+  [jq]="pacman -S jq"
+  [vault]="pacman -S vault"
+  [starship]="pacman -S starship"
+)
+
+# Helper used by role plugins to check for required commands at load time.
+# Prints a warning listing any missing commands with install hints, returns 1
+# if any are absent.
+# Usage: _dotfiles_require_cmds "context" cmd1 cmd2 ... || return
+_dotfiles_install_hint() {
+  if [[ $OSTYPE == darwin* ]]; then
+    echo "${_dotfiles_brew_pkg[$1]}"
+  elif [[ $OSTYPE == linux* ]]; then
+    echo "${_dotfiles_pacman_pkg[$1]}"
+  fi
+}
+_dotfiles_require_cmds() {
+  local context=$1; shift
+  local missing=()
+  for cmd in "$@"; do
+    (( $+commands[$cmd] )) || missing+=($cmd)
+  done
+  (( ${#missing} )) || return 0
+
+  if (( ${#missing} == 1 )); then
+    local hint=$(_dotfiles_install_hint ${missing[1]})
+    if [[ -n $hint ]]; then
+      print -P "%F{yellow}[dotfiles]%f $context — missing: %F{red}${missing[1]}%f  →  %F{green}$hint%f"
+    else
+      print -P "%F{yellow}[dotfiles]%f $context — missing: %F{red}${missing[1]}%f"
+    fi
+  else
+    print -P "%F{yellow}[dotfiles]%f $context — missing:"
+    for cmd in $missing; do
+      local hint=$(_dotfiles_install_hint $cmd)
+      if [[ -n $hint ]]; then
+        print -P "  %F{red}$cmd%f  →  %F{green}$hint%f"
+      else
+        print -P "  %F{red}$cmd%f"
+      fi
+    done
+  fi
+  return 1
+}
+
 for plugin in $ZDOTDIR/plugins/*.zsh(N); do
   source $plugin
 done
@@ -192,19 +257,21 @@ alias refresh-dotfiles=_refresh_dotfiles
 #----------------------------------------------------------------------------
 #                               starship prompt
 #----------------------------------------------------------------------------
-eval "$(starship init zsh)"
+if _dotfiles_require_cmds "starship prompt" starship; then
+  eval "$(starship init zsh)"
 
-# Transient prompt: collapse previous prompts to just ❯
-__starship_saved_prompt="$PROMPT"
-__starship_saved_rprompt="$RPROMPT"
-zle-line-finish() {
-  PROMPT='%(?.%F{green}.%F{red})❯%f '
-  RPROMPT=''
-  zle reset-prompt
-  PROMPT="$__starship_saved_prompt"
-  RPROMPT="$__starship_saved_rprompt"
-}
-zle -N zle-line-finish
+  # Transient prompt: collapse previous prompts to just ❯
+  __starship_saved_prompt="$PROMPT"
+  __starship_saved_rprompt="$RPROMPT"
+  zle-line-finish() {
+    PROMPT='%(?.%F{green}.%F{red})❯%f '
+    RPROMPT=''
+    zle reset-prompt
+    PROMPT="$__starship_saved_prompt"
+    RPROMPT="$__starship_saved_rprompt"
+  }
+  zle -N zle-line-finish
+fi
 
 # vi: set tabstop=2 shiftwidth=2 filetype=sh expandtab:
 

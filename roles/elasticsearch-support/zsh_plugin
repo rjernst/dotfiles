@@ -1,4 +1,6 @@
 
+_dotfiles_require_cmds "elasticsearch-support role" tsh kubectl jq || return
+
 function _print_support_help() {
   echo "Commands:"
   echo "  set-env     - set env variables and log into tsh for an environment"
