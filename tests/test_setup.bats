@@ -115,3 +115,73 @@ setup() {
   [ -L "$HOME/.zsh/plugins/testrole.zsh" ]
   [ "$(readlink "$HOME/.zsh/plugins/testrole.zsh")" = "$DOTFILES/roles/testrole/zsh_plugin" ]
 }
+
+# --- Dependency resolution tests (via zsh helper) ---
+
+RESOLVE_HELPER="${BATS_TEST_FILENAME%/*}/helpers/resolve_roles.zsh"
+
+@test "resolve_role: dependency linked before dependent" {
+  mkdir -p "$DOTFILES/roles/alpha" "$DOTFILES/roles/beta"
+  echo "beta" > "$DOTFILES/roles/alpha/requires"
+
+  run zsh "$RESOLVE_HELPER" alpha
+  [ "$status" -eq 0 ]
+  [ "${lines[0]}" = "beta" ]
+  [ "${lines[1]}" = "alpha" ]
+}
+
+@test "resolve_role: transitive dependencies" {
+  mkdir -p "$DOTFILES/roles/a" "$DOTFILES/roles/b" "$DOTFILES/roles/c"
+  echo "b" > "$DOTFILES/roles/a/requires"
+  echo "c" > "$DOTFILES/roles/b/requires"
+
+  run zsh "$RESOLVE_HELPER" a
+  [ "$status" -eq 0 ]
+  [ "${lines[0]}" = "c" ]
+  [ "${lines[1]}" = "b" ]
+  [ "${lines[2]}" = "a" ]
+}
+
+@test "resolve_role: de-duplication of shared dependency" {
+  mkdir -p "$DOTFILES/roles/x" "$DOTFILES/roles/y" "$DOTFILES/roles/shared"
+  echo "shared" > "$DOTFILES/roles/x/requires"
+  echo "shared" > "$DOTFILES/roles/y/requires"
+
+  run zsh "$RESOLVE_HELPER" x y
+  [ "$status" -eq 0 ]
+  # shared appears exactly once
+  local count=0
+  for line in "${lines[@]}"; do
+    [ "$line" = "shared" ] && (( count++ ))
+  done
+  [ "$count" -eq 1 ]
+  [ "${#lines[@]}" -eq 3 ]
+}
+
+@test "resolve_role: cycle detection" {
+  mkdir -p "$DOTFILES/roles/p" "$DOTFILES/roles/q"
+  echo "q" > "$DOTFILES/roles/p/requires"
+  echo "p" > "$DOTFILES/roles/q/requires"
+
+  run zsh "$RESOLVE_HELPER" p
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"cycle"* ]]
+}
+
+@test "resolve_role: missing dependency role" {
+  mkdir -p "$DOTFILES/roles/has_dep"
+  echo "nonexistent" > "$DOTFILES/roles/has_dep/requires"
+
+  run zsh "$RESOLVE_HELPER" has_dep
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"not found"* ]]
+}
+
+@test "resolve_role: role with no requires file" {
+  mkdir -p "$DOTFILES/roles/standalone"
+
+  run zsh "$RESOLVE_HELPER" standalone
+  [ "$status" -eq 0 ]
+  [ "${lines[0]}" = "standalone" ]
+  [ "${#lines[@]}" -eq 1 ]
+}

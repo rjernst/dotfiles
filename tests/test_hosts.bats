@@ -38,3 +38,60 @@ setup() {
     fi
   done
 }
+
+@test "all roles in requires files exist" {
+  local missing=()
+  for req_file in "$DOTFILES_DIR"/roles/*/requires; do
+    [ -f "$req_file" ] || continue
+    local role
+    role=$(basename "$(dirname "$req_file")")
+    while IFS= read -r dep; do
+      [ -z "$dep" ] && continue
+      [[ "$dep" = \#* ]] && continue
+      if [ ! -d "$DOTFILES_DIR/roles/$dep" ]; then
+        missing+=("role '$role' requires missing role: $dep")
+      fi
+    done < "$req_file"
+  done
+
+  if [ ${#missing[@]} -gt 0 ]; then
+    printf '%s\n' "${missing[@]}"
+    return 1
+  fi
+}
+
+@test "no cycles in role dependency graph" {
+  # DFS cycle detection in bash using string-based sets
+  local resolved=""
+  local in_stack=""
+
+  _check_cycle() {
+    local role=$1
+    # Already fully processed
+    [[ " $resolved " == *" $role "* ]] && return 0
+    # Cycle detected
+    if [[ " $in_stack " == *" $role "* ]]; then
+      echo "cycle detected involving role: $role"
+      return 1
+    fi
+    in_stack="$in_stack $role"
+    local req_file="$DOTFILES_DIR/roles/$role/requires"
+    if [ -f "$req_file" ]; then
+      while IFS= read -r dep; do
+        [ -z "$dep" ] && continue
+        [[ "$dep" = \#* ]] && continue
+        _check_cycle "$dep" || return 1
+      done < "$req_file"
+    fi
+    # Remove from in_stack, add to resolved
+    in_stack="${in_stack/ $role/}"
+    resolved="$resolved $role"
+  }
+
+  for role_dir in "$DOTFILES_DIR"/roles/*/; do
+    [ -d "$role_dir" ] || continue
+    local role
+    role=$(basename "$role_dir")
+    _check_cycle "$role" || return 1
+  done
+}

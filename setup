@@ -35,6 +35,41 @@ link_role() {
   fi
 }
 
+# Resolve role dependencies via DFS topological sort.
+# Populates _order array with roles in dependency-first order.
+typeset -A _resolved _in_stack
+_order=()
+
+resolve_role() {
+  local role=$1
+  # Already fully processed
+  (( ${+_resolved[$role]} )) && return 0
+  # Cycle detection
+  if (( ${+_in_stack[$role]} )); then
+    echo "ERROR: dependency cycle detected involving role '$role'" >&2
+    return 1
+  fi
+  _in_stack[$role]=1
+  # Check role directory exists
+  if [ ! -d "$DOTFILES/roles/$role" ]; then
+    echo "ERROR: required role '$role' not found" >&2
+    return 1
+  fi
+  # Recurse into dependencies
+  local requires_file="$DOTFILES/roles/$role/requires"
+  if [ -f "$requires_file" ]; then
+    local dep
+    while IFS= read -r dep; do
+      # Skip empty lines and comments
+      [[ -z "$dep" || "$dep" = \#* ]] && continue
+      resolve_role "$dep" || return 1
+    done < "$requires_file"
+  fi
+  unset "_in_stack[$role]"
+  _resolved[$role]=1
+  _order+=("$role")
+}
+
 mkdir -p $HOME/.gradle
 setup_link "gradle/properties"                  ".gradle/gradle.properties"
 
@@ -48,14 +83,18 @@ for ZSH_PLUGIN in $DOTFILES/zsh/plugins/*; do
   NAME=$(basename $ZSH_PLUGIN)
   setup_link "zsh/plugins/$NAME"                ".zsh/plugins/$NAME"
 done
-roles=$DOTFILES/hosts/$(hostname)/roles
-if [ ! -f $roles ]; then
-  roles=$HOME/.zshroles
+roles_file=$DOTFILES/hosts/$(hostname)/roles
+if [ ! -f $roles_file ]; then
+  roles_file=$HOME/.zshroles
 fi
-if [ -f $roles ]; then
-  while read role; do
+if [ -f $roles_file ]; then
+  while IFS= read -r role; do
+    [[ -z "$role" || "$role" = \#* ]] && continue
+    resolve_role "$role" || exit 1
+  done < $roles_file
+  for role in "${_order[@]}"; do
     link_role $role
-  done <$roles
+  done
 fi
 
 mkdir -p $HOME/.ssh
