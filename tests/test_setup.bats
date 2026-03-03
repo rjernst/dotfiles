@@ -152,7 +152,9 @@ RESOLVE_HELPER="${BATS_TEST_FILENAME%/*}/helpers/resolve_roles.zsh"
   # shared appears exactly once
   local count=0
   for line in "${lines[@]}"; do
-    [ "$line" = "shared" ] && (( count++ ))
+    if [ "$line" = "shared" ]; then
+      count=$((count + 1))
+    fi
   done
   [ "$count" -eq 1 ]
   [ "${#lines[@]}" -eq 3 ]
