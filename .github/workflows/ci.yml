@@ -25,6 +25,10 @@ jobs:
       - name: Run BATS tests
         run: bats tests/
 
+      - name: Install shellcheck (MacOS)
+        if: runner.os == 'macOS'
+        run: brew install shellcheck
+
       - name: Shellcheck bootstrap
         run: shellcheck --severity=warning bootstrap
 
