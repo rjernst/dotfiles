@@ -13,6 +13,8 @@ setup() {
   # Define the functions under test directly (they use $HOME and $DOTFILES).
   # This mirrors the implementations in the setup script but avoids sourcing
   # the entire script which would run top-level commands.
+  DRY_RUN=${DRY_RUN:-0}
+
   setup_link() {
     src="$DOTFILES/$1"
     dst="$HOME/$2"
@@ -21,14 +23,26 @@ setup() {
     fi
     if [[ -f "$dst" || -h "$dst" ]]; then
       >&2 echo "WARNING: $dst exists, overwriting"
-      rm -f "$dst"
+      if (( DRY_RUN )); then
+        echo "[dry-run] rm -f $dst"
+      else
+        rm -f "$dst"
+      fi
     fi
-    echo "$src -> $dst"
-    ln -s "$src" "$dst"
+    if (( DRY_RUN )); then
+      echo "[dry-run] $src -> $dst"
+    else
+      echo "$src -> $dst"
+      ln -s "$src" "$dst"
+    fi
   }
 
   link_role() {
-    echo "Adding role $1"
+    if (( DRY_RUN )); then
+      echo "[dry-run] Adding role $1"
+    else
+      echo "Adding role $1"
+    fi
     role_dir=roles/$1
     if [ ! -d "$DOTFILES/$role_dir" ]; then
       echo "ERROR: No role dir at $role_dir"
@@ -36,11 +50,19 @@ setup() {
     fi
     install_file=$DOTFILES/$role_dir/install
     if [ -f "$install_file" ]; then
-      source "$install_file"
+      if (( DRY_RUN )); then
+        echo "[dry-run] would run install for $1"
+      else
+        source "$install_file"
+      fi
     fi
     setup_file=$DOTFILES/$role_dir/setup
     if [ -f "$setup_file" ]; then
-      source "$setup_file"
+      if (( DRY_RUN )); then
+        echo "[dry-run] would run setup for $1"
+      else
+        source "$setup_file"
+      fi
     fi
     zsh_plugin_file="$role_dir/zsh_plugin"
     if [ -f "$DOTFILES/$zsh_plugin_file" ]; then
@@ -199,4 +221,49 @@ RESOLVE_HELPER="${BATS_TEST_FILENAME%/*}/helpers/resolve_roles.zsh"
   [ "$status" -eq 0 ]
   [ "${lines[0]}" = "standalone" ]
   [ "${#lines[@]}" -eq 1 ]
+}
+
+# --- Dry-run mode tests ---
+
+@test "setup_link dry-run does not create symlink" {
+  DRY_RUN=1
+  mkdir -p "$DOTFILES/zsh"
+  echo "zshrc content" > "$DOTFILES/zsh/zshrc"
+
+  run setup_link "zsh/zshrc" ".zshrc"
+
+  [ "$status" -eq 0 ]
+  [ ! -e "$HOME/.zshrc" ]
+  [[ "$output" == *"[dry-run]"* ]]
+}
+
+@test "setup_link dry-run does not remove existing file" {
+  DRY_RUN=1
+  mkdir -p "$DOTFILES/zsh"
+  echo "zshrc content" > "$DOTFILES/zsh/zshrc"
+  echo "old content" > "$HOME/.zshrc"
+
+  run --separate-stderr setup_link "zsh/zshrc" ".zshrc"
+
+  [ "$status" -eq 0 ]
+  # original file should still exist (not removed)
+  [ -f "$HOME/.zshrc" ]
+  [ "$(cat "$HOME/.zshrc")" = "old content" ]
+  [[ "$output" == *"[dry-run] rm -f"* ]]
+}
+
+@test "link_role dry-run skips install and setup scripts" {
+  DRY_RUN=1
+  mkdir -p "$DOTFILES/roles/testrole"
+  echo 'export INSTALL_WAS_SOURCED=yes' > "$DOTFILES/roles/testrole/install"
+  echo 'export SETUP_WAS_SOURCED=yes' > "$DOTFILES/roles/testrole/setup"
+
+  run link_role "testrole"
+
+  [ "$status" -eq 0 ]
+  # scripts should NOT have been sourced
+  [ -z "${INSTALL_WAS_SOURCED:-}" ]
+  [ -z "${SETUP_WAS_SOURCED:-}" ]
+  [[ "$output" == *"[dry-run] would run install for testrole"* ]]
+  [[ "$output" == *"[dry-run] would run setup for testrole"* ]]
 }

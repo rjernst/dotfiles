@@ -3,6 +3,35 @@ set -e
 
 DOTFILES=$HOME/.dotfiles
 
+# --- argument parsing ---
+DRY_RUN=0
+for arg in "$@"; do
+  case $arg in
+    --dry-run) DRY_RUN=1 ;;
+    *)
+      echo "Usage: setup [--dry-run]" >&2
+      exit 1
+      ;;
+  esac
+done
+
+# --- dry-run helpers ---
+dry_mkdir() {
+  if (( DRY_RUN )); then
+    echo "[dry-run] mkdir -p $1"
+  else
+    mkdir -p "$1"
+  fi
+}
+
+dry_rm() {
+  if (( DRY_RUN )); then
+    echo "[dry-run] rm -f $@"
+  else
+    rm -f "$@"
+  fi
+}
+
 setup_link() {
   src="$DOTFILES/$1"
   dst="$HOME/$2"
@@ -11,14 +40,26 @@ setup_link() {
   fi
   if [[ -f "$dst" || -h "$dst" ]]; then
     >&2 echo "WARNING: $dst exists, overwriting"
-    rm -f "$dst"
-  fi 
-  echo "$src -> $dst"
-  ln -s "$src" "$dst"
+    if (( DRY_RUN )); then
+      echo "[dry-run] rm -f $dst"
+    else
+      rm -f "$dst"
+    fi
+  fi
+  if (( DRY_RUN )); then
+    echo "[dry-run] $src -> $dst"
+  else
+    echo "$src -> $dst"
+    ln -s "$src" "$dst"
+  fi
 }
 
 link_role() {
-  echo "Adding role $1"
+  if (( DRY_RUN )); then
+    echo "[dry-run] Adding role $1"
+  else
+    echo "Adding role $1"
+  fi
   role_dir=roles/$1
   if [ ! -d $DOTFILES/$role_dir ]; then
     echo "ERROR: No role dir at $role_dir"
@@ -26,12 +67,20 @@ link_role() {
   fi
   install_file=$DOTFILES/$role_dir/install
   if [ -f $install_file ]; then
-    (source $install_file) || >&2 echo "WARNING: install for role '$1' failed (exit $?), continuing..."
+    if (( DRY_RUN )); then
+      echo "[dry-run] would run install for $1"
+    else
+      (source $install_file) || >&2 echo "WARNING: install for role '$1' failed (exit $?), continuing..."
+    fi
   fi
   setup_file=$DOTFILES/$role_dir/setup
   if [ -f $setup_file ]; then
-    # Run role setup in a subshell so failures don't abort the entire setup
-    (source $setup_file) || >&2 echo "WARNING: setup for role '$1' failed (exit $?), continuing..."
+    if (( DRY_RUN )); then
+      echo "[dry-run] would run setup for $1"
+    else
+      # Run role setup in a subshell so failures don't abort the entire setup
+      (source $setup_file) || >&2 echo "WARNING: setup for role '$1' failed (exit $?), continuing..."
+    fi
   fi
   zsh_plugin_file="$role_dir/zsh_plugin"
   if [ -f $DOTFILES/$zsh_plugin_file ]; then
@@ -74,15 +123,19 @@ resolve_role() {
   _order+=("$role")
 }
 
-mkdir -p $HOME/.gradle
+dry_mkdir $HOME/.gradle
 setup_link "gradle/properties"                  ".gradle/gradle.properties"
 
 setup_link "zsh/zshrc"                          ".zshrc"
-mkdir -p $HOME/.zsh
-mkdir -p $HOME/.zsh/var/
-mkdir -p $HOME/.zsh/plugins/
+dry_mkdir $HOME/.zsh
+dry_mkdir $HOME/.zsh/var/
+dry_mkdir $HOME/.zsh/plugins/
 # clear any existing plugin links
-rm -f $HOME/.zsh/plugins/*
+if (( DRY_RUN )); then
+  echo "[dry-run] rm -f $HOME/.zsh/plugins/*"
+else
+  rm -f $HOME/.zsh/plugins/*
+fi
 for ZSH_PLUGIN in $DOTFILES/zsh/plugins/*; do
   NAME=$(basename $ZSH_PLUGIN)
   setup_link "zsh/plugins/$NAME"                ".zsh/plugins/$NAME"
@@ -101,23 +154,23 @@ if [ -f $roles_file ]; then
   done
 fi
 
-mkdir -p $HOME/.ssh
+dry_mkdir $HOME/.ssh
 setup_link "ssh/config"                         ".ssh/config"
 ssh_host_config=hosts/$(hostname)/ssh_host_config
 if [ -f $DOTFILES/$ssh_host_config ]; then
   setup_link "$ssh_host_config"                 ".ssh/host_config"
 fi
 
-mkdir -p $HOME/.vim
+dry_mkdir $HOME/.vim
 for VIMFILE in $DOTFILES/vim/*; do
   NAME=$(basename $VIMFILE)
   setup_link "vim/$NAME"                        ".vim/$NAME"
 done
 
-mkdir -p $HOME/.claude
+dry_mkdir $HOME/.claude
 setup_link "claude/CLAUDE.md"                     ".claude/CLAUDE.md"
 
-mkdir -p $HOME/.git
+dry_mkdir $HOME/.git
 setup_link "git/config"                         ".gitconfig"
 setup_link "git/ignore"                         ".git/ignore"
 
@@ -127,7 +180,11 @@ if [[ $OSTYPE == darwin* ]]; then
   if [ -f $DOTFILES/$brewfile ]; then
     setup_link "$brewfile"                      ".Brewfile"
   else
-    touch $HOME/.Brewfile
+    if (( DRY_RUN )); then
+      echo "[dry-run] touch $HOME/.Brewfile"
+    else
+      touch $HOME/.Brewfile
+    fi
   fi
 
   if [ -f $DOTFILES/$brewfile-x86 ]; then
@@ -136,20 +193,28 @@ if [[ $OSTYPE == darwin* ]]; then
 
   # symlink icloud drive to homedir
   if [ ! -d $HOME/iCloud ]; then
-    ln -s ~/Library/Mobile\ Documents/com\~apple\~CloudDocs ~/iCloud
+    if (( DRY_RUN )); then
+      echo "[dry-run] ln -s ~/Library/Mobile Documents/com~apple~CloudDocs ~/iCloud"
+    else
+      ln -s ~/Library/Mobile\ Documents/com\~apple\~CloudDocs ~/iCloud
+    fi
   fi
 fi
 
-mkdir -p $HOME/.config
+dry_mkdir $HOME/.config
 setup_link "starship/starship.toml"              ".config/starship.toml"
 
-mkdir -p $HOME/.config/gh
+dry_mkdir $HOME/.config/gh
 setup_link "gh/config.yml"                       ".config/gh/config.yml"
 
-mkdir -p $HOME/.codex/rules
+dry_mkdir $HOME/.codex/rules
 setup_link "codex/config.toml"                   ".codex/config.toml"
 setup_link "codex/rules/default.rules"           ".codex/rules/default.rules"
 
 echo ""
-echo "Config files are setup."
-echo "Run 'reload-config' to re-source zsh config."
+if (( DRY_RUN )); then
+  echo "Dry run complete. No changes were made."
+else
+  echo "Config files are setup."
+  echo "Run 'reload-config' to re-source zsh config."
+fi
