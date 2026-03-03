@@ -1,3 +1,4 @@
+[[ -n $ZSH_PROFILE ]] && zmodload zsh/zprof
 
 ZDOTDIR=$HOME/.zsh
 DOTFILES=$HOME/.dotfiles
@@ -201,6 +202,7 @@ alias d='docker'
 #                             dotfiles management
 #----------------------------------------------------------------------------
 alias reload-config='echo "Reloading $HOME/.zshrc"; source $HOME/.zshrc'
+alias zsh-profile='ZSH_PROFILE=1 zsh -i -c exit'
 if [[ $OSTYPE == darwin* ]]; then
 
   function _reload_brewfile() {
@@ -272,6 +274,28 @@ if _dotfiles_require_cmds "starship prompt" starship; then
   }
   zle -N zle-line-finish
 fi
+
+[[ -n $ZSH_PROFILE ]] && {
+  # Show only the summary table from zprof with clear column headers.
+  # The detail call-graph section is stripped; use raw `zprof` if needed.
+  zprof | awk '
+    NR == 1 {
+      printf "%-4s %5s  %8s %8s %7s  %8s %8s %7s  %s\n",
+        "num", "calls",
+        "total ms", "avg ms", "pct",
+        "self ms", "avg ms", "pct",
+        "name"
+      next
+    }
+    /^---/ && !printed_sep { print; printed_sep = 1; next }
+    /^ *[0-9]+\)/ && !done {
+      printf "%-4s %5s  %8s %8s %7s  %8s %8s %7s  %s\n",
+        $1, $2, $3, $4, $5, $6, $7, $8, $9
+      next
+    }
+    /^$/ { done = 1 }
+  '
+}
 
 # vi: set tabstop=2 shiftwidth=2 filetype=sh expandtab:
 
