@@ -30,8 +30,8 @@ echo "fake-api-key"
 SCRIPT
   chmod +x "$MOCK_BIN/security"
 
-  # Mock curl, ping, tsh — no-op success stubs for _set_env tests
-  for cmd in curl ping tsh; do
+  # Mock curl, nc, tsh — no-op success stubs for _set_env tests
+  for cmd in curl nc tsh; do
     printf '#!/bin/bash\nexit 0\n' > "$MOCK_BIN/$cmd"
     chmod +x "$MOCK_BIN/$cmd"
   done

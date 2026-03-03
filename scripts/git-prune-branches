@@ -2,15 +2,16 @@
 #
 # git-prune-branches
 #
-# Simple script that cleans up unnecessary branches.
-#
-# First it deletes each fully merged branch after prompting
-# for confirmation.
-#
-# Then it prunes all branches that no longer exist at each upstream
-# remote.
+# Cleans up local branches whose PRs have been merged.
+# For each non-protected branch, checks the GitHub API for a closed PR
+# and prompts for deletion. Also removes the branch from remotes if present.
 
 username=$(git config --get github.user)
+if [ -z "$username" ]; then
+  echo "Error: github.user is not set in git config."
+  echo "Run: git config --global github.user <your-github-username>"
+  exit 1
+fi
 repo=$(git config --get remote.upstream.url | sed 's/git@github.com://' | sed 's/\.git//')
 
 branches=$(git branch --no-color | grep -v -E "^\\W*main$|^\\W*\\d+\\.x$|^\\W*\\d+.\\d+$" | sed 's/\*/ /')

@@ -72,7 +72,7 @@ function _set_env() {
   fi
 
   echo "Checking TSH proxy access"
-  ping -c 1 $TSH_PROXY &> /dev/null
+  nc -z -w 3 $TSH_PROXY 443 &> /dev/null
   if [ $? -ne 0 ]; then
     echo "Cannot reach tsh proxy at $TSH_PROXY. Are you logged into the VPN?"
     return 5

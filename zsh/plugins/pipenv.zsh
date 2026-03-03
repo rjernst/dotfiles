@@ -13,13 +13,14 @@ _pipenv_activate() {
     export $python_path
   fi
 
-  export OLD_PATH=$PATH
   PATH=$VIRTUAL_ENV/bin:$PATH
   echo "$PIPENV_NAME"
 }
 
 _pipenv_deactivate() {
   echo "Deactivating pipenv: $PIPENV_NAME"
+  PATH=${PATH#$VIRTUAL_ENV/bin:}
+
   unset VIRTUAL_ENV
   unset PIPENV_ROOT
   unset PIPENV_NAME
@@ -28,9 +29,6 @@ _pipenv_deactivate() {
   unset PYTHONDONTWRITEBYTECODE
   unset PIP_DISABLE_PIP_VERSION_CHECK
   unset PIP_PYTHON_PATH
-
-  PATH=$OLD_PATH
-  unset OLD_PATH
 }
 
 _find_pipenv() {

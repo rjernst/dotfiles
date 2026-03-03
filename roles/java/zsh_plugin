@@ -83,13 +83,21 @@ function _install_jdk() {
   echo "Installing Oracle JDK $1"
   TMP_FILE=/tmp/jdk$1.tar.gz
 
+  local arch
+  case $(uname -m) in
+    arm64|aarch64) arch=aarch64 ;;
+    *)             arch=x64 ;;
+  esac
+
   if [[ $OSTYPE == darwin* ]]; then
-    OS_SUFFIX=macos-aarch64
+    OS_SUFFIX=macos-${arch}
     JDKS_DIR=/Library/Java/JavaVirtualMachines
-  fi
-  if [[ $OSTYPE == linux* ]]; then
-    OS_SUFFIX=linux-x64
+  elif [[ $OSTYPE == linux* ]]; then
+    OS_SUFFIX=linux-${arch}
     JDKS_DIR=/usr/lib/jdk
+  else
+    echo "Unsupported OS: $OSTYPE"
+    return 1
   fi
   DOWNLOAD_URL="https://download.oracle.com/java/$1/latest/jdk-${1}_${OS_SUFFIX}_bin.tar.gz"
   echo "Downloading $DOWNLOAD_URL"
