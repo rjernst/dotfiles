@@ -12,6 +12,7 @@ jenv() {
 }
 
 # shortcut to current java home
+# @help jdk -- Show path to current JAVA_HOME
 alias jdk='readlink $(jenv javahome)'
 
  #_jdk_major_versions=("${(@f)$(jenv versions | grep -E "^\s+((\d+(-ea)?)|(1.8))$" | sed -E 's/.* ([0-9]+)\.0$/\1/' | sed -E 's/.* (1.8)$/\1/' | sort -r --unique)}")
@@ -72,8 +73,10 @@ function _reload_jenv() {
   jenv global $_latest_jdk_version
 
 }
+# @help reload-jenv -- Rescan and reload all JDKs into jenv
 alias reload-jenv='_reload_jenv'
 
+# @help install-jdk -- Download and install an Oracle JDK by major version
 alias install-jdk='_install_jdk'
 function _install_jdk() {
   if [ $# -eq 0 ]; then

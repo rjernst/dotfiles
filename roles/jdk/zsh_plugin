@@ -1,3 +1,4 @@
 
 # shortcuts to projects
+# @help cdj -- cd to OpenJDK source directory
 alias cdj='cd ~/code/openjdk/jdk'

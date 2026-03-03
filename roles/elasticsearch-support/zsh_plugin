@@ -90,6 +90,7 @@ function _set_env() {
 
   alias links='echo $ENV_LINKS'
 }
+# @help set-env -- Log into a support environment (prod/staging/qa)
 alias set-env='_set_env'
 
 function _set_api_key() {
@@ -99,6 +100,7 @@ function _set_api_key() {
   ENV_NAME=$1
   security add-generic-password -a $USER -s admin-console-api-key-$ENV_NAME -U -w
 }
+# @help set-api-key -- Set the admin console API key for an environment
 alias set-api-key='_set_api_key'
 
 
@@ -130,6 +132,7 @@ function _set_project() {
   echo "Listing pods..."
   kubectl get pods -n project-$PROJECT_ID
 }
+# @help set-project -- Set a project to investigate in the current environment
 alias set-project='_set_project'
 
 function _get_build_info() {
@@ -144,4 +147,5 @@ function _get_build_info() {
 
   curl -s -H "Authorization: ApiKey $API_KEY" -H "Content-Type: application/json" "$ENV_URL/api/v1/admin/serverless/projects/$PROJECT_TYPE/$PROJECT_ID/_proxy/_nodes" | jq -cMr '["Node","Serverless Build Hash"], (.nodes | keys[] as $key | .[$key] | [.name, .build_hash]) | @tsv' | column -t -s $'\t' 
 }
+# @help get-build-info -- Show build info for nodes in the current project
 alias get-build-info='_get_build_info'

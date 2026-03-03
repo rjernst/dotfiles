@@ -79,7 +79,9 @@ setopt hist_ignore_dups
 setopt hist_verify
 
 # shortcuts
+# @help h -- Search or show command history
 alias h='history'
+# @help hs -- Search command history (case-insensitive grep)
 alias hs='history | grep -i'
 
 #----------------------------------------------------------------------------
@@ -110,6 +112,7 @@ zinit wait lucid for \
 # where gradle looks for gradle.properties
 export GRADLE_USER_HOME=$HOME/.gradle
 # helper for running gradlew from any dir
+# @help gw -- Run gradlew from any subdirectory
 alias gw='$DOTFILES/scripts/gradlew.sh'
 
 #----------------------------------------------------------------------------
@@ -189,6 +192,7 @@ done
 #----------------------------------------------------------------------------
 #                               basic shortcuts
 #----------------------------------------------------------------------------
+# @help cdd -- cd to the dotfiles directory
 alias cdd='cd $DOTFILES'
 [[ $OSTYPE == linux* ]] && alias ls='ls --group-directories-first'
 alias ll='ls -l'
@@ -201,7 +205,9 @@ alias d='docker'
 #----------------------------------------------------------------------------
 #                             dotfiles management
 #----------------------------------------------------------------------------
+# @help reload-config -- Re-source ~/.zshrc
 alias reload-config='echo "Reloading $HOME/.zshrc"; source $HOME/.zshrc'
+# @help zsh-profile -- Profile shell startup time with zprof
 alias zsh-profile='ZSH_PROFILE=1 zsh -i -c exit'
 if [[ $OSTYPE == darwin* ]]; then
 
@@ -214,6 +220,7 @@ if [[ $OSTYPE == darwin* ]]; then
       arch -x86_64 /bin/bash -c "/usr/local/bin/brew bundle --file $x86brewfile install"
     fi
   }
+  # @help reload-brewfile -- Install packages from ~/.Brewfile (macOS)
   alias reload-brewfile='_reload_brewfile'
   alias edit-brewfile='vim $HOME/.Brewfile'
   alias edit-brewfile-x86='vim $HOME/.Brewfile-x86'
@@ -232,6 +239,7 @@ function _reload_ssh_keys() {
     ssh-add $SSH_ADD_OPTIONS ~/.ssh/$key
   done
 }
+# @help reload-ssh-keys -- Add SSH keys to the agent
 alias reload-ssh-keys='_reload_ssh_keys'
 function _refresh_dotfiles() {
   echo "Pulling latest dotfiles..."
@@ -254,6 +262,7 @@ function _refresh_dotfiles() {
 
   reload-config
 }
+# @help refresh-dotfiles -- Pull latest dotfiles, re-run setup, reload config
 alias refresh-dotfiles=_refresh_dotfiles
 
 #----------------------------------------------------------------------------

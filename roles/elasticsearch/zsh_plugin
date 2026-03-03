@@ -6,10 +6,12 @@ export VAGRANT_WINDOWS_2012R2_BOX=elastic/windows-2012_r2-x86_64
 export VAULT_ADDR=https://secrets.elastic.co:8200
 
 if _dotfiles_require_cmds "elasticsearch vault-login alias" vault; then
+  # @help vault-login -- Authenticate with Vault via GitHub token
   alias vault-login='vault login -method github token="$(<~/.elastic/github.token)"'
 fi
 
 if _dotfiles_require_cmds "elasticsearch okta/aws aliases" okta-awscli; then
+  # @help okta-login -- Authenticate with Okta for AWS access
   alias okta-login='okta-awscli --profile=okta-elastic-dev'
   # aws access
   alias aws='okta-awscli --profile=okta-elastic-dev'
@@ -17,10 +19,16 @@ if _dotfiles_require_cmds "elasticsearch okta/aws aliases" okta-awscli; then
 fi
 
 # shortcuts to projects
+# @help cde -- cd to elasticsearch checkout
 alias cde='cd ~/code/elastic/elasticsearch'
+# @help cdes -- cd to elasticsearch-serverless checkout
 alias cdes='cd ~/code/elastic/elasticsearch-serverless'
+# @help cde8 -- cd to elasticsearch 8.x branch checkout
 alias cde8='cd ~/code/elastic/elasticsearch-8.x'
+# @help cde7 -- cd to elasticsearch 7.x branch checkout
 alias cde7='cd ~/code/elastic/elasticsearch-7.x'
+# @help cde6 -- cd to elasticsearch 6.x branch checkout
 alias cde6='cd ~/code/elastic/elasticsearch-6.x'
+# @help cdb -- cd to elasticsearch-benchmarks
 alias cdb='cd ~/code/elastic/elasticsearch-benchmarks'
 

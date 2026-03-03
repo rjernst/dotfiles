@@ -46,32 +46,41 @@
 	autocorrect = 0
 
 [alias]
+  # @help git co -- Checkout a branch
   co = checkout
+  # @help git cm -- Checkout main branch
   cm = checkout main
+  # @help git ci -- Commit
   ci = commit
   ca = commit -a
   a = add
   b = branch
+  # @help git s -- Show status
   s = status
   cp = cherry-pick
   r = rebase
   ra = rebase --abort
   rc = rebase --continue
+  # @help git pr -- Push current branch and set upstream
   pr = push -u origin HEAD
-  pu = push 
+  pu = push
   p = pull
   f = fetch
   mm = merge main
   sm = submodule
 
   # complex aliases
+  # @help git recommit -- Re-commit with the previous commit message
   recommit = "!git commit -eF $(git rev-parse --git-dir)/COMMIT_EDITMSG"
+  # @help git review -- Fetch a GitHub PR into a review branch
   review = "!f() { git fetch upstream pull/$1/head:review/$1; }; f"
   add-unmerged = "!f() { git ls-files --unmerged | cut -f2 | sort -u ; }; git add `f`"
   sync-remotes = "!f() { git co main; git fetch; git pull --ff-only; git remote prune origin; }; f"
 
   # scripts
+  # @help git make-worktree -- Create a git worktree for an upstream branch
   make-worktree = "!zsh ~/.dotfiles/scripts/git-make-worktree"
+  # @help git cleanup -- Prune merged branches via GitHub API
   cleanup = "!bash ~/.dotfiles/scripts/git-prune-branches"
 
   api = !gh api
