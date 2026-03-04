@@ -75,7 +75,7 @@ SCRIPT
   check_ssh_keys
 
   local perms
-  perms=$(stat -f '%Lp' "$HOME/.ssh" 2>/dev/null || stat -c '%a' "$HOME/.ssh" 2>/dev/null)
+  perms=$(stat -c '%a' "$HOME/.ssh" 2>/dev/null || stat -f '%Lp' "$HOME/.ssh" 2>/dev/null)
   [ "$perms" = "700" ]
 }
 
