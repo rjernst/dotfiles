@@ -344,3 +344,91 @@ SCRIPT
   [[ "$output" == *"5 commit(s) behind"* ]]
   [[ "$output" == *"WARNINGS=1"* ]]
 }
+
+# --- Homebrew drift checks ---
+
+@test "doctor brew-drift: in sync passes" {
+  mkdir -p "$ZDOTDIR/var"
+
+  cat > "$MOCK_BIN/brew" <<'SCRIPT'
+#!/bin/bash
+case "$*" in
+  "bundle list --global --formula") echo "git" ;;
+  "bundle list --global --cask") echo "alfred" ;;
+  "list --installed-on-request --formula") echo "git" ;;
+  "list --installed-as-dependency --formula") echo "" ;;
+  "list --cask") echo "alfred" ;;
+  "bundle check --global --verbose") exit 0 ;;
+esac
+SCRIPT
+  chmod +x "$MOCK_BIN/brew"
+
+  run zsh -c "
+    export OSTYPE=darwin
+    export PATH='$MOCK_BIN:\$PATH'
+    export HOME='$HOME' DOTFILES='$DOTFILES' ZDOTDIR='$ZDOTDIR'
+    source '$DOTFILES/zsh/plugins/dotfiles-doctor.zsh'
+    local _doctor_errors=0 _doctor_warnings=0
+    _doctor_check_brew_drift
+    echo ERRORS=\$_doctor_errors
+    echo WARNINGS=\$_doctor_warnings
+  "
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"OK"*"Brewfile is in sync"* ]]
+  [[ "$output" == *"ERRORS=0"* ]]
+  [[ "$output" == *"WARNINGS=0"* ]]
+}
+
+@test "doctor brew-drift: drift warns with counts" {
+  mkdir -p "$ZDOTDIR/var"
+
+  cat > "$MOCK_BIN/brew" <<'SCRIPT'
+#!/bin/bash
+case "$*" in
+  "bundle list --global --formula") echo "git" ;;
+  "bundle list --global --cask") echo "" ;;
+  "list --installed-on-request --formula") printf "git\nvim\nshellcheck\n" ;;
+  "list --installed-as-dependency --formula") echo "" ;;
+  "list --cask") echo "raycast" ;;
+  "bundle check --global --verbose")
+    echo "→ Formula jq needs to be installed or updated."
+    exit 1 ;;
+esac
+SCRIPT
+  chmod +x "$MOCK_BIN/brew"
+
+  run zsh -c "
+    export OSTYPE=darwin
+    export PATH='$MOCK_BIN:\$PATH'
+    export HOME='$HOME' DOTFILES='$DOTFILES' ZDOTDIR='$ZDOTDIR'
+    source '$DOTFILES/zsh/plugins/dotfiles-doctor.zsh'
+    local _doctor_errors=0 _doctor_warnings=0
+    _doctor_check_brew_drift
+    echo ERRORS=\$_doctor_errors
+    echo WARNINGS=\$_doctor_warnings
+  "
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"WARN"* ]]
+  [[ "$output" == *"3 untracked"* ]]
+  [[ "$output" == *"1 missing"* ]]
+  [[ "$output" == *"WARNINGS=1"* ]]
+}
+
+@test "doctor brew-drift: skipped on non-macOS" {
+  run zsh -c "
+    export OSTYPE=linux-gnu
+    export HOME='$HOME' DOTFILES='$DOTFILES' ZDOTDIR='$ZDOTDIR'
+    source '$DOTFILES/zsh/plugins/dotfiles-doctor.zsh'
+    local _doctor_errors=0 _doctor_warnings=0
+    _doctor_check_brew_drift
+    echo ERRORS=\$_doctor_errors
+    echo WARNINGS=\$_doctor_warnings
+  "
+
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"Homebrew"* ]]
+  [[ "$output" == *"ERRORS=0"* ]]
+  [[ "$output" == *"WARNINGS=0"* ]]
+}

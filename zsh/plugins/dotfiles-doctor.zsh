@@ -195,6 +195,52 @@ _doctor_check_freshness() {
   fi
 }
 
+_doctor_check_brew_drift() {
+  [[ $OSTYPE != darwin* ]] && return
+  _doctor_section "Homebrew"
+
+  # Count untracked formulae (on-request, not a dep, not in Brewfile)
+  local -A brewfile_formulae as_dep
+  local f
+  for f in $(brew bundle list --global --formula 2>/dev/null); do
+    brewfile_formulae[$f]=1
+  done
+  for f in $(brew list --installed-as-dependency --formula 2>/dev/null); do
+    as_dep[$f]=1
+  done
+  local untracked_count=0
+  for f in $(brew list --installed-on-request --formula 2>/dev/null); do
+    (( ${+brewfile_formulae[$f]} || ${+as_dep[$f]} )) || (( untracked_count++ ))
+  done
+
+  # Count untracked casks
+  local -A brewfile_casks
+  for f in $(brew bundle list --global --cask 2>/dev/null); do
+    brewfile_casks[$f]=1
+  done
+  for f in $(brew list --cask 2>/dev/null); do
+    (( ${+brewfile_casks[$f]} )) || (( untracked_count++ ))
+  done
+
+  # Count missing packages
+  local missing_count=0
+  local missing
+  missing=$(brew bundle check --global --verbose 2>/dev/null | grep -c '^→')
+  (( missing )) && missing_count=$missing
+
+  if (( untracked_count == 0 && missing_count == 0 )); then
+    _doctor_pass "Brewfile is in sync"
+  else
+    local detail=""
+    (( untracked_count > 0 )) && detail="$untracked_count untracked"
+    (( missing_count > 0 )) && {
+      [[ -n "$detail" ]] && detail+=", "
+      detail+="$missing_count missing"
+    }
+    _doctor_warn "Brewfile drift: $detail (run brew-drift for details)"
+  fi
+}
+
 _dotfiles_doctor() {
   local _doctor_errors=0
   local _doctor_warnings=0
@@ -208,6 +254,7 @@ _dotfiles_doctor() {
   _doctor_check_git_signing
   _doctor_check_startup_time
   _doctor_check_freshness
+  _doctor_check_brew_drift
 
   echo ""
   if (( _doctor_errors == 0 && _doctor_warnings == 0 )); then

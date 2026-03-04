@@ -225,6 +225,169 @@ if [[ $OSTYPE == darwin* ]]; then
   alias edit-brewfile='vim $HOME/.Brewfile'
   alias edit-brewfile-x86='vim $HOME/.Brewfile-x86'
 
+  function _brew_drift() {
+    local fix=0
+    [[ "$1" == "--fix" ]] && fix=1
+
+    # Find formulae the user explicitly installed (on-request but not as a
+    # dependency) that aren't tracked in the Brewfile. This skips transitive
+    # deps and orphaned deps from uninstalled packages.
+    local -A brewfile_formulae as_dep
+    local f
+    for f in $(brew bundle list --global --formula 2>/dev/null); do
+      brewfile_formulae[$f]=1
+    done
+    for f in $(brew list --installed-as-dependency --formula 2>/dev/null); do
+      as_dep[$f]=1
+    done
+    local untracked_formulae=()
+    for f in $(brew list --installed-on-request --formula 2>/dev/null); do
+      (( ${+brewfile_formulae[$f]} || ${+as_dep[$f]} )) || untracked_formulae+=("$f")
+    done
+
+    # Compare installed casks against Brewfile (casks have no dependency chains)
+    local -A brewfile_casks
+    for f in $(brew bundle list --global --cask 2>/dev/null); do
+      brewfile_casks[$f]=1
+    done
+    local untracked_casks=()
+    for f in $(brew list --cask 2>/dev/null); do
+      (( ${+brewfile_casks[$f]} )) || untracked_casks+=("$f")
+    done
+
+    # Collect missing packages (in Brewfile but not installed)
+    local missing_lines=()
+    local line
+    while IFS= read -r line; do
+      [[ -n "$line" ]] && missing_lines+=("$line")
+    done < <(brew bundle check --global --verbose 2>/dev/null | grep '^→' | sed 's/^→ //')
+
+    local has_drift=0
+
+    # --- Untracked formulae ---
+    if (( ${#untracked_formulae} )); then
+      has_drift=1
+      echo "Untracked formulae (installed but not in Brewfile):"
+      if (( fix )); then
+        local action
+        for f in $untracked_formulae; do
+          echo -n "  $f — (a)dd to Brewfile, (u)ninstall, (s)kip? "
+          read -r -k1 action; echo ""
+          case $action in
+            a|A) echo "brew \"$f\"" >> ~/.Brewfile; echo "    → Added" ;;
+            u|U) brew uninstall "$f" && echo "    → Uninstalled" ;;
+            *) ;;
+          esac
+        done
+      else
+        for f in $untracked_formulae; do echo "  $f"; done
+      fi
+    fi
+
+    # --- Untracked casks ---
+    if (( ${#untracked_casks} )); then
+      [[ $has_drift -eq 1 ]] && echo ""
+      has_drift=1
+      echo "Untracked casks (installed but not in Brewfile):"
+      if (( fix )); then
+        local action
+        for f in $untracked_casks; do
+          echo -n "  $f — (a)dd to Brewfile, (u)ninstall, (s)kip? "
+          read -r -k1 action; echo ""
+          case $action in
+            a|A) echo "cask \"$f\"" >> ~/.Brewfile; echo "    → Added" ;;
+            u|U) brew uninstall --cask "$f" && echo "    → Uninstalled" ;;
+            *) ;;
+          esac
+        done
+      else
+        for f in $untracked_casks; do echo "  $f"; done
+      fi
+    fi
+
+    # --- Missing packages ---
+    if (( ${#missing_lines} )); then
+      [[ $has_drift -eq 1 ]] && echo ""
+      has_drift=1
+      echo "Missing (in Brewfile but not installed):"
+      if (( fix )); then
+        local action pkg_type pkg_name
+        for line in $missing_lines; do
+          pkg_type=${line%% *}
+          pkg_name=${${line#* }%% needs*}
+          echo -n "  $line — (i)nstall, (r)emove from Brewfile, (s)kip? "
+          read -r -k1 action; echo ""
+          case $action in
+            i|I)
+              case $pkg_type in
+                Formula)
+                  if brew list --formula "$pkg_name" &>/dev/null; then
+                    brew upgrade --formula "$pkg_name" && echo "    → Upgraded"
+                  else
+                    brew install "$pkg_name" && echo "    → Installed"
+                  fi ;;
+                Cask)
+                  if brew list --cask "$pkg_name" &>/dev/null; then
+                    brew upgrade --cask "$pkg_name" && echo "    → Upgraded"
+                  else
+                    brew install --cask "$pkg_name" && echo "    → Installed"
+                  fi ;;
+                App)
+                  local mas_id
+                  mas_id=$(grep -F "mas \"$pkg_name\"" ~/.Brewfile | grep -o 'id: [0-9]*' | grep -o '[0-9]*')
+                  if [[ -n "$mas_id" ]]; then
+                    mas install "$mas_id" && echo "    → Installed"
+                  else
+                    echo "    → Could not find mas ID in Brewfile for: $pkg_name"
+                  fi ;;
+              esac ;;
+            r|R)
+              case $pkg_type in
+                Formula) sed -i '' "/^brew \"$pkg_name\"/d" ~/.Brewfile ;;
+                Cask) sed -i '' "/^cask \"$pkg_name\"/d" ~/.Brewfile ;;
+                App) sed -i '' "/^mas \"$pkg_name\"/d" ~/.Brewfile ;;
+              esac
+              echo "    → Removed from Brewfile" ;;
+            *) ;;
+          esac
+        done
+      else
+        for line in $missing_lines; do echo "  $line"; done
+      fi
+    fi
+
+    # Check x86 Brewfile if present (display only, --fix not supported)
+    local x86brewfile=~/.Brewfile-x86
+    if [[ -f "$x86brewfile" && -f /usr/local/bin/brew ]]; then
+      local x86_untracked
+      x86_untracked=$(arch -x86_64 /bin/bash -c "/usr/local/bin/brew bundle cleanup --file $x86brewfile" 2>/dev/null)
+      if [[ -n "$x86_untracked" ]]; then
+        [[ $has_drift -eq 1 ]] && echo ""
+        has_drift=1
+        echo "Untracked x86 (installed but not in Brewfile-x86):"
+        echo "$x86_untracked" | sed 's/^/  /'
+      fi
+
+      local x86_missing
+      x86_missing=$(arch -x86_64 /bin/bash -c "/usr/local/bin/brew bundle check --file $x86brewfile --verbose" 2>/dev/null | grep '^→' | sed 's/^→ //')
+      if [[ -n "$x86_missing" ]]; then
+        [[ $has_drift -eq 1 ]] && echo ""
+        has_drift=1
+        echo "Missing x86 (in Brewfile-x86 but not installed):"
+        echo "$x86_missing" | sed 's/^/  /'
+      fi
+    fi
+
+    if [[ $has_drift -eq 1 && $fix -eq 0 ]]; then
+      echo ""
+      echo "Run 'brew-drift --fix' to resolve interactively."
+    elif [[ $has_drift -eq 0 ]]; then
+      echo "Brewfile is in sync."
+    fi
+  }
+  # @help brew-drift -- Show Brewfile vs installed package drift (macOS)
+  alias brew-drift='_brew_drift'
+
   function _brew_x86() {
     arch -x86_64 /bin/bash -c "/usr/local/bin/brew $@"
   }
