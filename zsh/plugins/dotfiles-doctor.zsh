@@ -226,7 +226,8 @@ _doctor_check_brew_drift() {
   local missing_count=0
   local line pkg_type pkg_name
   while IFS= read -r line; do
-    [[ -z "$line" ]] && continue
+    [[ "$line" == →\ * ]] || continue
+    line=${line#→ }
     pkg_type=${line%% *}
     pkg_name=${${line#* }%% needs*}
     case $pkg_type in
@@ -234,7 +235,7 @@ _doctor_check_brew_drift() {
       Cask) brew list --cask "$pkg_name" &>/dev/null && continue ;;
     esac
     (( missing_count++ ))
-  done < <(brew bundle check --global --verbose 2>/dev/null | grep '^→' | sed 's/^→ //')
+  done < <(brew bundle check --global --verbose 2>/dev/null)
 
   if (( untracked_count == 0 && missing_count == 0 )); then
     _doctor_pass "Brewfile is in sync"

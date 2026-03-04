@@ -259,7 +259,8 @@ if [[ $OSTYPE == darwin* ]]; then
     local missing_lines=()
     local line pkg_type pkg_name
     while IFS= read -r line; do
-      [[ -z "$line" ]] && continue
+      [[ "$line" == →\ * ]] || continue
+      line=${line#→ }
       pkg_type=${line%% *}
       pkg_name=${${line#* }%% needs*}
       case $pkg_type in
@@ -267,7 +268,7 @@ if [[ $OSTYPE == darwin* ]]; then
         Cask) brew list --cask "$pkg_name" &>/dev/null && continue ;;
       esac
       missing_lines+=("$line")
-    done < <(brew bundle check --global --verbose 2>/dev/null | grep '^→' | sed 's/^→ //')
+    done < <(brew bundle check --global --verbose 2>/dev/null)
 
     local has_drift=0
 
