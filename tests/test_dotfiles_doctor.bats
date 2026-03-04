@@ -359,6 +359,7 @@ case "$*" in
   "list --installed-as-dependency --formula") echo "" ;;
   "list --cask") echo "alfred" ;;
   "bundle check --global --verbose") exit 0 ;;
+  list\ --formula\ *|list\ --cask\ *) exit 0 ;;
 esac
 SCRIPT
   chmod +x "$MOCK_BIN/brew"
@@ -394,6 +395,8 @@ case "$*" in
   "bundle check --global --verbose")
     echo "→ Formula jq needs to be installed or updated."
     exit 1 ;;
+  "list --formula jq") exit 1 ;;
+  list\ --formula\ *|list\ --cask\ *) exit 0 ;;
 esac
 SCRIPT
   chmod +x "$MOCK_BIN/brew"

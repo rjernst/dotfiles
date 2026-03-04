@@ -222,11 +222,19 @@ _doctor_check_brew_drift() {
     (( ${+brewfile_casks[$f]} )) || (( untracked_count++ ))
   done
 
-  # Count missing packages
+  # Count truly missing packages (skip already-installed but outdated)
   local missing_count=0
-  local missing
-  missing=$(brew bundle check --global --verbose 2>/dev/null | grep -c '^→')
-  (( missing )) && missing_count=$missing
+  local line pkg_type pkg_name
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    pkg_type=${line%% *}
+    pkg_name=${${line#* }%% needs*}
+    case $pkg_type in
+      Formula) brew list --formula "$pkg_name" &>/dev/null && continue ;;
+      Cask) brew list --cask "$pkg_name" &>/dev/null && continue ;;
+    esac
+    (( missing_count++ ))
+  done < <(brew bundle check --global --verbose 2>/dev/null | grep '^→' | sed 's/^→ //')
 
   if (( untracked_count == 0 && missing_count == 0 )); then
     _doctor_pass "Brewfile is in sync"

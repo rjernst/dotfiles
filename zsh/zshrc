@@ -255,11 +255,18 @@ if [[ $OSTYPE == darwin* ]]; then
       (( ${+brewfile_casks[$f]} )) || untracked_casks+=("$f")
     done
 
-    # Collect missing packages (in Brewfile but not installed)
+    # Collect truly missing packages (skip already-installed but outdated)
     local missing_lines=()
-    local line
+    local line pkg_type pkg_name
     while IFS= read -r line; do
-      [[ -n "$line" ]] && missing_lines+=("$line")
+      [[ -z "$line" ]] && continue
+      pkg_type=${line%% *}
+      pkg_name=${${line#* }%% needs*}
+      case $pkg_type in
+        Formula) brew list --formula "$pkg_name" &>/dev/null && continue ;;
+        Cask) brew list --cask "$pkg_name" &>/dev/null && continue ;;
+      esac
+      missing_lines+=("$line")
     done < <(brew bundle check --global --verbose 2>/dev/null | grep '^→' | sed 's/^→ //')
 
     local has_drift=0
@@ -320,18 +327,8 @@ if [[ $OSTYPE == darwin* ]]; then
           case $action in
             i|I)
               case $pkg_type in
-                Formula)
-                  if brew list --formula "$pkg_name" &>/dev/null; then
-                    brew upgrade --formula "$pkg_name" && echo "    → Upgraded"
-                  else
-                    brew install "$pkg_name" && echo "    → Installed"
-                  fi ;;
-                Cask)
-                  if brew list --cask "$pkg_name" &>/dev/null; then
-                    brew upgrade --cask "$pkg_name" && echo "    → Upgraded"
-                  else
-                    brew install --cask "$pkg_name" && echo "    → Installed"
-                  fi ;;
+                Formula) brew install "$pkg_name" && echo "    → Installed" ;;
+                Cask) brew install --cask "$pkg_name" && echo "    → Installed" ;;
                 App)
                   local mas_id
                   mas_id=$(grep -F "mas \"$pkg_name\"" ~/.Brewfile | grep -o 'id: [0-9]*' | grep -o '[0-9]*')

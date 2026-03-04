@@ -16,7 +16,9 @@ setup() {
   # Create a mock Brewfile (referenced by --global)
   touch "$HOME/.Brewfile"
 
-  # Create mock brew that returns data from files
+  # Create mock brew that returns data from files.
+  # For "list --formula <name>" / "list --cask <name>" queries, check
+  # whether the package appears in the installed lists (exit 1 if not).
   cat > "$MOCK_BIN/brew" <<'SCRIPT'
 #!/bin/bash
 case "$*" in
@@ -30,6 +32,13 @@ case "$*" in
     cat "$BREW_MOCK_DIR/list-as-dep" 2>/dev/null ;;
   "list --cask")
     cat "$BREW_MOCK_DIR/list-cask" 2>/dev/null ;;
+  list\ --formula\ *)
+    args="$*"; pkg="${args#list --formula }"
+    grep -qx "$pkg" "$BREW_MOCK_DIR/list-on-request" 2>/dev/null ||
+    grep -qx "$pkg" "$BREW_MOCK_DIR/list-as-dep" 2>/dev/null ;;
+  list\ --cask\ *)
+    args="$*"; pkg="${args#list --cask }"
+    grep -qx "$pkg" "$BREW_MOCK_DIR/list-cask" 2>/dev/null ;;
   "bundle check --global --verbose")
     cat "$BREW_MOCK_DIR/bundle-check" 2>/dev/null
     exit "${BREW_CHECK_EXIT:-0}" ;;
@@ -129,6 +138,50 @@ EOF
   # Header/footer lines should be stripped
   [[ "$output" != *"can't satisfy"* ]]
   [[ "$output" != *"Satisfy missing"* ]]
+}
+
+@test "brew-drift: outdated packages excluded from missing" {
+  echo -e "git\nawscli" > "$BREW_MOCK_DIR/bundle-list-formula"
+  echo "claude-code" > "$BREW_MOCK_DIR/bundle-list-cask"
+  echo -e "git\nawscli" > "$BREW_MOCK_DIR/list-on-request"
+  : > "$BREW_MOCK_DIR/list-as-dep"
+  echo "claude-code" > "$BREW_MOCK_DIR/list-cask"
+  # awscli and claude-code are installed but outdated; jq is truly missing
+  cat > "$BREW_MOCK_DIR/bundle-check" <<'EOF'
+brew bundle can't satisfy your Brewfile's dependencies.
+→ Formula awscli needs to be installed or updated.
+→ Formula jq needs to be installed or updated.
+→ Cask claude-code needs to be installed or updated.
+Satisfy missing dependencies with `brew bundle install`.
+EOF
+  export BREW_CHECK_EXIT=1
+
+  run zsh "$HELPER"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Missing"* ]]
+  [[ "$output" == *"Formula jq"* ]]
+  # awscli and claude-code are installed (just outdated), should be excluded
+  [[ "$output" != *"awscli"* ]]
+  [[ "$output" != *"claude-code"* ]]
+}
+
+@test "brew-drift: all missing are outdated shows in sync" {
+  echo "awscli" > "$BREW_MOCK_DIR/bundle-list-formula"
+  : > "$BREW_MOCK_DIR/bundle-list-cask"
+  echo "awscli" > "$BREW_MOCK_DIR/list-on-request"
+  : > "$BREW_MOCK_DIR/list-as-dep"
+  : > "$BREW_MOCK_DIR/list-cask"
+  cat > "$BREW_MOCK_DIR/bundle-check" <<'EOF'
+→ Formula awscli needs to be installed or updated.
+EOF
+  export BREW_CHECK_EXIT=1
+
+  run zsh "$HELPER"
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Brewfile is in sync"* ]]
+  [[ "$output" != *"Missing"* ]]
 }
 
 @test "brew-drift: mixed untracked and missing" {
