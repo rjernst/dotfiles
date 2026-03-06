@@ -39,11 +39,17 @@ setup() {
 }
 
 @test "java role creates jenv dir and zsh plugin symlink" {
-  # Stub jenv so role setup can call 'jenv enable-plugin'
+  # Stub jenv so role setup can call 'jenv init -' and 'jenv enable-plugin'
   MOCK_BIN="$BATS_TEST_TMPDIR/mock-bin"
+  MOCK_LOG="$BATS_TEST_TMPDIR/jenv-calls.log"
   mkdir -p "$MOCK_BIN"
-  cat > "$MOCK_BIN/jenv" <<'SCRIPT'
+  cat > "$MOCK_BIN/jenv" <<SCRIPT
 #!/bin/bash
+echo "\$*" >> "$MOCK_LOG"
+if [ "\$1" = "init" ]; then
+  # jenv init outputs shell setup; emit a no-op so eval succeeds
+  echo "true"
+fi
 exit 0
 SCRIPT
   chmod +x "$MOCK_BIN/jenv"
@@ -54,6 +60,11 @@ SCRIPT
 
   [ -d "$HOME/.jenv/versions" ]
   [ -L "$HOME/.zsh/plugins/java.zsh" ]
+
+  # Verify jenv was initialized and plugins were enabled
+  grep -q "^init -$" "$MOCK_LOG"
+  grep -q "^enable-plugin gradle$" "$MOCK_LOG"
+  grep -q "^enable-plugin export$" "$MOCK_LOG"
 }
 
 @test "jdk role creates zsh plugin symlink" {
@@ -63,7 +74,32 @@ SCRIPT
 }
 
 @test "node role creates zsh plugin symlink" {
+  # Stub fnm so requires_cmds check passes
+  MOCK_BIN="$BATS_TEST_TMPDIR/mock-bin"
+  mkdir -p "$MOCK_BIN"
+  printf '#!/bin/bash\nexit 0\n' > "$MOCK_BIN/fnm"
+  chmod +x "$MOCK_BIN/fnm"
+  export PATH="$MOCK_BIN:$PATH"
+
   run zsh "$HELPER" node
   [ "$status" -eq 0 ]
   [ -L "$HOME/.zsh/plugins/node.zsh" ]
+}
+
+@test "role with missing required command is skipped with warning" {
+  # Create a temporary role that requires a non-existent command
+  local role_dir="$DOTFILES/roles/_test_missing_cmd"
+  mkdir -p "$role_dir"
+  echo "no_such_command_xyz" > "$role_dir/requires_cmds"
+  cat > "$role_dir/setup" <<'SCRIPT'
+echo "setup should not run"
+SCRIPT
+
+  run zsh "$HELPER" _test_missing_cmd
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"missing required commands"* ]]
+  [[ "$output" != *"setup should not run"* ]]
+
+  # Clean up the temporary role
+  rm -rf "$role_dir"
 }

@@ -2,6 +2,7 @@
 set -e
 
 DOTFILES=$HOME/.dotfiles
+source "$DOTFILES/zsh/tool_packages.zsh"
 
 # --- argument parsing ---
 DRY_RUN=0
@@ -54,6 +55,14 @@ setup_link() {
   fi
 }
 
+_dotfiles_install_hint() {
+  if [[ $OSTYPE == darwin* ]]; then
+    echo "${_dotfiles_brew_pkg[$1]}"
+  elif [[ $OSTYPE == linux* ]]; then
+    echo "${_dotfiles_pacman_pkg[$1]}"
+  fi
+}
+
 link_role() {
   if (( DRY_RUN )); then
     echo "[dry-run] Adding role $1"
@@ -65,6 +74,52 @@ link_role() {
     echo "ERROR: No role dir at $role_dir"
     return
   fi
+
+  # Check for required commands before running install/setup
+  local requires_cmds_file="$DOTFILES/$role_dir/requires_cmds"
+  if [ -f "$requires_cmds_file" ]; then
+    local missing_cmds=()
+    local cmd
+    while IFS= read -r cmd; do
+      [[ -z "$cmd" || "$cmd" = \#* ]] && continue
+      if ! command -v "$cmd" >/dev/null 2>&1; then
+        missing_cmds+=("$cmd")
+      fi
+    done < "$requires_cmds_file"
+
+    if (( ${#missing_cmds} )); then
+      for cmd in "${missing_cmds[@]}"; do
+        local hint=$(_dotfiles_install_hint "$cmd")
+        if [[ -n "$hint" ]]; then
+          echo "Role '$1' requires '$cmd' — install with: $hint"
+          if (( ! DRY_RUN )); then
+            printf "Install now? [y/N] "
+            read -r answer
+            if [[ "$answer" == [yY]* ]]; then
+              eval "$hint"
+            fi
+          fi
+        else
+          echo "Role '$1' requires '$cmd' (no install hint available)"
+        fi
+      done
+
+      # Re-check after install attempts
+      local still_missing=()
+      while IFS= read -r cmd; do
+        [[ -z "$cmd" || "$cmd" = \#* ]] && continue
+        if ! command -v "$cmd" >/dev/null 2>&1; then
+          still_missing+=("$cmd")
+        fi
+      done < "$requires_cmds_file"
+
+      if (( ${#still_missing} )); then
+        echo "WARNING: skipping role '$1' — missing required commands: ${still_missing[*]}"
+        return
+      fi
+    fi
+  fi
+
   install_file=$DOTFILES/$role_dir/install
   if [ -f $install_file ]; then
     if (( DRY_RUN )); then

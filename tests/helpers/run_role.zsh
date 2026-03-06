@@ -6,6 +6,15 @@
 set -e
 
 DRY_RUN=${DRY_RUN:-0}
+source "$DOTFILES/zsh/tool_packages.zsh"
+
+_dotfiles_install_hint() {
+  if [[ $OSTYPE == darwin* ]]; then
+    echo "${_dotfiles_brew_pkg[$1]}"
+  elif [[ $OSTYPE == linux* ]]; then
+    echo "${_dotfiles_pacman_pkg[$1]}"
+  fi
+}
 
 setup_link() {
   src="$DOTFILES/$1"
@@ -40,6 +49,33 @@ link_role() {
     echo "ERROR: No role dir at $role_dir"
     return 1
   fi
+
+  # Check for required commands before running install/setup
+  local requires_cmds_file="$DOTFILES/$role_dir/requires_cmds"
+  if [ -f "$requires_cmds_file" ]; then
+    local missing_cmds=()
+    local cmd
+    while IFS= read -r cmd; do
+      [[ -z "$cmd" || "$cmd" = \#* ]] && continue
+      if ! command -v "$cmd" >/dev/null 2>&1; then
+        missing_cmds+=("$cmd")
+      fi
+    done < "$requires_cmds_file"
+
+    if (( ${#missing_cmds} )); then
+      for cmd in "${missing_cmds[@]}"; do
+        local hint=$(_dotfiles_install_hint "$cmd")
+        if [[ -n "$hint" ]]; then
+          echo "Role '$1' requires '$cmd' — install with: $hint"
+        else
+          echo "Role '$1' requires '$cmd' (no install hint available)"
+        fi
+      done
+      echo "WARNING: skipping role '$1' — missing required commands: ${missing_cmds[*]}"
+      return 1
+    fi
+  fi
+
   install_file=$DOTFILES/$role_dir/install
   if [ -f "$install_file" ]; then
     if (( DRY_RUN )); then

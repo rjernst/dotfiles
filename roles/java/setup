@@ -2,8 +2,8 @@
 
 mkdir -p "$HOME/.jenv/versions"
 
-# shellcheck disable=SC2154
-source "${0:a:h}/zsh_plugin"
+export PATH="$HOME/.jenv/bin:$PATH"
+eval "$(command jenv init -)"
 
 jenv enable-plugin gradle
 jenv enable-plugin export
