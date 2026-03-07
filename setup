@@ -215,6 +215,8 @@ if [[ $OSTYPE == darwin* ]]; then
   fi
 fi
 
+setup_link "tmux/tmux.conf"                      ".tmux.conf"
+
 dry_mkdir $HOME/.config
 setup_link "starship/starship.toml"              ".config/starship.toml"
 
