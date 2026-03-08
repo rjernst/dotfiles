@@ -17,7 +17,6 @@
 set -e
 
 SELF=${0:A}
-RALPH_CONFIG_DIR="$HOME/.config/ralph"
 
 usage() {
   sed -n '/^# Usage:/,/^[^#]/p' "$SELF" | sed -n 's/^# \{0,1\}//p'
@@ -85,20 +84,20 @@ else
     --build-arg "HOST_UID=$HOST_UID"
 fi
 
-# --- ensure config dir exists ---
-mkdir -p "$RALPH_CONFIG_DIR"
-
 # --- login mode ---
 if [[ $LOGIN -eq 1 ]]; then
-  echo "ralph: starting interactive login"
-  docker run --rm -it \
-    -v "$RALPH_CONFIG_DIR:/claude-config" \
-    -e "CLAUDE_CONFIG_DIR=/claude-config" \
-    --entrypoint claude \
-    "$IMAGE_TAG" \
-    setup-token
-  exit 0
+  echo "ralph: running 'claude setup-token' to generate auth token..."
+  claude setup-token
+  exit $?
 fi
+
+# --- resolve auth token ---
+# On macOS, claude stores OAuth credentials in Keychain.
+# Extract and pass via env var so the container can authenticate.
+OAUTH_TOKEN=$(security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null) || {
+  echo "ralph: no Claude credentials found — run 'ralph --login' first" >&2
+  exit 1
+}
 
 if [[ ! -f "$PROMPT_FILE" ]]; then
   echo "ralph: prompt file not found: $PROMPT_FILE" >&2
@@ -140,8 +139,6 @@ TTY_FLAGS="-i"
 exec docker run --rm $TTY_FLAGS \
   -v "$PWD:/work" \
   "${WORKTREE_MOUNT[@]}" \
-  -v "$RALPH_CONFIG_DIR:/claude-config" \
-  -e "CLAUDE_CONFIG_DIR=/claude-config" \
   -v "$HOME/.gitconfig:/home/ralph/.gitconfig:ro" \
   -v "$HOME/.ssh:/home/ralph/.ssh:ro" \
   -e "MAX_ITERATIONS=$MAX_ITERATIONS" \
@@ -150,4 +147,5 @@ exec docker run --rm $TTY_FLAGS \
   -e "MODEL=$MODEL" \
   -e "GIT_USER=$GIT_USER" \
   -e "GIT_EMAIL=$GIT_EMAIL" \
+  -e "CLAUDE_CODE_OAUTH_TOKEN=$OAUTH_TOKEN" \
   "$IMAGE_TAG"
