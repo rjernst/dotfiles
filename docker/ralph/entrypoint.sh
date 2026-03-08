@@ -31,22 +31,28 @@ while true; do
     --dangerously-skip-permissions \
     --model "${MODEL:-sonnet}" \
     <<PROMPT || echo "ralph: claude exited with error ($?), continuing..."
-You are an AI coding agent working in an iterative loop.
-Read the file at \`$PROMPT_FILE\` for what to build.
+You are an AI coding agent. You will be invoked repeatedly — once per task.
+Read the spec file at \`$PROMPT_FILE\` for what to build.
 
+Your job this iteration: implement EXACTLY ONE task, then stop.
+
+Steps:
 1. Study the spec and existing codebase (especially CLAUDE.md) to understand patterns
 2. Check git log to see what has already been implemented
-3. Pick the next incomplete task
-4. Implement it fully — no stubs or placeholders
+3. Pick the FIRST incomplete task from the spec
+4. Implement that single task fully — no stubs or placeholders
 5. Write tests as appropriate for the project
 6. Run the tests
-7. If tests pass, mark the task done in the spec file and commit with a descriptive message
+7. If tests pass, mark ONLY that task done in the spec file and commit
 8. If tests fail, fix before committing
 
+IMPORTANT: Do NOT implement more than one task. After committing, stop immediately.
+The loop will call you again for the next task.
+
 Rules:
+- One task, one commit, then stop
 - Follow conventions in CLAUDE.md if it exists
 - Search the codebase before assuming something isn't implemented
-- One meaningful commit per iteration
 PROMPT
 
   if [[ ${PUSH:-0} -eq 1 ]]; then
