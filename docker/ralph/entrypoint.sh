@@ -10,6 +10,7 @@ else
 fi
 export GIT_CONFIG_GLOBAL="$RALPH_GITCONFIG"
 
+
 git config --global user.name "${GIT_USER:-ralph}"
 git config --global user.email "${GIT_EMAIL:-ralph@localhost}"
 git config --global --add safe.directory /work
