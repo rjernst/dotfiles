@@ -63,22 +63,26 @@ fi
 RALPH_DIR=${0:A:h}/../docker/ralph
 HOST_UID=$(id -u)
 
+build_image() {
+  local tag=$1; shift
+  if docker image inspect "$tag" &>/dev/null; then
+    echo "ralph: using cached image $tag"
+  else
+    echo "ralph: building image $tag (this may take a minute)..."
+    docker build "$@" -t "$tag" "$RALPH_DIR"
+  fi
+}
+
 if [[ -n $PACKAGES ]]; then
-  # Tag with hash of package list + UID for layer cache hits
   PKG_HASH=$(echo "$PACKAGES:$HOST_UID" | shasum -a 256 | cut -c1-12)
   IMAGE_TAG="ralph:custom-${PKG_HASH}"
-  echo "ralph: building image with extra packages: $PACKAGES"
-  docker build -q \
+  build_image "$IMAGE_TAG" \
     --build-arg "EXTRA_PACKAGES=$PACKAGES" \
-    --build-arg "HOST_UID=$HOST_UID" \
-    -t "$IMAGE_TAG" \
-    "$RALPH_DIR"
+    --build-arg "HOST_UID=$HOST_UID"
 else
   IMAGE_TAG="ralph:uid-${HOST_UID}"
-  docker build -q \
-    --build-arg "HOST_UID=$HOST_UID" \
-    -t "$IMAGE_TAG" \
-    "$RALPH_DIR"
+  build_image "$IMAGE_TAG" \
+    --build-arg "HOST_UID=$HOST_UID"
 fi
 
 # --- ensure config dir exists ---
