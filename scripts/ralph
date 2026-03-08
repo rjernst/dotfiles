@@ -91,11 +91,11 @@ mkdir -p "$RALPH_CONFIG_DIR"
 # --- login mode ---
 if [[ $LOGIN -eq 1 ]]; then
   echo "ralph: starting interactive login"
-  exec docker run --rm -it \
+  docker run --rm -it \
     -v "$RALPH_CONFIG_DIR:/home/ralph/.claude" \
     --entrypoint claude \
     "$IMAGE_TAG" \
-    auth login
+    setup-token
 fi
 
 # --- validate ---
