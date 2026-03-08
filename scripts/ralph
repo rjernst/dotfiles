@@ -91,7 +91,7 @@ if [[ $LOGIN -eq 1 ]]; then
     -v "$RALPH_CONFIG_DIR:/home/ralph/.claude" \
     --entrypoint claude \
     "$IMAGE_TAG" \
-    /login
+    auth login
 fi
 
 # --- validate ---
