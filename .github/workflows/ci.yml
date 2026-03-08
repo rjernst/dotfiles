@@ -50,6 +50,13 @@ jobs:
               errors=$((errors + 1))
             fi
           done
+          # docker entrypoints
+          for f in docker/*/entrypoint.sh; do
+            [ -f "$f" ] || continue
+            if ! shellcheck --severity=warning "$f"; then
+              errors=$((errors + 1))
+            fi
+          done
           exit $errors
 
       - name: Zsh syntax check
@@ -62,3 +69,49 @@ jobs:
             fi
           done
           exit $errors
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build ralph image
+        run: docker build -t ralph:latest docker/ralph/
+
+      - name: Verify container environment
+        run: |
+          docker run --rm --entrypoint bash ralph:latest -c '
+            set -e
+            [ "$(whoami)" = "ralph" ]
+            command -v git
+            command -v claude
+            command -v jq
+            command -v rg
+            [ "$(pwd)" = "/work" ]
+          '
+
+      - name: Smoke test entrypoint loop
+        run: |
+          tmp=$(mktemp -d)
+          git init -q "$tmp"
+          echo "Say hello" > "$tmp/PROMPT.md"
+
+          # Stub claude inside the container by bind-mounting over the real binary
+          mkdir -p "$tmp/bin"
+          printf '#!/bin/bash\ncat > /dev/null\necho "claude stub ok"\n' > "$tmp/bin/claude"
+          chmod +x "$tmp/bin/claude"
+
+          docker run --rm \
+            -v "$tmp:/work" \
+            -v "$tmp/bin/claude:/usr/local/bin/claude:ro" \
+            -e MAX_ITERATIONS=2 \
+            -e PROMPT_FILE=PROMPT.md \
+            -e MODEL=sonnet \
+            -e PUSH=0 \
+            ralph:latest 2>&1 | tee "$tmp/output.log"
+
+          grep -q "iteration 1" "$tmp/output.log"
+          grep -q "iteration 2" "$tmp/output.log"
+          grep -q "reached max iterations (2)" "$tmp/output.log"
+          grep -q "claude stub ok" "$tmp/output.log"
+          rm -rf "$tmp"

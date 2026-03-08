@@ -1,0 +1,108 @@
+#!/usr/bin/env zsh
+# ralph — Dockerized AI coding loop
+#
+# Repeatedly invokes Claude Code inside a Docker container. Each iteration
+# gets fresh context, reads the prompt file + git history, implements the
+# next task, commits, and exits. The entrypoint loop restarts the agent.
+#
+# Usage: ralph [options] [max-iterations]
+#
+# Options:
+#   --packages "pkg ..."  Extra apt packages baked into image
+#   --push                Git push after each iteration
+#   --prompt <file>       Prompt file (default: PROMPT.md)
+#   --model <model>       Claude model (default: sonnet)
+#   -h, --help            Show usage
+set -e
+
+SELF=${0:A}
+
+usage() {
+  sed -n '/^# Usage:/,/^[^#]/p' "$SELF" | sed -n 's/^# \{0,1\}//p'
+  exit "${1:-0}"
+}
+
+# --- defaults ---
+PROMPT_FILE=PROMPT.md
+PACKAGES=""
+PUSH=0
+MODEL=sonnet
+MAX_ITERATIONS=0
+
+# --- parse args ---
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --packages)
+      PACKAGES=$2; shift 2 ;;
+    --push)
+      PUSH=1; shift ;;
+    --prompt)
+      PROMPT_FILE=$2; shift 2 ;;
+    --model)
+      MODEL=$2; shift 2 ;;
+    -h|--help)
+      usage 0 ;;
+    -*)
+      echo "Unknown option: $1" >&2; usage 1 ;;
+    *)
+      MAX_ITERATIONS=$1; shift ;;
+  esac
+done
+
+# --- validate ---
+if [[ ! -f "$PROMPT_FILE" ]]; then
+  echo "ralph: prompt file not found: $PROMPT_FILE" >&2
+  echo "Create a PROMPT.md or use --prompt <file>" >&2
+  exit 1
+fi
+
+if ! command -v docker &>/dev/null; then
+  echo "ralph: docker is not installed" >&2
+  exit 1
+fi
+
+# --- build image ---
+RALPH_DIR=${0:A:h}/../docker/ralph
+
+if [[ -n $PACKAGES ]]; then
+  # Tag with hash of package list for layer cache hits
+  PKG_HASH=$(echo "$PACKAGES" | shasum -a 256 | cut -c1-12)
+  IMAGE_TAG="ralph:custom-${PKG_HASH}"
+  echo "ralph: building image with extra packages: $PACKAGES"
+  docker build -q \
+    --build-arg "EXTRA_PACKAGES=$PACKAGES" \
+    -t "$IMAGE_TAG" \
+    "$RALPH_DIR"
+else
+  IMAGE_TAG="ralph:latest"
+  docker build -q -t "$IMAGE_TAG" "$RALPH_DIR"
+fi
+
+# --- resolve prompt file to absolute path relative to $PWD ---
+# The container mounts $PWD at /work, so we need the path relative to $PWD
+PROMPT_ABS=${PROMPT_FILE:A}
+PWD_ABS=${PWD:A}
+if [[ $PROMPT_ABS != $PWD_ABS/* ]]; then
+  echo "ralph: prompt file must be inside the current directory" >&2
+  exit 1
+fi
+PROMPT_REL=${PROMPT_ABS#"$PWD_ABS"/}
+
+# --- configure git inside container ---
+GIT_USER=$(git config user.name 2>/dev/null || echo "ralph")
+GIT_EMAIL=$(git config user.email 2>/dev/null || echo "ralph@localhost")
+
+# --- run container ---
+echo "ralph: starting (image=$IMAGE_TAG, prompt=$PROMPT_REL, model=$MODEL)"
+exec docker run --rm -it \
+  -v "$PWD:/work" \
+  -v "$HOME/.claude:/home/ralph/.claude:ro" \
+  -v "$HOME/.gitconfig:/home/ralph/.gitconfig:ro" \
+  -v "$HOME/.ssh:/home/ralph/.ssh:ro" \
+  -e "MAX_ITERATIONS=$MAX_ITERATIONS" \
+  -e "PUSH=$PUSH" \
+  -e "PROMPT_FILE=$PROMPT_REL" \
+  -e "MODEL=$MODEL" \
+  -e "GIT_USER=$GIT_USER" \
+  -e "GIT_EMAIL=$GIT_EMAIL" \
+  "$IMAGE_TAG"
