@@ -94,7 +94,9 @@ GIT_EMAIL=$(git config user.email 2>/dev/null || echo "ralph@localhost")
 
 # --- run container ---
 echo "ralph: starting (image=$IMAGE_TAG, prompt=$PROMPT_REL, model=$MODEL)"
-exec docker run --rm -it \
+TTY_FLAGS="-i"
+[[ -t 1 ]] && TTY_FLAGS="-it"
+exec docker run --rm $TTY_FLAGS \
   -v "$PWD:/work" \
   -v "$HOME/.claude:/home/ralph/.claude:ro" \
   -v "$HOME/.gitconfig:/home/ralph/.gitconfig:ro" \
