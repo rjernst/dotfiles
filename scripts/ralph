@@ -92,12 +92,26 @@ PROMPT_REL=${PROMPT_ABS#"$PWD_ABS"/}
 GIT_USER=$(git config user.name 2>/dev/null || echo "ralph")
 GIT_EMAIL=$(git config user.email 2>/dev/null || echo "ralph@localhost")
 
+# --- worktree support ---
+# Git worktrees use a .git file pointing to the main repo's .git/worktrees/<name>.
+# Mount the main .git directory so git can resolve the worktree inside the container.
+WORKTREE_MOUNT=()
+if [[ -f "$PWD/.git" ]]; then
+  MAIN_GIT_DIR=$(git rev-parse --git-common-dir 2>/dev/null)
+  if [[ -n $MAIN_GIT_DIR ]]; then
+    MAIN_GIT_DIR=${MAIN_GIT_DIR:A}
+    WORKTREE_MOUNT=(-v "$MAIN_GIT_DIR:$MAIN_GIT_DIR")
+    echo "ralph: detected worktree, mounting $MAIN_GIT_DIR"
+  fi
+fi
+
 # --- run container ---
 echo "ralph: starting (image=$IMAGE_TAG, prompt=$PROMPT_REL, model=$MODEL)"
 TTY_FLAGS="-i"
 [[ -t 1 ]] && TTY_FLAGS="-it"
 exec docker run --rm $TTY_FLAGS \
   -v "$PWD:/work" \
+  "${WORKTREE_MOUNT[@]}" \
   -v "$HOME/.claude:/home/ralph/.claude:ro" \
   -v "$HOME/.gitconfig:/home/ralph/.gitconfig:ro" \
   -v "$HOME/.ssh:/home/ralph/.ssh:ro" \
