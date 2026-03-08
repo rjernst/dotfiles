@@ -63,19 +63,24 @@ fi
 
 # --- build image ---
 RALPH_DIR=${0:A:h}/../docker/ralph
+HOST_UID=$(id -u)
 
 if [[ -n $PACKAGES ]]; then
-  # Tag with hash of package list for layer cache hits
-  PKG_HASH=$(echo "$PACKAGES" | shasum -a 256 | cut -c1-12)
+  # Tag with hash of package list + UID for layer cache hits
+  PKG_HASH=$(echo "$PACKAGES:$HOST_UID" | shasum -a 256 | cut -c1-12)
   IMAGE_TAG="ralph:custom-${PKG_HASH}"
   echo "ralph: building image with extra packages: $PACKAGES"
   docker build -q \
     --build-arg "EXTRA_PACKAGES=$PACKAGES" \
+    --build-arg "HOST_UID=$HOST_UID" \
     -t "$IMAGE_TAG" \
     "$RALPH_DIR"
 else
-  IMAGE_TAG="ralph:latest"
-  docker build -q -t "$IMAGE_TAG" "$RALPH_DIR"
+  IMAGE_TAG="ralph:uid-${HOST_UID}"
+  docker build -q \
+    --build-arg "HOST_UID=$HOST_UID" \
+    -t "$IMAGE_TAG" \
+    "$RALPH_DIR"
 fi
 
 # --- resolve prompt file to absolute path relative to $PWD ---

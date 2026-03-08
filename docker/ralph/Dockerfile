@@ -1,6 +1,7 @@
 FROM debian:bookworm-slim
 
 ARG EXTRA_PACKAGES=""
+ARG HOST_UID=1000
 
 # Essential tools + ripgrep/fd
 RUN apt-get update && \
@@ -14,8 +15,8 @@ RUN apt-get update && \
 # Claude CLI
 RUN npm install -g @anthropic-ai/claude-code
 
-# Non-root user
-RUN useradd -m -s /bin/bash ralph
+# Non-root user with host UID so bind-mounted files are readable
+RUN useradd -m -s /bin/bash -u $HOST_UID ralph
 USER ralph
 
 WORKDIR /work
