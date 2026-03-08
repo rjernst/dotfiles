@@ -12,10 +12,12 @@
 #   --push                Git push after each iteration
 #   --prompt <file>       Prompt file (default: PROMPT.md)
 #   --model <model>       Claude model (default: sonnet)
+#   --login               Authenticate with Claude interactively
 #   -h, --help            Show usage
 set -e
 
 SELF=${0:A}
+RALPH_CONFIG_DIR="$HOME/.config/ralph"
 
 usage() {
   sed -n '/^# Usage:/,/^[^#]/p' "$SELF" | sed -n 's/^# \{0,1\}//p'
@@ -28,6 +30,7 @@ PACKAGES=""
 PUSH=0
 MODEL=sonnet
 MAX_ITERATIONS=0
+LOGIN=0
 
 # --- parse args ---
 while [[ $# -gt 0 ]]; do
@@ -40,6 +43,8 @@ while [[ $# -gt 0 ]]; do
       PROMPT_FILE=$2; shift 2 ;;
     --model)
       MODEL=$2; shift 2 ;;
+    --login)
+      LOGIN=1; shift ;;
     -h|--help)
       usage 0 ;;
     -*)
@@ -48,13 +53,6 @@ while [[ $# -gt 0 ]]; do
       MAX_ITERATIONS=$1; shift ;;
   esac
 done
-
-# --- validate ---
-if [[ ! -f "$PROMPT_FILE" ]]; then
-  echo "ralph: prompt file not found: $PROMPT_FILE" >&2
-  echo "Create a PROMPT.md or use --prompt <file>" >&2
-  exit 1
-fi
 
 if ! command -v docker &>/dev/null; then
   echo "ralph: docker is not installed" >&2
@@ -81,6 +79,31 @@ else
     --build-arg "HOST_UID=$HOST_UID" \
     -t "$IMAGE_TAG" \
     "$RALPH_DIR"
+fi
+
+# --- ensure config dir exists ---
+mkdir -p "$RALPH_CONFIG_DIR"
+
+# --- login mode ---
+if [[ $LOGIN -eq 1 ]]; then
+  echo "ralph: starting interactive login"
+  exec docker run --rm -it \
+    -v "$RALPH_CONFIG_DIR:/home/ralph/.claude" \
+    --entrypoint claude \
+    "$IMAGE_TAG" \
+    /login
+fi
+
+# --- validate ---
+if [[ ! -f "$PROMPT_FILE" ]]; then
+  echo "ralph: prompt file not found: $PROMPT_FILE" >&2
+  echo "Create a PROMPT.md or use --prompt <file>" >&2
+  exit 1
+fi
+
+if [[ ! -f "$RALPH_CONFIG_DIR/.credentials.json" ]]; then
+  echo "ralph: not logged in — run 'ralph --login' first" >&2
+  exit 1
 fi
 
 # --- resolve prompt file to absolute path relative to $PWD ---
@@ -117,8 +140,7 @@ TTY_FLAGS="-i"
 exec docker run --rm $TTY_FLAGS \
   -v "$PWD:/work" \
   "${WORKTREE_MOUNT[@]}" \
-  -v "$HOME/.claude:/home/ralph/.claude" \
-  -v "$HOME/.claude.json:/home/ralph/.claude.json" \
+  -v "$RALPH_CONFIG_DIR:/home/ralph/.claude" \
   -v "$HOME/.gitconfig:/home/ralph/.gitconfig:ro" \
   -v "$HOME/.ssh:/home/ralph/.ssh:ro" \
   -e "MAX_ITERATIONS=$MAX_ITERATIONS" \
