@@ -30,9 +30,24 @@ while true; do
   claude -p \
     --dangerously-skip-permissions \
     --model "${MODEL:-sonnet}" \
-    < "$PROMPT_FILE" || {
-      echo "ralph: claude exited with error ($?), continuing..."
-    }
+    <<PROMPT || echo "ralph: claude exited with error ($?), continuing..."
+You are an AI coding agent working in an iterative loop.
+Read the file at \`$PROMPT_FILE\` for what to build.
+
+1. Study the spec and existing codebase (especially CLAUDE.md) to understand patterns
+2. Check git log to see what has already been implemented
+3. Pick the next incomplete task
+4. Implement it fully — no stubs or placeholders
+5. Write tests as appropriate for the project
+6. Run the tests
+7. If tests pass, mark the task done in the spec file and commit with a descriptive message
+8. If tests fail, fix before committing
+
+Rules:
+- Follow conventions in CLAUDE.md if it exists
+- Search the codebase before assuming something isn't implemented
+- One meaningful commit per iteration
+PROMPT
 
   if [[ ${PUSH:-0} -eq 1 ]]; then
     git push || echo "ralph: push failed, continuing..."

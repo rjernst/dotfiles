@@ -23,7 +23,6 @@ setup() {
   cat > "$BATS_TEST_TMPDIR/bin/claude" <<'STUB'
 #!/bin/bash
 echo "claude invoked: $*" >> "$CLAUDE_LOG"
-cat > /dev/null  # consume stdin
 STUB
   chmod +x "$BATS_TEST_TMPDIR/bin/claude"
 
@@ -122,7 +121,6 @@ run_entrypoint() {
   # Replace claude stub with one that fails
   cat > "$BATS_TEST_TMPDIR/bin/claude" <<'STUB'
 #!/bin/bash
-cat > /dev/null
 exit 1
 STUB
   chmod +x "$BATS_TEST_TMPDIR/bin/claude"
