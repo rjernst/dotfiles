@@ -87,7 +87,7 @@ fi
 
 # --- ensure config dir exists ---
 mkdir -p "$RALPH_CONFIG_DIR"
-touch "$RALPH_CONFIG_DIR/claude.json"
+[[ -s "$RALPH_CONFIG_DIR/claude.json" ]] || echo '{}' > "$RALPH_CONFIG_DIR/claude.json"
 
 # --- login mode ---
 if [[ $LOGIN -eq 1 ]]; then
