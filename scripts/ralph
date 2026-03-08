@@ -113,6 +113,7 @@ exec docker run --rm $TTY_FLAGS \
   -v "$PWD:/work" \
   "${WORKTREE_MOUNT[@]}" \
   -v "$HOME/.claude:/home/ralph/.claude:ro" \
+  -v "$HOME/.claude.json:/home/ralph/.claude.json:ro" \
   -v "$HOME/.gitconfig:/home/ralph/.gitconfig:ro" \
   -v "$HOME/.ssh:/home/ralph/.ssh:ro" \
   -e "MAX_ITERATIONS=$MAX_ITERATIONS" \
