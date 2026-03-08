@@ -87,26 +87,29 @@ fi
 
 # --- ensure config dir exists ---
 mkdir -p "$RALPH_CONFIG_DIR"
+touch "$RALPH_CONFIG_DIR/claude.json"
 
 # --- login mode ---
 if [[ $LOGIN -eq 1 ]]; then
   echo "ralph: starting interactive login"
   docker run --rm -it \
     -v "$RALPH_CONFIG_DIR:/home/ralph/.claude" \
+    -v "$RALPH_CONFIG_DIR/claude.json:/home/ralph/.claude.json" \
     --entrypoint claude \
     "$IMAGE_TAG" \
     setup-token
+  exit 0
 fi
 
 # --- validate ---
-if [[ ! -f "$PROMPT_FILE" ]]; then
-  echo "ralph: prompt file not found: $PROMPT_FILE" >&2
-  echo "Create a PROMPT.md or use --prompt <file>" >&2
+if [[ ! -s "$RALPH_CONFIG_DIR/claude.json" ]]; then
+  echo "ralph: not logged in — run 'ralph --login' first" >&2
   exit 1
 fi
 
-if [[ ! -f "$RALPH_CONFIG_DIR/.credentials.json" ]]; then
-  echo "ralph: not logged in — run 'ralph --login' first" >&2
+if [[ ! -f "$PROMPT_FILE" ]]; then
+  echo "ralph: prompt file not found: $PROMPT_FILE" >&2
+  echo "Create a PROMPT.md or use --prompt <file>" >&2
   exit 1
 fi
 
@@ -145,6 +148,7 @@ exec docker run --rm $TTY_FLAGS \
   -v "$PWD:/work" \
   "${WORKTREE_MOUNT[@]}" \
   -v "$RALPH_CONFIG_DIR:/home/ralph/.claude" \
+  -v "$RALPH_CONFIG_DIR/claude.json:/home/ralph/.claude.json" \
   -v "$HOME/.gitconfig:/home/ralph/.gitconfig:ro" \
   -v "$HOME/.ssh:/home/ralph/.ssh:ro" \
   -e "MAX_ITERATIONS=$MAX_ITERATIONS" \
