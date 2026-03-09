@@ -7,10 +7,10 @@ setup() {
   RALPH="${BATS_TEST_FILENAME%/*}/../scripts/ralph"
   export TMPDIR="$BATS_TEST_TMPDIR"
 
-  # Create a project dir with a prompt file
+  # Create a project dir with a spec file in .ralph/specs/
   PROJECT="$BATS_TEST_TMPDIR/project"
-  mkdir -p "$PROJECT"
-  echo "test prompt" > "$PROJECT/PROMPT.md"
+  mkdir -p "$PROJECT/.ralph/specs"
+  printf 'branch: test-branch\n\ntest prompt\n' > "$PROJECT/.ralph/specs/test.md"
 
   # Stub docker — record the command and exit
   DOCKER_LOG="$BATS_TEST_TMPDIR/docker.log"
@@ -101,7 +101,7 @@ STUB
   chmod +x "$BATS_TEST_TMPDIR/bin/git"
 }
 
-# --- existing tests ---
+# --- help / usage tests ---
 
 @test "ralph --help shows usage" {
   run zsh "$RALPH" --help
@@ -116,13 +116,6 @@ STUB
   [[ "$output" == *"Usage:"* ]]
 }
 
-@test "ralph fails when prompt file is missing" {
-  cd "$BATS_TEST_TMPDIR"
-  run zsh "$RALPH"
-  [ "$status" -eq 1 ]
-  [[ "$output" == *"prompt file not found"* ]]
-}
-
 @test "ralph fails with unknown option" {
   cd "$PROJECT"
   run zsh "$RALPH" --bogus
@@ -130,9 +123,53 @@ STUB
   [[ "$output" == *"Unknown option"* ]]
 }
 
+# --- spec discovery tests ---
+
+@test "ralph reads specs from .ralph/specs/" {
+  cd "$PROJECT"
+  run zsh "$RALPH"
+  [ "$status" -eq 0 ]
+  grep -q 'PROMPT_FILE=.ralph/specs/test.md' "$DOCKER_LOG"
+}
+
+@test "ralph fails when no spec files found" {
+  cd "$BATS_TEST_TMPDIR"
+  run zsh "$RALPH"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"no spec files found"* ]]
+}
+
+@test "ralph processes multiple specs sequentially" {
+  printf 'branch: branch-a\n\nfirst spec\n' > "$PROJECT/.ralph/specs/aaa.md"
+  printf 'branch: branch-b\n\nsecond spec\n' > "$PROJECT/.ralph/specs/bbb.md"
+  rm "$PROJECT/.ralph/specs/test.md"
+  export GIT_TOPLEVEL="$PROJECT"
+  cd "$PROJECT"
+  run zsh "$RALPH"
+  [ "$status" -eq 0 ]
+  grep -q 'PROMPT_FILE=.ralph/specs/aaa.md' "$DOCKER_LOG"
+  grep -q 'PROMPT_FILE=.ralph/specs/bbb.md' "$DOCKER_LOG"
+}
+
+@test "ralph skips spec without branch directive" {
+  # Add a spec without branch:
+  printf '## Tasks\ndo stuff\n' > "$PROJECT/.ralph/specs/no-branch.md"
+  export GIT_TOPLEVEL="$PROJECT"
+  cd "$PROJECT"
+  run zsh "$RALPH"
+  [ "$status" -eq 0 ]
+  # The spec without branch: should be skipped with a warning
+  [[ "$output" == *"skipping .ralph/specs/no-branch.md"* ]]
+  [[ "$output" == *"missing required 'branch:' directive"* ]]
+  # The other spec (test.md) should still run
+  grep -q 'PROMPT_FILE=.ralph/specs/test.md' "$DOCKER_LOG"
+}
+
+# --- --prompt override tests ---
+
 @test "ralph --prompt accepts custom file" {
   mkdir -p "$PROJECT/specs"
-  echo "spec content" > "$PROJECT/specs/myspec.md"
+  printf 'branch: spec-branch\n\nspec content\n' > "$PROJECT/specs/myspec.md"
   cd "$PROJECT"
   run zsh "$RALPH" --prompt specs/myspec.md
   [ "$status" -eq 0 ]
@@ -146,6 +183,8 @@ STUB
   [ "$status" -eq 1 ]
   [[ "$output" == *"prompt file not found: no-such-file.md"* ]]
 }
+
+# --- option passing tests ---
 
 @test "ralph passes default model to container" {
   cd "$PROJECT"
@@ -205,26 +244,18 @@ STUB
   grep -q "ralph:uid-" "$DOCKER_LOG"
 }
 
-@test "ralph prompt file must be inside current directory" {
-  echo "outside prompt" > "$BATS_TEST_TMPDIR/outside.md"
-  cd "$PROJECT"
-  run zsh "$RALPH" --prompt "$BATS_TEST_TMPDIR/outside.md"
-  [ "$status" -eq 1 ]
-  [[ "$output" == *"prompt file must be inside the current directory"* ]]
-}
-
 @test "ralph mounts project directory at /work" {
   cd "$PROJECT"
   run zsh "$RALPH"
   [ "$status" -eq 0 ]
-  # The docker run command should contain the PWD:/work mount
+  # The docker run command should contain the /work mount
   grep -q '/work' "$DOCKER_LOG"
 }
 
 # --- worktree tests ---
 
-@test "ralph parses branch: from prompt file" {
-  printf 'branch: feature/test\n\n## Tasks\n- [ ] Do it\n' > "$PROJECT/PROMPT.md"
+@test "ralph parses branch: from spec file" {
+  printf 'branch: feature/test\n\n## Tasks\n- [ ] Do it\n' > "$PROJECT/.ralph/specs/test.md"
   export GIT_TOPLEVEL="$PROJECT"
   cd "$PROJECT"
   run zsh "$RALPH"
@@ -234,7 +265,7 @@ STUB
 }
 
 @test "ralph reuses existing worktree" {
-  printf 'branch: feature/existing\n\n## Tasks\n' > "$PROJECT/PROMPT.md"
+  printf 'branch: feature/existing\n\n## Tasks\n' > "$PROJECT/.ralph/specs/test.md"
   # Simulate existing worktree at a known path
   local existing_path="$BATS_TEST_TMPDIR/project-feature-existing"
   mkdir -p "$existing_path"
@@ -248,12 +279,12 @@ branch refs/heads/feature/existing"
   [ "$status" -eq 0 ]
   # Docker should mount the existing worktree path
   grep -Fq "$existing_path:/work" "$DOCKER_LOG"
-  # Prompt should be copied into existing worktree
-  [ -f "$existing_path/PROMPT.md" ]
+  # Spec should be copied into existing worktree
+  [ -f "$existing_path/.ralph/specs/test.md" ]
 }
 
 @test "ralph creates worktree from remote branch" {
-  printf 'branch: feature/remote\n\n## Tasks\n' > "$PROJECT/PROMPT.md"
+  printf 'branch: feature/remote\n\n## Tasks\n' > "$PROJECT/.ralph/specs/test.md"
   export GIT_TOPLEVEL="$PROJECT"
   export GIT_LS_REMOTE_FOUND="1"
   cd "$PROJECT"
@@ -267,7 +298,7 @@ branch refs/heads/feature/existing"
 }
 
 @test "ralph creates worktree from main when branch not on remote" {
-  printf 'branch: feature/new\n\n## Tasks\n' > "$PROJECT/PROMPT.md"
+  printf 'branch: feature/new\n\n## Tasks\n' > "$PROJECT/.ralph/specs/test.md"
   export GIT_TOPLEVEL="$PROJECT"
   export GIT_LS_REMOTE_FOUND="0"
   cd "$PROJECT"
@@ -279,21 +310,21 @@ branch refs/heads/feature/existing"
   grep -Fq "$wt_path:/work" "$DOCKER_LOG"
 }
 
-@test "ralph copies prompt file into worktree" {
-  printf 'branch: feature/copy\n\n## Tasks\n- [ ] task 1\n' > "$PROJECT/PROMPT.md"
+@test "ralph copies spec file into worktree" {
+  printf 'branch: feature/copy\n\n## Tasks\n- [ ] task 1\n' > "$PROJECT/.ralph/specs/test.md"
   export GIT_TOPLEVEL="$PROJECT"
   cd "$PROJECT"
   run zsh "$RALPH"
   [ "$status" -eq 0 ]
   local wt_path="$BATS_TEST_TMPDIR/project-feature-copy"
-  # Prompt file should be copied to worktree
-  [ -f "$wt_path/PROMPT.md" ]
+  # Spec file should be copied to worktree
+  [ -f "$wt_path/.ralph/specs/test.md" ]
   # Content should match
-  grep -q "task 1" "$wt_path/PROMPT.md"
+  grep -q "task 1" "$wt_path/.ralph/specs/test.md"
 }
 
 @test "ralph docker mount uses worktree path when branch specified" {
-  printf 'branch: feature/mount\n\n## Tasks\n' > "$PROJECT/PROMPT.md"
+  printf 'branch: feature/mount\n\n## Tasks\n' > "$PROJECT/.ralph/specs/test.md"
   export GIT_TOPLEVEL="$PROJECT"
   cd "$PROJECT"
   run zsh "$RALPH"
@@ -301,13 +332,4 @@ branch refs/heads/feature/existing"
   local wt_path="$BATS_TEST_TMPDIR/project-feature-mount"
   # Docker run should mount worktree, not project dir
   grep -Fq "$wt_path:/work" "$DOCKER_LOG"
-}
-
-@test "ralph no worktree when branch: absent" {
-  echo "## Tasks" > "$PROJECT/PROMPT.md"
-  cd "$PROJECT"
-  run zsh "$RALPH"
-  [ "$status" -eq 0 ]
-  # No worktree message
-  [[ "$output" != *"using worktree"* ]]
 }

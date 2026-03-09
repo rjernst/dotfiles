@@ -10,7 +10,7 @@
 # Options:
 #   --packages "pkg ..."  Extra apt packages baked into image
 #   --push                Git push after each iteration
-#   --prompt <file>       Prompt file (default: PROMPT.md)
+#   --prompt <file>       Prompt file (overrides .ralph/specs/ discovery)
 #   --model <model>       Claude model (default: sonnet)
 #   -h, --help            Show usage
 set -e
@@ -23,7 +23,7 @@ usage() {
 }
 
 # --- defaults ---
-PROMPT_FILE=PROMPT.md
+PROMPT_FILE=""
 PACKAGES=""
 PUSH=0
 MODEL=sonnet
@@ -89,12 +89,6 @@ KEYCHAIN_JSON=$(security find-generic-password -s "Claude Code-credentials" -w 2
 }
 OAUTH_TOKEN=$(echo "$KEYCHAIN_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin)['claudeAiOauth']['accessToken'])")
 
-if [[ ! -f "$PROMPT_FILE" ]]; then
-  echo "ralph: prompt file not found: $PROMPT_FILE" >&2
-  echo "Create a PROMPT.md or use --prompt <file>" >&2
-  exit 1
-fi
-
 # --- parse branch from prompt frontmatter ---
 parse_branch() {
   sed -n '/^$/q; /^#/q; s/^branch: *//p' "$1" | head -1
@@ -146,56 +140,82 @@ ensure_worktree() {
   echo "$wt_path"
 }
 
-# --- resolve prompt file to absolute path relative to $PWD ---
-PROMPT_ABS=${PROMPT_FILE:A}
+# --- resolve spec files ---
 PWD_ABS=${PWD:A}
-if [[ $PROMPT_ABS != $PWD_ABS/* ]]; then
-  echo "ralph: prompt file must be inside the current directory" >&2
-  exit 1
-fi
-PROMPT_REL=${PROMPT_ABS#"$PWD_ABS"/}
 
-# --- worktree from branch: directive ---
-WORK_DIR=$PWD_ABS
-BRANCH=$(parse_branch "$PROMPT_ABS")
-if [[ -n $BRANCH ]]; then
-  WORK_DIR=$(ensure_worktree "$BRANCH")
-  mkdir -p "$WORK_DIR/${PROMPT_REL:h}"
-  cp "$PROMPT_ABS" "$WORK_DIR/$PROMPT_REL"
-  echo "ralph: using worktree at $WORK_DIR for branch $BRANCH"
+if [[ -n $PROMPT_FILE ]]; then
+  # Explicit --prompt: single-file mode (existing behavior)
+  if [[ ! -f "$PROMPT_FILE" ]]; then
+    echo "ralph: prompt file not found: $PROMPT_FILE" >&2
+    exit 1
+  fi
+  PROMPT_ABS=${PROMPT_FILE:A}
+  SPECS=("$PROMPT_ABS")
+else
+  # Auto-discover specs from .ralph/specs/
+  SPECS=(.ralph/specs/*.md(N))
+  if [[ ${#SPECS} -eq 0 ]]; then
+    echo "ralph: no spec files found in .ralph/specs/" >&2
+    echo "Create a spec or use --prompt <file>" >&2
+    exit 1
+  fi
+  # Resolve to absolute paths
+  SPECS=("${SPECS[@]:A}")
 fi
 
 # --- configure git inside container ---
 GIT_USER=$(git config user.name 2>/dev/null || echo "ralph")
 GIT_EMAIL=$(git config user.email 2>/dev/null || echo "ralph@localhost")
 
-# --- worktree support ---
-# Git worktrees use a .git file pointing to the main repo's .git/worktrees/<name>.
-# Mount the main .git directory so git can resolve the worktree inside the container.
-WORKTREE_MOUNT=()
-if [[ -f "$WORK_DIR/.git" ]]; then
-  MAIN_GIT_DIR=$(git -C "$WORK_DIR" rev-parse --git-common-dir 2>/dev/null)
-  if [[ -n $MAIN_GIT_DIR ]]; then
-    MAIN_GIT_DIR=${MAIN_GIT_DIR:A}
-    WORKTREE_MOUNT=(-v "$MAIN_GIT_DIR:$MAIN_GIT_DIR")
-    echo "ralph: detected worktree, mounting $MAIN_GIT_DIR"
-  fi
-fi
-
-# --- run container ---
-echo "ralph: starting (image=$IMAGE_TAG, prompt=$PROMPT_REL, model=$MODEL)"
+# --- process each spec ---
 TTY_FLAGS="-i"
 [[ -t 1 ]] && TTY_FLAGS="-it"
-exec docker run --rm $TTY_FLAGS \
-  -v "$WORK_DIR:/work" \
-  "${WORKTREE_MOUNT[@]}" \
-  -v "$HOME/.gitconfig:/home/ralph/.gitconfig:ro" \
-  -v "$HOME/.ssh:/home/ralph/.ssh:ro" \
-  -e "MAX_ITERATIONS=$MAX_ITERATIONS" \
-  -e "PUSH=$PUSH" \
-  -e "PROMPT_FILE=$PROMPT_REL" \
-  -e "MODEL=$MODEL" \
-  -e "GIT_USER=$GIT_USER" \
-  -e "GIT_EMAIL=$GIT_EMAIL" \
-  -e "CLAUDE_CODE_OAUTH_TOKEN=$OAUTH_TOKEN" \
-  "$IMAGE_TAG"
+
+for SPEC_ABS in "${SPECS[@]}"; do
+  SPEC_REL=${SPEC_ABS#"$PWD_ABS"/}
+
+  # --- parse branch: directive ---
+  BRANCH=$(parse_branch "$SPEC_ABS")
+  if [[ -z $BRANCH ]]; then
+    echo "ralph: skipping $SPEC_REL — missing required 'branch:' directive" >&2
+    continue
+  fi
+
+  # --- worktree from branch: directive ---
+  WORK_DIR=$PWD_ABS
+  WORK_DIR=$(ensure_worktree "$BRANCH")
+  mkdir -p "$WORK_DIR/${SPEC_REL:h}"
+  cp "$SPEC_ABS" "$WORK_DIR/$SPEC_REL"
+  echo "ralph: using worktree at $WORK_DIR for branch $BRANCH"
+
+  # --- worktree support ---
+  # Git worktrees use a .git file pointing to the main repo's .git/worktrees/<name>.
+  # Mount the main .git directory so git can resolve the worktree inside the container.
+  WORKTREE_MOUNT=()
+  if [[ -f "$WORK_DIR/.git" ]]; then
+    MAIN_GIT_DIR=$(git -C "$WORK_DIR" rev-parse --git-common-dir 2>/dev/null)
+    if [[ -n $MAIN_GIT_DIR ]]; then
+      MAIN_GIT_DIR=${MAIN_GIT_DIR:A}
+      WORKTREE_MOUNT=(-v "$MAIN_GIT_DIR:$MAIN_GIT_DIR")
+      echo "ralph: detected worktree, mounting $MAIN_GIT_DIR"
+    fi
+  fi
+
+  # --- run container ---
+  echo "ralph: starting (image=$IMAGE_TAG, prompt=$SPEC_REL, model=$MODEL)"
+  docker run --rm $TTY_FLAGS \
+    -v "$WORK_DIR:/work" \
+    "${WORKTREE_MOUNT[@]}" \
+    -v "$HOME/.gitconfig:/home/ralph/.gitconfig:ro" \
+    -v "$HOME/.ssh:/home/ralph/.ssh:ro" \
+    -e "MAX_ITERATIONS=$MAX_ITERATIONS" \
+    -e "PUSH=$PUSH" \
+    -e "PROMPT_FILE=$SPEC_REL" \
+    -e "MODEL=$MODEL" \
+    -e "GIT_USER=$GIT_USER" \
+    -e "GIT_EMAIL=$GIT_EMAIL" \
+    -e "CLAUDE_CODE_OAUTH_TOKEN=$OAUTH_TOKEN" \
+    "$IMAGE_TAG" || {
+      echo "ralph: warning — docker failed for $SPEC_REL, continuing" >&2
+    }
+done
