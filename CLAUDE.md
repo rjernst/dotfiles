@@ -78,6 +78,10 @@ gradle/
   elasticsearch.gradle # Gradle Enterprise / Develocity build scans
 hooks/
   pre-commit           # Shellcheck + zsh syntax checks on staged files
+claude/
+  CLAUDE.md            # Global Claude Code instructions (symlinked to ~/.claude/CLAUDE.md)
+  skills/              # Claude Code skills (symlinked to ~/.claude/skills)
+    create-spec/       # /create-spec — interactive Ralph spec generator
 scripts/
   ta                   # Terminal Agent tool (subcommand dispatcher, symlinked to ~/bin/ta)
   ta-wt                # Worktree manager (list, create, remove, prune, status)
@@ -126,6 +130,7 @@ scripts/
 - `ta tmux windows` — List tmux windows
 - `ta tmux panes` — List tmux panes with command, PID, CWD
 - `ta tmux capture <pane_id>` — Capture scrollback from a pane
+- `/create-spec` — Interactive Ralph spec generator (Claude Code skill)
 
 ## Making Changes
 

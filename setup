@@ -224,6 +224,7 @@ done
 
 dry_mkdir $HOME/.claude
 setup_link "claude/CLAUDE.md"                     ".claude/CLAUDE.md"
+setup_link "claude/skills"                        ".claude/skills"
 
 dry_mkdir $HOME/.git
 setup_link "git/config"                         ".gitconfig"
