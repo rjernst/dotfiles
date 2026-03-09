@@ -17,23 +17,32 @@ setup() {
   mkdir -p "$BATS_TEST_TMPDIR/bin"
   export PATH="$BATS_TEST_TMPDIR/bin:$PATH"
 
-  # Stub claude — just echo and succeed
+  # Stub git — record calls, simulate HEAD advancing on each rev-parse
+  GIT_LOG="$BATS_TEST_TMPDIR/git.log"
+  export GIT_LOG
+  GIT_HEAD_COUNTER="$BATS_TEST_TMPDIR/head_counter"
+  export GIT_HEAD_COUNTER
+  echo "0" > "$GIT_HEAD_COUNTER"
+  cat > "$BATS_TEST_TMPDIR/bin/git" <<'STUB'
+#!/bin/bash
+echo "git $*" >> "$GIT_LOG"
+if [[ "$1" == "rev-parse" && "$2" == "HEAD" ]]; then
+  count=$(cat "$GIT_HEAD_COUNTER")
+  echo "fakehash$count"
+fi
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/git"
+
+  # Stub claude — log invocation and simulate a commit by advancing HEAD
   CLAUDE_LOG="$BATS_TEST_TMPDIR/claude.log"
   export CLAUDE_LOG
   cat > "$BATS_TEST_TMPDIR/bin/claude" <<'STUB'
 #!/bin/bash
 echo "claude invoked: $*" >> "$CLAUDE_LOG"
+count=$(cat "$GIT_HEAD_COUNTER")
+echo "$((count + 1))" > "$GIT_HEAD_COUNTER"
 STUB
   chmod +x "$BATS_TEST_TMPDIR/bin/claude"
-
-  # Stub git — record calls, succeed
-  GIT_LOG="$BATS_TEST_TMPDIR/git.log"
-  export GIT_LOG
-  cat > "$BATS_TEST_TMPDIR/bin/git" <<'STUB'
-#!/bin/bash
-echo "git $*" >> "$GIT_LOG"
-STUB
-  chmod +x "$BATS_TEST_TMPDIR/bin/git"
 
   # Default environment
   export PROMPT_FILE=PROMPT.md
@@ -117,20 +126,40 @@ run_entrypoint() {
   ! grep -q 'git push' "$GIT_LOG"
 }
 
-@test "entrypoint continues when claude fails" {
-  # Replace claude stub with one that fails
+@test "entrypoint exits early when claude fails without committing" {
+  # Replace claude stub with one that fails (no HEAD advance)
   cat > "$BATS_TEST_TMPDIR/bin/claude" <<'STUB'
 #!/bin/bash
 exit 1
 STUB
   chmod +x "$BATS_TEST_TMPDIR/bin/claude"
 
-  export MAX_ITERATIONS=2
+  export MAX_ITERATIONS=3
   run_entrypoint
   [ "$status" -eq 0 ]
   [[ "$output" == *"iteration 1"* ]]
-  [[ "$output" == *"iteration 2"* ]]
-  [[ "$output" == *"reached max iterations"* ]]
+  [[ "$output" == *"claude exited with error"* ]]
+  [[ "$output" == *"no commit made"* ]]
+  # Should NOT reach iteration 2
+  [[ "$output" != *"iteration 2"* ]]
+}
+
+@test "entrypoint exits early when no commit is made" {
+  # Claude succeeds but doesn't advance HEAD (spec complete scenario)
+  cat > "$BATS_TEST_TMPDIR/bin/claude" <<'STUB'
+#!/bin/bash
+echo "claude invoked: $*" >> "$CLAUDE_LOG"
+# Don't advance HEAD counter — simulates "all tasks done, no commit"
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/claude"
+
+  export MAX_ITERATIONS=5
+  run_entrypoint
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"iteration 1"* ]]
+  [[ "$output" == *"no commit made"* ]]
+  # Only one iteration should run
+  [[ "$output" != *"iteration 2"* ]]
 }
 
 @test "entrypoint creates writable gitconfig copy" {

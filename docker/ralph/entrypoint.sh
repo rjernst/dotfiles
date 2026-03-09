@@ -27,6 +27,8 @@ while true; do
   echo "  ralph: iteration $ITERATION"
   echo "══════════════════════════════════════════"
 
+  HEAD_BEFORE=$(git rev-parse HEAD 2>/dev/null || echo "none")
+
   claude -p \
     --dangerously-skip-permissions \
     --model "${MODEL:-sonnet}" \
@@ -48,12 +50,19 @@ Steps:
 
 IMPORTANT: Do NOT implement more than one task. After committing, stop immediately.
 The loop will call you again for the next task.
+If ALL tasks are already complete, just say so — do not make any commits.
 
 Rules:
 - One task, one commit, then stop
 - Follow conventions in CLAUDE.md if it exists
 - Search the codebase before assuming something isn't implemented
 PROMPT
+
+  HEAD_AFTER=$(git rev-parse HEAD 2>/dev/null || echo "none")
+  if [[ "$HEAD_BEFORE" == "$HEAD_AFTER" ]]; then
+    echo "ralph: no commit made — spec appears complete"
+    break
+  fi
 
   if [[ ${PUSH:-0} -eq 1 ]]; then
     git push || echo "ralph: push failed, continuing..."
