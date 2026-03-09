@@ -1,0 +1,32 @@
+#!/usr/bin/env zsh
+
+# ta — Terminal Agent tool
+# Dispatches to ta-<subcommand> scripts.
+
+set -eu
+
+if [[ $# -eq 0 ]]; then
+  echo "usage: ta <command> [args...]"
+  echo ""
+  echo "Commands:"
+  echo "  wt          Worktree manager"
+  echo "  workspace   Tmux workspace session manager"
+  echo "  ff          Fork and focus"
+  echo "  report      Session report generator"
+  echo "  tmux        Tmux introspection"
+  exit 2
+fi
+
+subcmd="$1"
+shift
+
+# Find the sub-script next to this script
+script_dir="${0:A:h}"
+sub_script="${script_dir}/ta-${subcmd}"
+
+if [[ ! -x "$sub_script" ]]; then
+  echo "ta: unknown command '$subcmd'" >&2
+  exit 2
+fi
+
+exec "$sub_script" "$@"

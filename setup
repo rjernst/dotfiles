@@ -229,6 +229,9 @@ dry_mkdir $HOME/.git
 setup_link "git/config"                         ".gitconfig"
 setup_link "git/ignore"                         ".git/ignore"
 
+dry_mkdir $HOME/bin
+setup_link "scripts/ta"                         "bin/ta"
+
 # install pre-commit hook for the dotfiles repo itself
 if [ -d "$DOTFILES/.git/hooks" ]; then
   hook_src="$DOTFILES/hooks/pre-commit"

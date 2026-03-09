@@ -1,0 +1,166 @@
+#!/usr/bin/env zsh
+
+# ta-report — Session report generator
+# Generates a markdown status report of all worktrees and workspaces.
+
+set -eu
+
+usage() {
+  echo "usage: ta report [--repo <path>]"
+  echo ""
+  echo "Generate a markdown report of worktrees and workspace sessions."
+  exit 2
+}
+
+# Allow overriding sub-script paths for testing
+script_dir="${0:A:h}"
+: ${TA_WT_CMD:=${script_dir}/ta-wt}
+: ${TA_WORKSPACE_CMD:=${script_dir}/ta-workspace}
+: ${TMUX_CMD:=tmux}
+
+# --- parse arguments ---
+repo_path=""
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --repo) repo_path="$2"; shift 2 ;;
+    --repo=*) repo_path="${1#--repo=}"; shift ;;
+    -h|--help) usage ;;
+    -*)
+      echo "ta: unknown option '$1'" >&2
+      exit 2
+      ;;
+    *)
+      echo "ta: unexpected argument '$1'" >&2
+      exit 2
+      ;;
+  esac
+done
+
+# If --repo specified, change to that directory for git operations
+if [[ -n "$repo_path" ]]; then
+  if [[ ! -d "$repo_path" ]]; then
+    echo "ta: repo path not found: $repo_path" >&2
+    exit 1
+  fi
+  cd "$repo_path"
+fi
+
+# --- gather worktree data ---
+wt_json="$(zsh "$TA_WT_CMD" status --json 2>/dev/null)" || wt_json="[]"
+
+# --- gather workspace session data ---
+_tmux_running() {
+  "$TMUX_CMD" list-sessions > /dev/null 2>&1
+}
+
+typeset -A session_map  # branch -> "attached|windows"
+if _tmux_running; then
+  local raw
+  raw="$("$TMUX_CMD" list-sessions -F '#{session_name}'$'\t''#{session_windows}'$'\t''#{session_attached}' 2>/dev/null)" || raw=""
+
+  local line
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    local name="${line%%$'\t'*}"
+    local rest="${line#*$'\t'}"
+    local windows="${rest%%$'\t'*}"
+    local attached="${rest##*$'\t'}"
+
+    # Only track wt-* sessions
+    [[ "$name" == wt-* ]] || continue
+    session_map[$name]="${attached}|${windows}"
+  done <<< "$raw"
+fi
+
+# --- helper: match branch to session name ---
+_sanitize_branch() {
+  local branch="$1"
+  local sanitized="${branch//[\/\ \.\_\@\#\!\$\%\^\&\*\+\=\~\`\|\\\{\}\[\]\(\)\<\>\,\;\:\'\"]/-}"
+  while [[ "$sanitized" == *--* ]]; do
+    sanitized="${sanitized//--/-}"
+  done
+  sanitized="${sanitized#-}"
+  sanitized="${sanitized%-}"
+  echo "wt-${sanitized}"
+}
+
+_workspace_status() {
+  local branch="$1"
+  local session_name
+  session_name="$(_sanitize_branch "$branch")"
+
+  if [[ -n "${session_map[$session_name]:-}" ]]; then
+    local val="${session_map[$session_name]}"
+    local attached="${val%%|*}"
+    if [[ "$attached" != "0" ]]; then
+      echo "attached"
+    else
+      echo "detached"
+    fi
+  else
+    echo "—"
+  fi
+}
+
+# --- render report ---
+echo "# Workspace Report"
+echo ""
+
+# Worktrees table
+echo "## Worktrees"
+
+local wt_count
+wt_count="$(echo "$wt_json" | jq 'length')"
+
+if (( wt_count == 0 )); then
+  echo "No active worktrees (besides main)."
+else
+  echo "| Branch | Status | Ahead | Behind | Workspace | Path |"
+  echo "|--------|--------|-------|--------|-----------|------|"
+
+  local i wt_branch wt_status wt_ahead wt_behind wt_path ws_status
+  for (( i=0; i<wt_count; i++ )); do
+    wt_branch="$(echo "$wt_json" | jq -r ".[$i].branch")"
+    wt_status="$(echo "$wt_json" | jq -r ".[$i].status")"
+    wt_ahead="$(echo "$wt_json" | jq -r ".[$i].ahead")"
+    wt_behind="$(echo "$wt_json" | jq -r ".[$i].behind")"
+    wt_path="$(echo "$wt_json" | jq -r ".[$i].path")"
+
+    ws_status="$(_workspace_status "$wt_branch")"
+    echo "| $wt_branch | $wt_status | $wt_ahead | $wt_behind | $ws_status | $wt_path |"
+  done
+fi
+echo ""
+
+# Active sessions table
+echo "## Active Sessions"
+
+if (( ${#session_map} == 0 )); then
+  echo "No workspace sessions."
+else
+  echo "| Session | Windows | CWD |"
+  echo "|---------|---------|-----|"
+
+  local sess_name sess_val sess_windows sess_cwd
+  for sess_name in ${(k)session_map}; do
+    sess_val="${session_map[$sess_name]}"
+    sess_windows="${sess_val##*|}"
+    sess_cwd="$("$TMUX_CMD" display-message -t "${sess_name}:" -p '#{pane_current_path}' 2>/dev/null)" || sess_cwd="—"
+    echo "| $sess_name | $sess_windows | $sess_cwd |"
+  done
+fi
+echo ""
+
+# Main branch info
+echo "## Main Branch"
+
+local last_fetched
+last_fetched="$(git log -1 --format='%cr' FETCH_HEAD 2>/dev/null)" || last_fetched="unknown"
+echo "- Last fetched: $last_fetched"
+
+local behind_count
+behind_count="$(git rev-list --count main..upstream/main 2>/dev/null)" || \
+behind_count="$(git rev-list --count main..origin/main 2>/dev/null)" || \
+behind_count="unknown"
+echo "- Behind upstream: $behind_count commits"

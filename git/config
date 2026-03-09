@@ -78,7 +78,7 @@
   sync-remotes = "!f() { git co main; git fetch; git pull --ff-only; git remote prune origin; }; f"
 
   # scripts
-  # @help git make-worktree -- Create a git worktree for an upstream branch
+  # @help git make-worktree -- Create a git worktree (deprecated: use 'ta wt create')
   make-worktree = "!zsh ~/.dotfiles/scripts/git-make-worktree"
   # @help git cleanup -- Prune merged branches via GitHub API
   cleanup = "!bash ~/.dotfiles/scripts/git-prune-branches"

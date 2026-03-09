@@ -79,8 +79,14 @@ gradle/
 hooks/
   pre-commit           # Shellcheck + zsh syntax checks on staged files
 scripts/
+  ta                   # Terminal Agent tool (subcommand dispatcher, symlinked to ~/bin/ta)
+  ta-wt                # Worktree manager (list, create, remove, prune, status)
+  ta-workspace         # Tmux workspace session manager (create, list, attach, kill)
+  ta-ff                # Fork-and-focus session creator
+  ta-report            # Session report generator (markdown output)
+  ta-tmux              # Tmux introspection (sessions, windows, panes, capture)
   gradlew.sh           # Find and run gradlew from any subdirectory
-  git-make-worktree    # Create git worktree for upstream branch
+  git-make-worktree    # Deprecated: wrapper for ta wt create
   git-prune-branches   # Clean up merged branches via GitHub API
   detect-platform      # Platform detection helper
   update-dotfiles      # Pull and re-run setup
@@ -105,6 +111,21 @@ scripts/
 - `gw` — Run `gradlew` from any subdirectory
 - `reload-brewfile` — Install packages from `~/.Brewfile` (macOS)
 - `reload-ssh-keys` — Add SSH keys to agent
+- `ta wt list` — List worktrees with status, ahead/behind info
+- `ta wt create <branch>` — Create a worktree tracking a remote branch
+- `ta wt remove <branch>` — Remove a worktree by branch name
+- `ta wt prune` — Remove worktrees merged into main (dry-run by default, `--apply` to execute)
+- `ta wt status` — Quick one-line status of each worktree
+- `ta workspace create <branch>` — Create a tmux session for a worktree
+- `ta workspace list` — List `wt-*` tmux sessions
+- `ta workspace attach <branch>` — Attach to (or create) a workspace session
+- `ta workspace kill <branch>` — Kill a workspace session
+- `ta ff <branch> [prompt]` — Fork a branch from main and focus in a tmux session
+- `ta report` — Generate a markdown status report of worktrees and sessions
+- `ta tmux sessions` — List all tmux sessions
+- `ta tmux windows` — List tmux windows
+- `ta tmux panes` — List tmux panes with command, PID, CWD
+- `ta tmux capture <pane_id>` — Capture scrollback from a pane
 
 ## Making Changes
 

@@ -352,7 +352,7 @@ Each step follows this structure:
 - Minor deviations (e.g. flag name changes, reordered logic) should be noted and the spec updated to match.
 - Significant design changes (e.g. new subcommands, changed architecture, removed features) require pausing for user review before proceeding.
 
-### Step 1: `ta` dispatcher and `ta wt list`
+### Step 1: `ta` dispatcher and `ta wt list` [done]
 
 **Files:**
 - `scripts/ta` — Main dispatcher
@@ -378,7 +378,14 @@ Each step follows this structure:
 
 **Address feedback:** Fix all review findings. Re-run tests to confirm no regressions. Re-review if changes were substantial.
 
-### Step 2: `ta wt create` and `ta wt remove`
+**Notes:**
+- Avoid `path` and `status` as variable names in zsh — they are special/read-only (`path` is tied to `PATH`, `status` is read-only exit code).
+- Avoid `local` declarations inside loops in zsh — re-declaring a local in a second iteration prints its current value to stdout. Declare locals before the loop.
+- Use `set -eu` instead of `set -euo pipefail` (pipefail syntax differs in zsh).
+- Capture `git worktree list --porcelain` into a variable first rather than using process substitution with `< <(...)` for better compatibility.
+- Tests require `GIT_CONFIG_GLOBAL` override to disable commit signing in CI/container environments.
+
+### Step 2: `ta wt create` and `ta wt remove` [done]
 
 **Files:**
 - `scripts/ta-wt` — Add `create` and `remove` subcommands
@@ -407,7 +414,13 @@ Each step follows this structure:
 
 **Address feedback:** Fix all review findings. Re-run tests. Re-review if changes were substantial.
 
-### Step 3: `ta wt prune` and `ta wt status`
+**Notes:**
+- Default path uses `../<repo-name>-<sanitized-branch>` (sibling directory pattern) with `/` in branch names replaced by `-`.
+- Remote detection: explicit `--remote` > `upstream` > `origin`. Fails if neither remote exists.
+- `remove` always uses `git branch -D` for local branch deletion since removing a worktree implies intent to delete the branch regardless of merge status.
+- Tests use `git branch -D` (not `-d`) when deleting local branches that have commits ahead of main (not fully merged).
+
+### Step 3: `ta wt prune` and `ta wt status` [done]
 
 **Files:**
 - `scripts/ta-wt` — Add `prune` and `status` subcommands
@@ -438,7 +451,15 @@ Each step follows this structure:
 
 **Address feedback:** Fix all review findings. Re-run tests. Re-review if changes were substantial.
 
-### Step 4: `ta tmux` — Tmux introspection
+**Notes:**
+- Extracted `_parse_worktrees` helper to avoid duplicating porcelain parsing across `list`, `prune`, and `status` subcommands.
+- Added `_classify_status` helper that implements the full classification chain: current → merged → wip → conflict → almost → ready.
+- Conflict detection uses three-way `git merge-tree` with merge-base, checking for conflict markers in output.
+- "Almost" vs "ready" distinction: checks `@{upstream}..HEAD` rev-list count. No upstream set = unpushed = almost.
+- `_has_active_operation` resolves the git dir for worktrees (which differs from the worktree path) and checks for rebase-merge, rebase-apply, MERGE_HEAD, CHERRY_PICK_HEAD.
+- `status` output skips the main branch (shows only non-main worktrees) per the spec examples.
+
+### Step 4: `ta tmux` — Tmux introspection [done]
 
 **Files:**
 - `scripts/ta-tmux` — All tmux subcommands
@@ -463,7 +484,14 @@ Each step follows this structure:
 
 **Address feedback:** Fix all review findings. Re-run tests. Re-review if changes were substantial.
 
-### Step 5: `ta workspace` — Session management
+**Notes:**
+- `TMUX_CMD` environment variable allows overriding the tmux binary, enabling tests to use a mock tmux script since tmux server is not available in CI/container environments.
+- All subcommands gracefully handle "no server running" by returning empty output (text) or empty JSON array (`[]`), not errors.
+- `capture` is the exception: it returns an error (exit 1) when the server isn't running or the pane doesn't exist, since it requires a specific pane target.
+- Date conversion in `sessions --json` tries GNU `date -d` first, then BSD `date -r` for cross-platform compatibility.
+- `panes` uses `-s` flag with `list-panes` to list panes across all windows (session-wide), filtered by `--session` if provided.
+
+### Step 5: `ta workspace` — Session management [done]
 
 **Files:**
 - `scripts/ta-workspace` — All workspace subcommands
@@ -491,7 +519,16 @@ Each step follows this structure:
 
 **Address feedback:** Fix all review findings. Re-run tests. Re-review if changes were substantial.
 
-### Step 6: `ta ff` — Fork and focus
+**Notes:**
+- `TMUX_CMD` and `TA_WT_CMD` environment variables allow overriding the tmux binary and ta-wt script path for testing with mocks.
+- Sanitization replaces `/`, spaces, and special characters with `-`, collapses multiple dashes, and strips leading/trailing dashes.
+- `create` looks up worktree path via `ta wt list --json` and jq filtering.
+- `list` filters tmux sessions to `wt-*` prefix and fetches CWD via `tmux display-message`.
+- `attach` auto-creates the session if it doesn't exist, then uses `switch-client` inside tmux or `attach-session` outside.
+- `kill` checks `session_attached` and prompts interactively (only if stdin is a tty) before killing attached sessions.
+- Mock tmux scripts in tests avoid `local` outside functions (bash limitation).
+
+### Step 6: `ta ff` — Fork and focus [done]
 
 **Files:**
 - `scripts/ta-ff` — Fork-and-focus command
@@ -517,7 +554,15 @@ Each step follows this structure:
 
 **Address feedback:** Fix all review findings. Re-run tests. Re-review if changes were substantial.
 
-### Step 7: `ta report`
+**Notes:**
+- Uses `git worktree add -b <branch> <path> main` to create a new branch and worktree in one step, rather than creating the branch first and then the worktree separately.
+- Pushes to remote from the worktree directory with `git -C <path> push -u <remote> <branch>`.
+- Uses `TA_WT_CMD` and `TA_WORKSPACE_CMD` environment variables for overriding sub-script paths in tests.
+- When a prompt string is provided, it builds a `claude '<prompt>'` command passed via `--cmd`.
+- If the branch already exists as a worktree, skips creation entirely and just creates the workspace and attaches.
+- Tests use real git repos for branch/worktree operations but mock the workspace script to avoid tmux dependency.
+
+### Step 7: `ta report` [done]
 
 **Files:**
 - `scripts/ta-report` — Report generator
@@ -541,7 +586,15 @@ Each step follows this structure:
 
 **Address feedback:** Fix all review findings. Re-run tests. Re-review if changes were substantial.
 
-### Step 8: Integration and cleanup
+**Notes:**
+- Uses `TA_WT_CMD`, `TA_WORKSPACE_CMD`, and `TMUX_CMD` environment variables for overriding sub-script paths in tests (same pattern as other `ta-*` scripts).
+- Worktree → workspace correlation: sanitizes branch name to session name (same `_sanitize_branch` logic as `ta-workspace`) and looks up in tmux session list.
+- Session data gathered directly from tmux `list-sessions` rather than calling `ta workspace list`, avoiding an extra subprocess layer.
+- Main branch freshness uses `FETCH_HEAD` log date and `rev-list --count main..upstream/main` (falls back to `origin/main`).
+- "No active worktrees" message shown when `ta wt status --json` returns empty array (main is excluded by `status`).
+- Tests use a real git repo for main branch info (FETCH_HEAD, behind count) but mock `ta-wt` and `tmux` for worktree/session data.
+
+### Step 8: Integration and cleanup [done]
 
 **Implement:**
 1. Remove or alias `scripts/git-make-worktree` → `ta wt create`
@@ -553,6 +606,13 @@ Each step follows this structure:
 **Review:** Final review of all commands for consistency (flag names, output formats, error messages, exit codes)
 
 **Address feedback:** Fix any final findings. Re-run full test suite. Confirm clean.
+
+**Notes:**
+- `git-make-worktree` replaced with a deprecation wrapper that prints a warning to stderr then delegates to `ta-wt create`.
+- `setup` symlinks `scripts/ta` to `~/bin/ta` (which is already in `$PATH` via zshrc).
+- `test_git_make_worktree.bats` updated to add `GIT_CONFIG_GLOBAL` override (was broken in CI) and simplified to test the deprecation wrapper behavior.
+- `CLAUDE.md` updated with full `ta` command reference in directory structure and common commands sections.
+- Git alias comment updated to note deprecation.
 
 ---
 

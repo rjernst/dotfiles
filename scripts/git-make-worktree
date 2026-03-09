@@ -1,19 +1,12 @@
 #!/usr/bin/env zsh
 
-if [ "$#" -ne 2 ]; then
-  echo "usage: git make-worktree BRANCH PATH"
+# Deprecated: use `ta wt create` instead.
+echo "git make-worktree is deprecated, use 'ta wt create <branch> [path]' instead" >&2
+
+if [[ $# -lt 1 || $# -gt 2 ]]; then
+  echo "usage: git make-worktree BRANCH [PATH]" >&2
   exit 1
 fi
 
-if ! git ls-remote --exit-code --heads upstream "refs/heads/$1" > /dev/null 2>&1; then
-  echo "remote branch upstream/$1 does not exist"
-  exit 2
-fi
-
-if [ -f "$2" ]; then
-  echo "directory already exists: $2"
-  exit 3
-fi
-
-
-git worktree add --track -b "$1" "$2" "upstream/$1"
+script_dir="${0:A:h}"
+exec "$script_dir/ta-wt" create "$@"

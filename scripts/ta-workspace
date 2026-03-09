@@ -1,0 +1,279 @@
+#!/usr/bin/env zsh
+
+# ta-workspace — Tmux workspace session manager
+# Subcommands: create, list, attach, kill
+
+set -eu
+
+usage() {
+  echo "usage: ta workspace <command> [args...]"
+  echo ""
+  echo "Commands:"
+  echo "  create    Create a tmux session for a worktree branch"
+  echo "  list      List all wt-* tmux sessions"
+  echo "  attach    Attach to (or create) a workspace session"
+  echo "  kill      Kill a workspace session"
+  exit 2
+}
+
+if [[ $# -eq 0 ]]; then
+  usage
+fi
+
+# Allow overriding tmux binary for testing
+: ${TMUX_CMD:=tmux}
+
+# Allow overriding ta-wt path for testing
+script_dir="${0:A:h}"
+: ${TA_WT_CMD:=${script_dir}/ta-wt}
+
+# --- helper: sanitize branch name to session name ---
+# feature/fix-thing → wt-feature-fix-thing
+_sanitize_branch() {
+  local branch="$1"
+  # Replace /, spaces, and special chars with -
+  local sanitized="${branch//[\/\ \.\_\@\#\!\$\%\^\&\*\+\=\~\`\|\\\{\}\[\]\(\)\<\>\,\;\:\'\"]/-}"
+  # Collapse multiple dashes
+  while [[ "$sanitized" == *--* ]]; do
+    sanitized="${sanitized//--/-}"
+  done
+  # Remove leading/trailing dashes
+  sanitized="${sanitized#-}"
+  sanitized="${sanitized%-}"
+  echo "wt-${sanitized}"
+}
+
+# --- helper: check if tmux server is running ---
+_tmux_running() {
+  "$TMUX_CMD" list-sessions > /dev/null 2>&1
+}
+
+# --- helper: find worktree path for a branch ---
+_worktree_path() {
+  local branch="$1"
+  local json
+  json="$(zsh "$TA_WT_CMD" list --json 2>/dev/null)" || { echo ""; return 1; }
+
+  local wt_path
+  wt_path="$(echo "$json" | jq -r --arg b "$branch" '.[] | select(.branch == $b) | .path' 2>/dev/null)" || { echo ""; return 1; }
+
+  if [[ -z "$wt_path" || "$wt_path" == "null" ]]; then
+    echo ""
+    return 1
+  fi
+  echo "$wt_path"
+}
+
+# --- create subcommand ---
+cmd_create() {
+  local branch="" send_cmd=""
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --cmd) send_cmd="$2"; shift 2 ;;
+      --cmd=*) send_cmd="${1#--cmd=}"; shift ;;
+      -*)
+        echo "ta: unknown option '$1'" >&2
+        exit 2
+        ;;
+      *)
+        if [[ -z "$branch" ]]; then
+          branch="$1"
+        else
+          echo "ta: unexpected argument '$1'" >&2
+          exit 2
+        fi
+        shift
+        ;;
+    esac
+  done
+
+  if [[ -z "$branch" ]]; then
+    echo "usage: ta workspace create <branch> [--cmd <command>]" >&2
+    exit 2
+  fi
+
+  local session_name
+  session_name="$(_sanitize_branch "$branch")"
+
+  # Check if session already exists
+  if _tmux_running && "$TMUX_CMD" has-session -t "$session_name" 2>/dev/null; then
+    echo "ta: session '$session_name' already exists"
+    return 0
+  fi
+
+  # Find worktree path for the branch
+  local wt_path
+  wt_path="$(_worktree_path "$branch")" || true
+  if [[ -z "$wt_path" ]]; then
+    echo "ta: no worktree found for branch '$branch'" >&2
+    exit 1
+  fi
+
+  # Create detached tmux session
+  "$TMUX_CMD" new-session -d -s "$session_name" -c "$wt_path"
+
+  # Send command if provided
+  if [[ -n "$send_cmd" ]]; then
+    "$TMUX_CMD" send-keys -t "$session_name" "$send_cmd" Enter
+  fi
+
+  echo "ta: created session '$session_name' in $wt_path"
+  echo "ta: attach with: ta workspace attach $branch"
+}
+
+# --- list subcommand ---
+cmd_list() {
+  if ! _tmux_running; then
+    echo "ta: no tmux sessions"
+    return 0
+  fi
+
+  local raw
+  raw="$("$TMUX_CMD" list-sessions -F '#{session_name}'$'\t''#{session_windows}'$'\t''#{session_attached}' 2>/dev/null)" || {
+    echo "ta: no tmux sessions"
+    return 0
+  }
+
+  local found=false
+  local header_printed=false
+  local line
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    local name="${line%%$'\t'*}"
+    local rest="${line#*$'\t'}"
+    local windows="${rest%%$'\t'*}"
+    local attached="${rest##*$'\t'}"
+
+    # Filter to wt-* sessions only
+    [[ "$name" == wt-* ]] || continue
+
+    found=true
+    if [[ "$header_printed" == false ]]; then
+      # Get CWD for each session
+      printf "%-28s %-10s %-8s %s\n" "SESSION" "ATTACHED" "WINDOWS" "CWD"
+      header_printed=true
+    fi
+
+    local cwd
+    cwd="$("$TMUX_CMD" display-message -t "${name}:" -p '#{pane_current_path}' 2>/dev/null)" || cwd="—"
+
+    printf "%-28s %-10s %-8s %s\n" "$name" "$attached" "$windows" "$cwd"
+  done <<< "$raw"
+
+  if [[ "$found" == false ]]; then
+    echo "ta: no workspace sessions"
+  fi
+}
+
+# --- attach subcommand ---
+cmd_attach() {
+  local branch=""
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -*)
+        echo "ta: unknown option '$1'" >&2
+        exit 2
+        ;;
+      *)
+        if [[ -z "$branch" ]]; then
+          branch="$1"
+        else
+          echo "ta: unexpected argument '$1'" >&2
+          exit 2
+        fi
+        shift
+        ;;
+    esac
+  done
+
+  if [[ -z "$branch" ]]; then
+    echo "usage: ta workspace attach <branch>" >&2
+    exit 2
+  fi
+
+  local session_name
+  session_name="$(_sanitize_branch "$branch")"
+
+  # Auto-create if session doesn't exist
+  if ! _tmux_running || ! "$TMUX_CMD" has-session -t "$session_name" 2>/dev/null; then
+    cmd_create "$branch"
+  fi
+
+  # Attach or switch
+  if [[ -n "${TMUX:-}" ]]; then
+    "$TMUX_CMD" switch-client -t "$session_name"
+  else
+    "$TMUX_CMD" attach-session -t "$session_name"
+  fi
+}
+
+# --- kill subcommand ---
+cmd_kill() {
+  local branch=""
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -*)
+        echo "ta: unknown option '$1'" >&2
+        exit 2
+        ;;
+      *)
+        if [[ -z "$branch" ]]; then
+          branch="$1"
+        else
+          echo "ta: unexpected argument '$1'" >&2
+          exit 2
+        fi
+        shift
+        ;;
+    esac
+  done
+
+  if [[ -z "$branch" ]]; then
+    echo "usage: ta workspace kill <branch>" >&2
+    exit 2
+  fi
+
+  local session_name
+  session_name="$(_sanitize_branch "$branch")"
+
+  # Check if session exists
+  if ! _tmux_running || ! "$TMUX_CMD" has-session -t "$session_name" 2>/dev/null; then
+    echo "ta: session '$session_name' not found" >&2
+    exit 1
+  fi
+
+  # Check if attached and prompt for confirmation
+  local attached
+  attached="$("$TMUX_CMD" display-message -t "${session_name}:" -p '#{session_attached}' 2>/dev/null)" || attached="0"
+
+  if [[ "$attached" != "0" ]] && [[ -t 0 ]]; then
+    echo -n "ta: session '$session_name' is attached. Kill anyway? [y/N] "
+    local reply
+    read -r reply
+    if [[ "$reply" != [yY]* ]]; then
+      echo "ta: aborted"
+      return 0
+    fi
+  fi
+
+  "$TMUX_CMD" kill-session -t "$session_name"
+  echo "ta: killed session '$session_name'"
+}
+
+# --- dispatch ---
+subcmd="$1"
+shift
+
+case "$subcmd" in
+  create) cmd_create "$@" ;;
+  list)   cmd_list "$@" ;;
+  attach) cmd_attach "$@" ;;
+  kill)   cmd_kill "$@" ;;
+  *)
+    echo "ta: unknown workspace command '$subcmd'" >&2
+    exit 2
+    ;;
+esac

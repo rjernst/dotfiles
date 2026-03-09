@@ -1,0 +1,592 @@
+#!/usr/bin/env zsh
+
+# ta-wt — Worktree manager
+# Subcommands: list, create, remove, prune, status
+
+set -eu
+
+usage() {
+  echo "usage: ta wt <command> [args...]"
+  echo ""
+  echo "Commands:"
+  echo "  list      List all worktrees with enriched status"
+  echo "  create    Create a worktree tracking a remote branch"
+  echo "  remove    Remove a worktree by branch name"
+  echo "  prune     Remove worktrees merged into main"
+  echo "  status    Quick one-line status of each worktree"
+  exit 2
+}
+
+if [[ $# -eq 0 ]]; then
+  usage
+fi
+
+# --- shared state populated by cmd_list's parser ---
+typeset -a wt_paths wt_branches
+typeset current_wt
+
+# --- list subcommand ---
+cmd_list() {
+  local json=false
+  local full=false
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --json) json=true; shift ;;
+      --full) full=true; shift ;;
+      *) echo "ta: unknown option '$1'" >&2; exit 2 ;;
+    esac
+  done
+
+  _parse_worktrees
+
+  if [[ "$json" == true ]]; then
+    _list_json "$full"
+  else
+    _list_text "$full"
+  fi
+}
+
+_dirty_status() {
+  local wt_dir="$1"
+  local staged=0 modified=0 untracked=0
+  local porcelain_status
+  porcelain_status="$(git -C "$wt_dir" status --porcelain 2>/dev/null || true)"
+
+  local sline
+  while IFS= read -r sline; do
+    [[ -z "$sline" ]] && continue
+    local xy="${sline:0:2}"
+    if [[ "${xy:0:1}" == "?" ]]; then
+      untracked=$(( untracked + 1 ))
+    else
+      if [[ "${xy:0:1}" != " " && "${xy:0:1}" != "?" ]]; then
+        staged=$(( staged + 1 ))
+      fi
+      if [[ "${xy:1:1}" != " " && "${xy:1:1}" != "?" ]]; then
+        modified=$(( modified + 1 ))
+      fi
+    fi
+  done <<< "$porcelain_status"
+
+  local total=$(( staged + modified + untracked ))
+  if (( total == 0 )); then
+    echo "clean"
+  else
+    local parts=()
+    if (( staged > 0 )); then parts+=("${staged}S"); fi
+    if (( modified > 0 )); then parts+=("${modified}M"); fi
+    if (( untracked > 0 )); then parts+=("${untracked}U"); fi
+    echo "dirty(${(j:,:)parts})"
+  fi
+}
+
+_ahead_behind() {
+  local ab_branch="$1"
+  if [[ "$ab_branch" == "(detached)" ]]; then
+    echo "0 0"
+    return
+  fi
+  local ab_result
+  ab_result="$(git rev-list --left-right --count "${ab_branch}...main" 2>/dev/null)" || { echo "0 0"; return; }
+  # Output is tab-separated; normalize to space
+  echo "${ab_result//$'\t'/ }"
+}
+
+_list_text() {
+  local full="$1"
+
+  if [[ "$full" == true ]]; then
+    printf "%-24s %-14s %-6s %-7s %-30s %s\n" "BRANCH" "STATUS" "AHEAD" "BEHIND" "LAST COMMIT" "PATH"
+  else
+    printf "%-24s %-14s %-6s %-7s %s\n" "BRANCH" "STATUS" "AHEAD" "BEHIND" "PATH"
+  fi
+
+  local i wt_dir wt_branch wt_status ab ahead behind commit_msg
+  for (( i=1; i<=${#wt_paths[@]}; i++ )); do
+    wt_dir="${wt_paths[$i]}"
+    wt_branch="${wt_branches[$i]}"
+
+    if [[ "$wt_dir" == "$current_wt" ]]; then
+      wt_status="current"
+    else
+      wt_status="$(_dirty_status "$wt_dir")"
+    fi
+
+    ab="$(_ahead_behind "$wt_branch")"
+    ahead="${ab%% *}"
+    behind="${ab##* }"
+
+    if [[ "$full" == true ]]; then
+      commit_msg="$(git -C "$wt_dir" log -1 --format='%s (%cr)' 2>/dev/null || echo "—")"
+      # Truncate commit message if too long
+      if (( ${#commit_msg} > 28 )); then
+        commit_msg="${commit_msg:0:25}..."
+      fi
+      printf "%-24s %-14s %-6s %-7s %-30s %s\n" "$wt_branch" "$wt_status" "$ahead" "$behind" "$commit_msg" "$wt_dir"
+    else
+      printf "%-24s %-14s %-6s %-7s %s\n" "$wt_branch" "$wt_status" "$ahead" "$behind" "$wt_dir"
+    fi
+  done
+}
+
+_list_json() {
+  local full="$1"
+  local json_arr="["
+  local first=true
+
+  local i wt_dir wt_branch wt_status ab ahead behind commit_msg commit_date
+  for (( i=1; i<=${#wt_paths[@]}; i++ )); do
+    wt_dir="${wt_paths[$i]}"
+    wt_branch="${wt_branches[$i]}"
+
+    if [[ "$wt_dir" == "$current_wt" ]]; then
+      wt_status="current"
+    else
+      wt_status="$(_dirty_status "$wt_dir")"
+    fi
+
+    ab="$(_ahead_behind "$wt_branch")"
+    ahead="${ab%% *}"
+    behind="${ab##* }"
+
+    [[ "$first" == true ]] && first=false || json_arr+=","
+
+    if [[ "$full" == true ]]; then
+      commit_msg="$(git -C "$wt_dir" log -1 --format='%s' 2>/dev/null || echo "")"
+      commit_date="$(git -C "$wt_dir" log -1 --format='%aI' 2>/dev/null || echo "")"
+      json_arr+="$(jq -n \
+        --arg branch "$wt_branch" \
+        --arg status "$wt_status" \
+        --argjson ahead "$ahead" \
+        --argjson behind "$behind" \
+        --arg path "$wt_dir" \
+        --arg commit_msg "$commit_msg" \
+        --arg commit_date "$commit_date" \
+        '{branch: $branch, status: $status, ahead: $ahead, behind: $behind, path: $path, commit_message: $commit_msg, commit_date: $commit_date}')"
+    else
+      json_arr+="$(jq -n \
+        --arg branch "$wt_branch" \
+        --arg status "$wt_status" \
+        --argjson ahead "$ahead" \
+        --argjson behind "$behind" \
+        --arg path "$wt_dir" \
+        '{branch: $branch, status: $status, ahead: $ahead, behind: $behind, path: $path}')"
+    fi
+  done
+
+  json_arr+="]"
+  echo "$json_arr" | jq .
+}
+
+# --- helper: parse worktrees into shared arrays ---
+# Populates wt_paths and wt_branches arrays, and sets current_wt.
+# Call this before using the arrays. cmd_list calls this internally.
+_parse_worktrees() {
+  wt_paths=()
+  wt_branches=()
+  current_wt="$(pwd -P)"
+
+  local wt_dir="" wt_branch="" wt_bare=false wt_detached=false
+
+  local porcelain
+  porcelain="$(git worktree list --porcelain)"
+  porcelain+=$'\n'
+
+  local line
+  while IFS= read -r line; do
+    if [[ "$line" == "worktree "* ]]; then
+      wt_dir="${line#worktree }"
+    elif [[ "$line" == "branch "* ]]; then
+      wt_branch="${line#branch refs/heads/}"
+    elif [[ "$line" == "HEAD "* ]]; then
+      : # skip HEAD hash
+    elif [[ "$line" == "bare" ]]; then
+      wt_bare=true
+    elif [[ "$line" == "detached" ]]; then
+      wt_detached=true
+    elif [[ -z "$line" ]]; then
+      [[ -z "$wt_dir" ]] && continue
+      if [[ "$wt_bare" == true ]]; then
+        wt_dir="" wt_branch="" wt_bare=false wt_detached=false
+        continue
+      fi
+      if [[ "$wt_detached" == true ]]; then
+        wt_branch="(detached)"
+      fi
+      wt_paths+=("$wt_dir")
+      wt_branches+=("$wt_branch")
+      wt_dir="" wt_branch="" wt_bare=false wt_detached=false
+    fi
+  done <<< "$porcelain"
+}
+
+# --- helper: classify worktree status ---
+# Returns: current, merged, wip, conflict, almost, ready
+_classify_status() {
+  local wt_dir="$1" wt_branch="$2"
+
+  # Current worktree
+  if [[ "$wt_dir" == "$current_wt" ]]; then
+    echo "current"
+    return
+  fi
+
+  # Merged into main
+  if git merge-base --is-ancestor "$wt_branch" main 2>/dev/null; then
+    echo "merged"
+    return
+  fi
+
+  # Dirty working tree
+  local dirty
+  dirty="$(_dirty_status "$wt_dir")"
+  if [[ "$dirty" != "clean" ]]; then
+    echo "wip"
+    return
+  fi
+
+  # Conflict detection: use git merge-tree (three-way) to check
+  local merge_base
+  merge_base="$(git merge-base main "$wt_branch" 2>/dev/null)" || true
+  if [[ -n "$merge_base" ]]; then
+    local merge_result
+    merge_result="$(git merge-tree "$merge_base" main "$wt_branch" 2>/dev/null)" || true
+    if [[ "$merge_result" == *"<<<"* ]] || [[ "$merge_result" == *"changed in both"* ]]; then
+      echo "conflict"
+      return
+    fi
+  fi
+
+  # Check if ahead of main
+  local ab
+  ab="$(_ahead_behind "$wt_branch")"
+  local ahead="${ab%% *}"
+
+  if (( ahead > 0 )); then
+    # Check if branch has unpushed commits (no upstream or ahead of upstream)
+    local upstream_count
+    upstream_count="$(git rev-list --count "${wt_branch}@{upstream}..${wt_branch}" 2>/dev/null)" || upstream_count=""
+    if [[ -z "$upstream_count" ]] || (( upstream_count > 0 )); then
+      echo "almost"
+      return
+    fi
+    echo "ready"
+    return
+  fi
+
+  echo "ready"
+}
+
+# --- helper: check for active git operations in a worktree ---
+_has_active_operation() {
+  local wt_dir="$1"
+  local git_dir
+  git_dir="$(git -C "$wt_dir" rev-parse --git-dir 2>/dev/null)" || return 1
+
+  # Make absolute if relative
+  if [[ "$git_dir" != /* ]]; then
+    git_dir="$wt_dir/$git_dir"
+  fi
+
+  [[ -d "$git_dir/rebase-merge" ]] || [[ -d "$git_dir/rebase-apply" ]] || \
+  [[ -f "$git_dir/MERGE_HEAD" ]] || [[ -f "$git_dir/CHERRY_PICK_HEAD" ]]
+}
+
+# --- prune subcommand ---
+cmd_prune() {
+  local apply=false
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --apply) apply=true; shift ;;
+      *) echo "ta: unknown option '$1'" >&2; exit 2 ;;
+    esac
+  done
+
+  _parse_worktrees
+
+  local found=false
+  local i wt_dir wt_branch
+  for (( i=1; i<=${#wt_paths[@]}; i++ )); do
+    wt_dir="${wt_paths[$i]}"
+    wt_branch="${wt_branches[$i]}"
+
+    # Skip main branch
+    [[ "$wt_branch" == "main" ]] && continue
+    # Skip detached
+    [[ "$wt_branch" == "(detached)" ]] && continue
+    # Skip current worktree
+    [[ "$wt_dir" == "$current_wt" ]] && continue
+
+    # Check if merged into main
+    if ! git merge-base --is-ancestor "$wt_branch" main 2>/dev/null; then
+      continue
+    fi
+
+    # Check for dirty working tree
+    local dirty
+    dirty="$(_dirty_status "$wt_dir")"
+    if [[ "$dirty" != "clean" ]]; then
+      echo "ta: skipping '$wt_branch' (uncommitted changes: $dirty)"
+      continue
+    fi
+
+    # Check for active operations
+    if _has_active_operation "$wt_dir"; then
+      echo "ta: skipping '$wt_branch' (active git operation in progress)"
+      continue
+    fi
+
+    found=true
+    if [[ "$apply" == true ]]; then
+      cmd_remove "$wt_branch"
+    else
+      echo "ta: would remove '$wt_branch' ($wt_dir) [merged]"
+    fi
+  done
+
+  if [[ "$found" == false ]]; then
+    echo "ta: no worktrees to prune"
+  fi
+}
+
+# --- status subcommand ---
+cmd_status() {
+  local json=false
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --json) json=true; shift ;;
+      *) echo "ta: unknown option '$1'" >&2; exit 2 ;;
+    esac
+  done
+
+  _parse_worktrees
+
+  if [[ "$json" == true ]]; then
+    _status_json
+  else
+    _status_text
+  fi
+}
+
+_status_text() {
+  local i wt_dir wt_branch classification ab ahead dirty_detail
+  for (( i=1; i<=${#wt_paths[@]}; i++ )); do
+    wt_dir="${wt_paths[$i]}"
+    wt_branch="${wt_branches[$i]}"
+
+    # Skip main
+    [[ "$wt_branch" == "main" ]] && continue
+
+    classification="$(_classify_status "$wt_dir" "$wt_branch")"
+
+    ab="$(_ahead_behind "$wt_branch")"
+    ahead="${ab%% *}"
+
+    dirty_detail="$(_dirty_status "$wt_dir")"
+    if [[ "$dirty_detail" == "clean" ]]; then
+      dirty_detail="clean"
+    fi
+
+    printf "%-24s %-10s %s ahead, %s\n" "$wt_branch" "$classification" "$ahead" "$dirty_detail"
+  done
+}
+
+_status_json() {
+  local json_arr="["
+  local first=true
+
+  local i wt_dir wt_branch classification ab ahead behind dirty_detail
+  for (( i=1; i<=${#wt_paths[@]}; i++ )); do
+    wt_dir="${wt_paths[$i]}"
+    wt_branch="${wt_branches[$i]}"
+
+    # Skip main
+    [[ "$wt_branch" == "main" ]] && continue
+
+    classification="$(_classify_status "$wt_dir" "$wt_branch")"
+    ab="$(_ahead_behind "$wt_branch")"
+    ahead="${ab%% *}"
+    behind="${ab##* }"
+    dirty_detail="$(_dirty_status "$wt_dir")"
+
+    [[ "$first" == true ]] && first=false || json_arr+=","
+
+    json_arr+="$(jq -n \
+      --arg branch "$wt_branch" \
+      --arg status "$classification" \
+      --argjson ahead "$ahead" \
+      --argjson behind "$behind" \
+      --arg dirty "$dirty_detail" \
+      --arg path "$wt_dir" \
+      '{branch: $branch, status: $status, ahead: $ahead, behind: $behind, dirty: $dirty, path: $path}')"
+  done
+
+  json_arr+="]"
+  echo "$json_arr" | jq .
+}
+
+# --- create subcommand ---
+cmd_create() {
+  local branch="" wt_path="" remote=""
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --remote) remote="$2"; shift 2 ;;
+      --remote=*) remote="${1#--remote=}"; shift ;;
+      -*)
+        echo "ta: unknown option '$1'" >&2
+        exit 2
+        ;;
+      *)
+        if [[ -z "$branch" ]]; then
+          branch="$1"
+        elif [[ -z "$wt_path" ]]; then
+          wt_path="$1"
+        else
+          echo "ta: unexpected argument '$1'" >&2
+          exit 2
+        fi
+        shift
+        ;;
+    esac
+  done
+
+  if [[ -z "$branch" ]]; then
+    echo "usage: ta wt create <branch> [path] [--remote <remote>]" >&2
+    exit 2
+  fi
+
+  # Determine remote: explicit > upstream > origin
+  if [[ -z "$remote" ]]; then
+    if git remote | grep -qx upstream; then
+      remote="upstream"
+    elif git remote | grep -qx origin; then
+      remote="origin"
+    else
+      echo "ta: no remote found (tried upstream, origin)" >&2
+      exit 1
+    fi
+  fi
+
+  # Validate branch exists on remote
+  if ! git ls-remote --exit-code --heads "$remote" "refs/heads/$branch" > /dev/null 2>&1; then
+    echo "ta: branch '$branch' not found on remote '$remote'" >&2
+    exit 1
+  fi
+
+  # Generate default path if not provided
+  if [[ -z "$wt_path" ]]; then
+    local repo_root repo_name sanitized_branch
+    repo_root="$(git rev-parse --show-toplevel)"
+    repo_name="${repo_root:t}"
+    sanitized_branch="${branch//\//-}"
+    wt_path="${repo_root:h}/${repo_name}-${sanitized_branch}"
+  fi
+
+  # Validate target path doesn't exist
+  if [[ -e "$wt_path" ]]; then
+    echo "ta: path already exists: $wt_path" >&2
+    exit 1
+  fi
+
+  # Create the worktree
+  git worktree add --track -b "$branch" "$wt_path" "${remote}/${branch}"
+  echo "$wt_path"
+}
+
+# --- remove subcommand ---
+cmd_remove() {
+  local branch="" force=false
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --force) force=true; shift ;;
+      -*)
+        echo "ta: unknown option '$1'" >&2
+        exit 2
+        ;;
+      *)
+        if [[ -z "$branch" ]]; then
+          branch="$1"
+        else
+          echo "ta: unexpected argument '$1'" >&2
+          exit 2
+        fi
+        shift
+        ;;
+    esac
+  done
+
+  if [[ -z "$branch" ]]; then
+    echo "usage: ta wt remove <branch> [--force]" >&2
+    exit 2
+  fi
+
+  # Find worktree path for this branch
+  local wt_dir=""
+  local porcelain parse_dir="" parse_branch=""
+  porcelain="$(git worktree list --porcelain)"
+  porcelain+=$'\n'
+
+  local line
+  while IFS= read -r line; do
+    if [[ "$line" == "worktree "* ]]; then
+      parse_dir="${line#worktree }"
+    elif [[ "$line" == "branch "* ]]; then
+      parse_branch="${line#branch refs/heads/}"
+    elif [[ -z "$line" ]]; then
+      if [[ "$parse_branch" == "$branch" ]]; then
+        wt_dir="$parse_dir"
+        break
+      fi
+      parse_dir="" parse_branch=""
+    fi
+  done <<< "$porcelain"
+
+  if [[ -z "$wt_dir" ]]; then
+    echo "ta: no worktree found for branch '$branch'" >&2
+    exit 1
+  fi
+
+  # Check for dirty working tree (unless --force)
+  if [[ "$force" != true ]]; then
+    local dirty
+    dirty="$(_dirty_status "$wt_dir")"
+    if [[ "$dirty" != "clean" ]]; then
+      echo "ta: worktree '$branch' has uncommitted changes ($dirty)" >&2
+      echo "ta: use --force to remove anyway" >&2
+      exit 1
+    fi
+  fi
+
+  # Remove the worktree
+  if [[ "$force" == true ]]; then
+    git worktree remove --force "$wt_dir"
+  else
+    git worktree remove "$wt_dir"
+  fi
+
+  # Delete the local branch (-D always since worktree removal implies intent)
+  git branch -D "$branch" 2>/dev/null || true
+
+  echo "ta: removed worktree '$branch' ($wt_dir)"
+}
+
+# --- dispatch ---
+subcmd="$1"
+shift
+
+case "$subcmd" in
+  list)   cmd_list "$@" ;;
+  create) cmd_create "$@" ;;
+  remove) cmd_remove "$@" ;;
+  prune)  cmd_prune "$@" ;;
+  status) cmd_status "$@" ;;
+  *)
+    echo "ta: unknown wt command '$subcmd'" >&2
+    exit 2
+    ;;
+esac

@@ -1,0 +1,361 @@
+#!/usr/bin/env zsh
+
+# ta-tmux — Tmux introspection
+# Subcommands: sessions, windows, panes, capture
+
+set -eu
+
+usage() {
+  echo "usage: ta tmux <command> [args...]"
+  echo ""
+  echo "Commands:"
+  echo "  sessions  List all tmux sessions"
+  echo "  windows   List windows (optionally filtered by session)"
+  echo "  panes     List panes with command, PID, and CWD"
+  echo "  capture   Capture scrollback from a pane"
+  exit 2
+}
+
+if [[ $# -eq 0 ]]; then
+  usage
+fi
+
+# Allow overriding tmux binary for testing
+: ${TMUX_CMD:=tmux}
+
+# --- helper: check if tmux server is running ---
+_tmux_running() {
+  "$TMUX_CMD" list-sessions > /dev/null 2>&1
+}
+
+# --- sessions subcommand ---
+cmd_sessions() {
+  local json=false
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --json) json=true; shift ;;
+      *) echo "ta: unknown option '$1'" >&2; exit 2 ;;
+    esac
+  done
+
+  if ! _tmux_running; then
+    if [[ "$json" == true ]]; then
+      echo "[]"
+    fi
+    return 0
+  fi
+
+  local raw
+  raw="$("$TMUX_CMD" list-sessions -F '#{session_name}'$'\t''#{session_windows}'$'\t''#{session_attached}'$'\t''#{session_created}' 2>/dev/null)" || { [[ "$json" == true ]] && echo "[]"; return 0; }
+
+  if [[ "$json" == true ]]; then
+    _sessions_json "$raw"
+  else
+    _sessions_text "$raw"
+  fi
+}
+
+_sessions_text() {
+  local raw="$1"
+  printf "%-24s %-10s %s\n" "SESSION" "ATTACHED" "WINDOWS"
+
+  local line
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    local name="${line%%$'\t'*}"
+    local rest="${line#*$'\t'}"
+    local windows="${rest%%$'\t'*}"
+    rest="${rest#*$'\t'}"
+    local attached="${rest%%$'\t'*}"
+
+    printf "%-24s %-10s %s\n" "$name" "$attached" "$windows"
+  done <<< "$raw"
+}
+
+_sessions_json() {
+  local raw="$1"
+  local json_arr="["
+  local first=true
+
+  local line
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    local name="${line%%$'\t'*}"
+    local rest="${line#*$'\t'}"
+    local windows="${rest%%$'\t'*}"
+    rest="${rest#*$'\t'}"
+    local attached="${rest%%$'\t'*}"
+    local created="${rest##*$'\t'}"
+
+    [[ "$first" == true ]] && first=false || json_arr+=","
+
+    # Convert epoch to ISO 8601
+    local created_iso=""
+    if [[ -n "$created" ]] && (( created > 0 )); then
+      created_iso="$(date -d "@$created" -u '+%Y-%m-%dT%H:%M:%S' 2>/dev/null || date -r "$created" -u '+%Y-%m-%dT%H:%M:%S' 2>/dev/null || echo "")"
+    fi
+
+    json_arr+="$(jq -n \
+      --arg name "$name" \
+      --argjson windows "${windows:-0}" \
+      --argjson attached "${attached:-0}" \
+      --arg created "$created_iso" \
+      '{name: $name, windows: $windows, attached: $attached, created: $created}')"
+  done <<< "$raw"
+
+  json_arr+="]"
+  echo "$json_arr" | jq .
+}
+
+# --- windows subcommand ---
+cmd_windows() {
+  local json=false
+  local session_filter=""
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --json) json=true; shift ;;
+      --session) session_filter="$2"; shift 2 ;;
+      --session=*) session_filter="${1#--session=}"; shift ;;
+      *) echo "ta: unknown option '$1'" >&2; exit 2 ;;
+    esac
+  done
+
+  if ! _tmux_running; then
+    if [[ "$json" == true ]]; then
+      echo "[]"
+    fi
+    return 0
+  fi
+
+  local target_args=()
+  if [[ -n "$session_filter" ]]; then
+    target_args=(-t "${session_filter}:")
+  fi
+
+  local raw
+  raw="$("$TMUX_CMD" list-windows "${target_args[@]}" -F '#{session_name}'$'\t''#{window_index}'$'\t''#{window_name}'$'\t''#{window_active}'$'\t''#{window_panes}' 2>/dev/null)" || { [[ "$json" == true ]] && echo "[]"; return 0; }
+
+  if [[ "$json" == true ]]; then
+    _windows_json "$raw"
+  else
+    _windows_text "$raw"
+  fi
+}
+
+_windows_text() {
+  local raw="$1"
+  printf "%-16s %-6s %-20s %-8s %s\n" "SESSION" "INDEX" "NAME" "ACTIVE" "PANES"
+
+  local line
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    local sess="${line%%$'\t'*}"
+    local rest="${line#*$'\t'}"
+    local idx="${rest%%$'\t'*}"
+    rest="${rest#*$'\t'}"
+    local name="${rest%%$'\t'*}"
+    rest="${rest#*$'\t'}"
+    local active="${rest%%$'\t'*}"
+    local panes="${rest##*$'\t'}"
+
+    printf "%-16s %-6s %-20s %-8s %s\n" "$sess" "$idx" "$name" "$active" "$panes"
+  done <<< "$raw"
+}
+
+_windows_json() {
+  local raw="$1"
+  local json_arr="["
+  local first=true
+
+  local line
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    local sess="${line%%$'\t'*}"
+    local rest="${line#*$'\t'}"
+    local idx="${rest%%$'\t'*}"
+    rest="${rest#*$'\t'}"
+    local name="${rest%%$'\t'*}"
+    rest="${rest#*$'\t'}"
+    local active="${rest%%$'\t'*}"
+    local panes="${rest##*$'\t'}"
+
+    [[ "$first" == true ]] && first=false || json_arr+=","
+
+    json_arr+="$(jq -n \
+      --arg session "$sess" \
+      --argjson index "${idx:-0}" \
+      --arg name "$name" \
+      --argjson active "${active:-0}" \
+      --argjson panes "${panes:-0}" \
+      '{session: $session, index: $index, name: $name, active: $active, panes: $panes}')"
+  done <<< "$raw"
+
+  json_arr+="]"
+  echo "$json_arr" | jq .
+}
+
+# --- panes subcommand ---
+cmd_panes() {
+  local json=false
+  local session_filter=""
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --json) json=true; shift ;;
+      --session) session_filter="$2"; shift 2 ;;
+      --session=*) session_filter="${1#--session=}"; shift ;;
+      *) echo "ta: unknown option '$1'" >&2; exit 2 ;;
+    esac
+  done
+
+  if ! _tmux_running; then
+    if [[ "$json" == true ]]; then
+      echo "[]"
+    fi
+    return 0
+  fi
+
+  local target_args=()
+  if [[ -n "$session_filter" ]]; then
+    target_args=(-t "${session_filter}:")
+  fi
+
+  local raw
+  raw="$("$TMUX_CMD" list-panes -s "${target_args[@]}" -F '#{pane_id}'$'\t''#{session_name}'$'\t''#{window_index}'$'\t''#{pane_index}'$'\t''#{pane_current_command}'$'\t''#{pane_pid}'$'\t''#{pane_current_path}' 2>/dev/null)" || { [[ "$json" == true ]] && echo "[]"; return 0; }
+
+  if [[ "$json" == true ]]; then
+    _panes_json "$raw"
+  else
+    _panes_text "$raw"
+  fi
+}
+
+_panes_text() {
+  local raw="$1"
+  printf "%-10s %-16s %-6s %-6s %-16s %-8s %s\n" "PANE" "SESSION" "WIN" "PANE#" "COMMAND" "PID" "CWD"
+
+  local line
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    local pane_id="${line%%$'\t'*}"
+    local rest="${line#*$'\t'}"
+    local sess="${rest%%$'\t'*}"
+    rest="${rest#*$'\t'}"
+    local win_idx="${rest%%$'\t'*}"
+    rest="${rest#*$'\t'}"
+    local pane_idx="${rest%%$'\t'*}"
+    rest="${rest#*$'\t'}"
+    local cmd="${rest%%$'\t'*}"
+    rest="${rest#*$'\t'}"
+    local pid="${rest%%$'\t'*}"
+    local cwd="${rest##*$'\t'}"
+
+    printf "%-10s %-16s %-6s %-6s %-16s %-8s %s\n" "$pane_id" "$sess" "$win_idx" "$pane_idx" "$cmd" "$pid" "$cwd"
+  done <<< "$raw"
+}
+
+_panes_json() {
+  local raw="$1"
+  local json_arr="["
+  local first=true
+
+  local line
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    local pane_id="${line%%$'\t'*}"
+    local rest="${line#*$'\t'}"
+    local sess="${rest%%$'\t'*}"
+    rest="${rest#*$'\t'}"
+    local win_idx="${rest%%$'\t'*}"
+    rest="${rest#*$'\t'}"
+    local pane_idx="${rest%%$'\t'*}"
+    rest="${rest#*$'\t'}"
+    local cmd="${rest%%$'\t'*}"
+    rest="${rest#*$'\t'}"
+    local pid="${rest%%$'\t'*}"
+    local cwd="${rest##*$'\t'}"
+
+    [[ "$first" == true ]] && first=false || json_arr+=","
+
+    json_arr+="$(jq -n \
+      --arg pane_id "$pane_id" \
+      --arg session "$sess" \
+      --argjson window "${win_idx:-0}" \
+      --argjson pane "${pane_idx:-0}" \
+      --arg command "$cmd" \
+      --argjson pid "${pid:-0}" \
+      --arg cwd "$cwd" \
+      '{pane_id: $pane_id, session: $session, window: $window, pane: $pane, command: $command, pid: $pid, cwd: $cwd}')"
+  done <<< "$raw"
+
+  json_arr+="]"
+  echo "$json_arr" | jq .
+}
+
+# --- capture subcommand ---
+cmd_capture() {
+  local pane_id=""
+  local lines=120
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --lines) lines="$2"; shift 2 ;;
+      --lines=*) lines="${1#--lines=}"; shift ;;
+      -*)
+        echo "ta: unknown option '$1'" >&2
+        exit 2
+        ;;
+      *)
+        if [[ -z "$pane_id" ]]; then
+          pane_id="$1"
+        else
+          echo "ta: unexpected argument '$1'" >&2
+          exit 2
+        fi
+        shift
+        ;;
+    esac
+  done
+
+  if [[ -z "$pane_id" ]]; then
+    echo "usage: ta tmux capture <pane_id> [--lines <n>]" >&2
+    exit 2
+  fi
+
+  if ! _tmux_running; then
+    echo "ta: tmux server not running" >&2
+    exit 1
+  fi
+
+  # Verify pane exists
+  if ! "$TMUX_CMD" display-message -t "$pane_id" -p '#{pane_id}' > /dev/null 2>&1; then
+    echo "ta: pane '$pane_id' not found" >&2
+    exit 1
+  fi
+
+  local content
+  content="$("$TMUX_CMD" capture-pane -t "$pane_id" -p -S "-${lines}" 2>/dev/null)" || content=""
+
+  jq -n \
+    --arg pane_id "$pane_id" \
+    --argjson lines "$lines" \
+    --arg content "$content" \
+    '{pane_id: $pane_id, lines: $lines, content: $content}'
+}
+
+# --- dispatch ---
+subcmd="$1"
+shift
+
+case "$subcmd" in
+  sessions) cmd_sessions "$@" ;;
+  windows)  cmd_windows "$@" ;;
+  panes)    cmd_panes "$@" ;;
+  capture)  cmd_capture "$@" ;;
+  *)
+    echo "ta: unknown tmux command '$subcmd'" >&2
+    exit 2
+    ;;
+esac
