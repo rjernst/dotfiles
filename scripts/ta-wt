@@ -1,7 +1,7 @@
 #!/usr/bin/env zsh
 
 # ta-wt — Worktree manager
-# Subcommands: list, create, remove, prune, status
+# Subcommands: list, create, remove, prune, status, merge
 
 set -eu
 
@@ -13,6 +13,7 @@ usage() {
   echo "  create    Create a worktree tracking a remote branch"
   echo "  remove    Remove a worktree by branch name"
   echo "  prune     Remove worktrees merged into main"
+  echo "  merge     Squash-merge a branch into main with cleanup"
   echo "  status    Quick one-line status of each worktree"
   exit 2
 }
@@ -575,6 +576,128 @@ cmd_remove() {
   echo "ta: removed worktree '$branch' ($wt_dir)"
 }
 
+# --- merge subcommand ---
+cmd_merge() {
+  local branch=""
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -*)
+        echo "ta: unknown option '$1'" >&2
+        exit 2
+        ;;
+      *)
+        if [[ -z "$branch" ]]; then
+          branch="$1"
+        else
+          echo "ta: unexpected argument '$1'" >&2
+          exit 2
+        fi
+        shift
+        ;;
+    esac
+  done
+
+  if [[ -z "$branch" ]]; then
+    echo "usage: ta wt merge <branch>" >&2
+    exit 2
+  fi
+
+  # Resolve main worktree path
+  local main_wt=""
+  local porcelain parse_dir="" parse_branch=""
+  porcelain="$(git worktree list --porcelain)"
+  porcelain+=$'\n'
+
+  local line
+  while IFS= read -r line; do
+    if [[ "$line" == "worktree "* ]]; then
+      parse_dir="${line#worktree }"
+    elif [[ "$line" == "branch "* ]]; then
+      parse_branch="${line#branch refs/heads/}"
+    elif [[ -z "$line" ]]; then
+      if [[ "$parse_branch" == "main" ]]; then
+        main_wt="$parse_dir"
+      fi
+      parse_dir="" parse_branch=""
+    fi
+  done <<< "$porcelain"
+
+  if [[ -z "$main_wt" ]]; then
+    echo "ta: cannot find main worktree" >&2
+    exit 1
+  fi
+
+  # Validate branch has a worktree
+  local branch_wt=""
+  parse_dir="" parse_branch=""
+
+  while IFS= read -r line; do
+    if [[ "$line" == "worktree "* ]]; then
+      parse_dir="${line#worktree }"
+    elif [[ "$line" == "branch "* ]]; then
+      parse_branch="${line#branch refs/heads/}"
+    elif [[ -z "$line" ]]; then
+      if [[ "$parse_branch" == "$branch" ]]; then
+        branch_wt="$parse_dir"
+      fi
+      parse_dir="" parse_branch=""
+    fi
+  done <<< "$porcelain"
+
+  if [[ -z "$branch_wt" ]]; then
+    echo "ta: no worktree found for branch '$branch'" >&2
+    exit 2
+  fi
+
+  # Validate branch worktree is clean
+  local dirty
+  dirty="$(_dirty_status "$branch_wt")"
+  if [[ "$dirty" != "clean" ]]; then
+    echo "ta: branch '$branch' has uncommitted changes ($dirty)" >&2
+    exit 1
+  fi
+
+  # Validate main worktree is clean
+  dirty="$(_dirty_status "$main_wt")"
+  if [[ "$dirty" != "clean" ]]; then
+    echo "ta: main worktree has uncommitted changes ($dirty)" >&2
+    exit 1
+  fi
+
+  # Squash merge
+  if ! git -C "$main_wt" merge --squash "$branch" 2>&1; then
+    echo "ta: merge conflicts detected, aborting merge" >&2
+    git -C "$main_wt" merge --abort 2>/dev/null || true
+    # Clean up any staged changes from the failed squash
+    git -C "$main_wt" reset --hard HEAD 2>/dev/null || true
+    exit 1
+  fi
+
+  # Commit with auto-generated squash message
+  if ! git -C "$main_wt" commit --no-edit 2>&1; then
+    echo "ta: commit failed" >&2
+    git -C "$main_wt" reset --hard HEAD 2>/dev/null || true
+    exit 1
+  fi
+
+  local commit_hash
+  commit_hash="$(git -C "$main_wt" rev-parse --short HEAD)"
+
+  # Cleanup: remove worktree (force because branch content is now on main)
+  local cleanup_ok=true
+  cmd_remove --force "$branch" 2>&1 || { echo "ta: warning: failed to remove worktree" >&2; cleanup_ok=false; }
+
+  # Cleanup: kill workspace session (ignore errors)
+  local script_dir="${0:A:h}"
+  "$script_dir/ta-workspace" kill "$branch" 2>/dev/null || true
+
+  echo "ta: merged '$branch' into main ($commit_hash)"
+  if [[ "$cleanup_ok" == true ]]; then
+    echo "ta: worktree and branch removed"
+  fi
+}
+
 # --- dispatch ---
 subcmd="$1"
 shift
@@ -583,6 +706,7 @@ case "$subcmd" in
   list)   cmd_list "$@" ;;
   create) cmd_create "$@" ;;
   remove) cmd_remove "$@" ;;
+  merge)  cmd_merge "$@" ;;
   prune)  cmd_prune "$@" ;;
   status) cmd_status "$@" ;;
   *)

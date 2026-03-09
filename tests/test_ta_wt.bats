@@ -577,3 +577,130 @@ setup() {
   count="$(echo "$output" | jq length)"
   [ "$count" -eq 0 ]
 }
+
+# --- ta wt merge tests ---
+
+@test "wt merge clean branch into main succeeds" {
+  cd "$PROJECT"
+  git checkout -b feat-merge
+  echo "feature content" > feature.txt
+  git add feature.txt
+  git commit -m "add feature"
+  git checkout main
+  git worktree add "$BATS_TEST_TMPDIR/wt-merge" feat-merge
+
+  run zsh "$TA_WT" merge feat-merge
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"merged 'feat-merge' into main"* ]]
+  [[ "$output" == *"worktree and branch removed"* ]]
+
+  # Commit exists on main with the feature content
+  [ -f "$PROJECT/feature.txt" ]
+
+  # Worktree should be removed
+  [ ! -d "$BATS_TEST_TMPDIR/wt-merge" ]
+
+  # Branch should be deleted
+  run git -C "$PROJECT" branch --list feat-merge
+  [ -z "$output" ]
+}
+
+@test "wt merge dirty branch is refused" {
+  cd "$PROJECT"
+  git checkout -b feat-merge-dirty
+  git commit --allow-empty -m "dirty merge"
+  git checkout main
+  git worktree add "$BATS_TEST_TMPDIR/wt-merge-dirty" feat-merge-dirty
+
+  echo "dirty" > "$BATS_TEST_TMPDIR/wt-merge-dirty/dirty.txt"
+
+  run zsh "$TA_WT" merge feat-merge-dirty
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"uncommitted changes"* ]]
+}
+
+@test "wt merge with dirty main is refused" {
+  cd "$PROJECT"
+  git checkout -b feat-merge-dm
+  git commit --allow-empty -m "for merge"
+  git checkout main
+  git worktree add "$BATS_TEST_TMPDIR/wt-merge-dm" feat-merge-dm
+
+  # Dirty the main worktree
+  echo "dirty" > "$PROJECT/dirty-main.txt"
+
+  run zsh "$TA_WT" merge feat-merge-dm
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"main worktree has uncommitted changes"* ]]
+}
+
+@test "wt merge nonexistent branch fails with exit 2" {
+  cd "$PROJECT"
+  run zsh "$TA_WT" merge no-such-branch
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"no worktree found"* ]]
+}
+
+@test "wt merge no args shows usage with exit 2" {
+  cd "$PROJECT"
+  run zsh "$TA_WT" merge
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"usage:"* ]]
+}
+
+@test "wt merge with conflicts aborts and leaves main clean" {
+  cd "$PROJECT"
+
+  # Create conflicting content on main
+  echo "main version" > conflict.txt
+  git add conflict.txt
+  git commit -m "main conflict"
+
+  # Create branch with conflicting content
+  git checkout -b feat-merge-conflict
+  echo "branch version" > conflict.txt
+  git add conflict.txt
+  git commit -m "branch conflict"
+  git checkout main
+
+  git worktree add "$BATS_TEST_TMPDIR/wt-merge-conflict" feat-merge-conflict
+
+  run zsh "$TA_WT" merge feat-merge-conflict
+  [ "$status" -eq 1 ]
+
+  # Main should be clean after abort
+  run git -C "$PROJECT" status --porcelain
+  [ -z "$output" ]
+
+  # Worktree should still exist (merge failed, no cleanup)
+  [ -d "$BATS_TEST_TMPDIR/wt-merge-conflict" ]
+}
+
+@test "wt merge cleanup continues if workspace kill fails" {
+  cd "$PROJECT"
+  git checkout -b feat-merge-nows
+  git commit --allow-empty -m "no workspace"
+  git checkout main
+  git worktree add "$BATS_TEST_TMPDIR/wt-merge-nows" feat-merge-nows
+
+  # No tmux session exists — workspace kill should fail silently
+  run zsh "$TA_WT" merge feat-merge-nows
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"merged"* ]]
+}
+
+@test "wt merge squash commit message contains branch name" {
+  cd "$PROJECT"
+  git checkout -b feat-merge-msg
+  git commit --allow-empty -m "commit for squash msg"
+  git checkout main
+  git worktree add "$BATS_TEST_TMPDIR/wt-merge-msg" feat-merge-msg
+
+  run zsh "$TA_WT" merge feat-merge-msg
+  [ "$status" -eq 0 ]
+
+  # Check that the commit message on main references the branch
+  local msg
+  msg="$(git -C "$PROJECT" log -1 --format='%s')"
+  [[ "$msg" == *"feat-merge-msg"* ]]
+}
