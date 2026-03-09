@@ -95,8 +95,58 @@ if [[ ! -f "$PROMPT_FILE" ]]; then
   exit 1
 fi
 
+# --- parse branch from prompt frontmatter ---
+parse_branch() {
+  sed -n '/^$/q; /^#/q; s/^branch: *//p' "$1" | head -1
+}
+
+# --- ensure worktree exists for branch ---
+ensure_worktree() {
+  local branch=$1
+  local repo_root sanitized_branch wt_path remote
+  repo_root=$(git rev-parse --show-toplevel)
+  sanitized_branch=${branch//\//-}
+  wt_path="${repo_root:h}/${repo_root:t}-${sanitized_branch}"
+
+  # Check if worktree already exists for this branch
+  local porcelain line wt_dir="" wt_branch=""
+  porcelain=$(git worktree list --porcelain)
+  porcelain+=$'\n'
+  while IFS= read -r line; do
+    if [[ $line == "worktree "* ]]; then
+      wt_dir=${line#worktree }
+    elif [[ $line == "branch "* ]]; then
+      wt_branch=${line#branch refs/heads/}
+    elif [[ -z $line ]]; then
+      if [[ $wt_branch == $branch ]]; then
+        echo "$wt_dir"
+        return 0
+      fi
+      wt_dir="" wt_branch=""
+    fi
+  done <<< "$porcelain"
+
+  # Determine remote
+  if git remote | grep -qx upstream; then
+    remote=upstream
+  elif git remote | grep -qx origin; then
+    remote=origin
+  else
+    echo "ralph: no remote found" >&2
+    return 1
+  fi
+
+  # Create worktree: track remote branch if it exists, else branch from main
+  if git ls-remote --exit-code --heads "$remote" "refs/heads/$branch" &>/dev/null; then
+    git worktree add --track -b "$branch" "$wt_path" "${remote}/${branch}" >&2
+  else
+    git worktree add -b "$branch" "$wt_path" main >&2
+  fi
+
+  echo "$wt_path"
+}
+
 # --- resolve prompt file to absolute path relative to $PWD ---
-# The container mounts $PWD at /work, so we need the path relative to $PWD
 PROMPT_ABS=${PROMPT_FILE:A}
 PWD_ABS=${PWD:A}
 if [[ $PROMPT_ABS != $PWD_ABS/* ]]; then
@@ -104,6 +154,16 @@ if [[ $PROMPT_ABS != $PWD_ABS/* ]]; then
   exit 1
 fi
 PROMPT_REL=${PROMPT_ABS#"$PWD_ABS"/}
+
+# --- worktree from branch: directive ---
+WORK_DIR=$PWD_ABS
+BRANCH=$(parse_branch "$PROMPT_ABS")
+if [[ -n $BRANCH ]]; then
+  WORK_DIR=$(ensure_worktree "$BRANCH")
+  mkdir -p "$WORK_DIR/${PROMPT_REL:h}"
+  cp "$PROMPT_ABS" "$WORK_DIR/$PROMPT_REL"
+  echo "ralph: using worktree at $WORK_DIR for branch $BRANCH"
+fi
 
 # --- configure git inside container ---
 GIT_USER=$(git config user.name 2>/dev/null || echo "ralph")
@@ -113,8 +173,8 @@ GIT_EMAIL=$(git config user.email 2>/dev/null || echo "ralph@localhost")
 # Git worktrees use a .git file pointing to the main repo's .git/worktrees/<name>.
 # Mount the main .git directory so git can resolve the worktree inside the container.
 WORKTREE_MOUNT=()
-if [[ -f "$PWD/.git" ]]; then
-  MAIN_GIT_DIR=$(git rev-parse --git-common-dir 2>/dev/null)
+if [[ -f "$WORK_DIR/.git" ]]; then
+  MAIN_GIT_DIR=$(git -C "$WORK_DIR" rev-parse --git-common-dir 2>/dev/null)
   if [[ -n $MAIN_GIT_DIR ]]; then
     MAIN_GIT_DIR=${MAIN_GIT_DIR:A}
     WORKTREE_MOUNT=(-v "$MAIN_GIT_DIR:$MAIN_GIT_DIR")
@@ -127,7 +187,7 @@ echo "ralph: starting (image=$IMAGE_TAG, prompt=$PROMPT_REL, model=$MODEL)"
 TTY_FLAGS="-i"
 [[ -t 1 ]] && TTY_FLAGS="-it"
 exec docker run --rm $TTY_FLAGS \
-  -v "$PWD:/work" \
+  -v "$WORK_DIR:/work" \
   "${WORKTREE_MOUNT[@]}" \
   -v "$HOME/.gitconfig:/home/ralph/.gitconfig:ro" \
   -v "$HOME/.ssh:/home/ralph/.ssh:ro" \
