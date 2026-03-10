@@ -631,7 +631,7 @@ setup() {
 
   run zsh "$TA_WT" merge feat-merge-dm
   [ "$status" -eq 1 ]
-  [[ "$output" == *"main worktree has uncommitted changes"* ]]
+  [[ "$output" == *"target worktree 'main' has uncommitted changes"* ]]
 }
 
 @test "wt merge nonexistent branch fails with exit 2" {
@@ -651,17 +651,22 @@ setup() {
 @test "wt merge with conflicts aborts and leaves main clean" {
   cd "$PROJECT"
 
-  # Create conflicting content on main
-  echo "main version" > conflict.txt
+  # Create initial content that both branches will diverge from
+  echo "initial version" > conflict.txt
   git add conflict.txt
-  git commit -m "main conflict"
+  git commit -m "initial conflict file"
 
-  # Create branch with conflicting content
+  # Create branch and modify the file
   git checkout -b feat-merge-conflict
   echo "branch version" > conflict.txt
   git add conflict.txt
   git commit -m "branch conflict"
   git checkout main
+
+  # Now diverge main independently to create a real conflict
+  echo "main version" > conflict.txt
+  git add conflict.txt
+  git commit -m "main conflict"
 
   git worktree add "$BATS_TEST_TMPDIR/wt-merge-conflict" feat-merge-conflict
 
@@ -679,7 +684,9 @@ setup() {
 @test "wt merge cleanup continues if workspace kill fails" {
   cd "$PROJECT"
   git checkout -b feat-merge-nows
-  git commit --allow-empty -m "no workspace"
+  echo "nows content" > nows-file.txt
+  git add nows-file.txt
+  git commit -m "no workspace"
   git checkout main
   git worktree add "$BATS_TEST_TMPDIR/wt-merge-nows" feat-merge-nows
 
@@ -692,7 +699,9 @@ setup() {
 @test "wt merge squash commit message contains branch name" {
   cd "$PROJECT"
   git checkout -b feat-merge-msg
-  git commit --allow-empty -m "commit for squash msg"
+  echo "msg content" > msg-file.txt
+  git add msg-file.txt
+  git commit -m "commit for squash msg"
   git checkout main
   git worktree add "$BATS_TEST_TMPDIR/wt-merge-msg" feat-merge-msg
 
@@ -703,4 +712,89 @@ setup() {
   local msg
   msg="$(git -C "$PROJECT" log -1 --format='%s')"
   [[ "$msg" == *"feat-merge-msg"* ]]
+}
+
+@test "wt merge --target merges into specified branch" {
+  cd "$PROJECT"
+
+  # Create base branch 8.x with a commit
+  git checkout -b 8.x
+  git commit --allow-empty -m "8.x base commit"
+
+  # Create feature branch off 8.x
+  git checkout -b feature-8x
+  echo "feature content" > feature-8x.txt
+  git add feature-8x.txt
+  git commit -m "feature for 8.x"
+  git checkout main
+  git worktree add "$BATS_TEST_TMPDIR/wt-8x" 8.x
+  git worktree add "$BATS_TEST_TMPDIR/wt-feature-8x" feature-8x
+
+  run zsh "$TA_WT" merge --target 8.x feature-8x
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"merged 'feature-8x' into 8.x"* ]]
+  [[ "$output" == *"worktree and branch removed"* ]]
+
+  # feature content should be in 8.x worktree
+  [ -f "$BATS_TEST_TMPDIR/wt-8x/feature-8x.txt" ]
+
+  # feature worktree should be removed
+  [ ! -d "$BATS_TEST_TMPDIR/wt-feature-8x" ]
+
+  # feature branch should be deleted
+  run git -C "$PROJECT" branch --list feature-8x
+  [ -z "$output" ]
+}
+
+@test "wt merge --target nonexistent target fails" {
+  cd "$PROJECT"
+
+  git checkout -b feat-no-target
+  git commit --allow-empty -m "feat for missing target"
+  git checkout main
+  git worktree add "$BATS_TEST_TMPDIR/wt-no-target" feat-no-target
+
+  run zsh "$TA_WT" merge --target no-such-target feat-no-target
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"cannot find worktree for target branch 'no-such-target'"* ]]
+}
+
+@test "wt merge --target dirty target is refused" {
+  cd "$PROJECT"
+
+  # Create base branch with a worktree
+  git checkout -b base-dirty-target
+  git commit --allow-empty -m "base branch"
+  git checkout main
+  git worktree add "$BATS_TEST_TMPDIR/wt-base-dirty" base-dirty-target
+
+  # Create feature branch with a worktree
+  git checkout -b feat-for-dirty-target
+  git commit --allow-empty -m "feat for dirty target"
+  git checkout main
+  git worktree add "$BATS_TEST_TMPDIR/wt-feat-dirty-target" feat-for-dirty-target
+
+  # Make the target (base-dirty-target) worktree dirty
+  echo "dirty" > "$BATS_TEST_TMPDIR/wt-base-dirty/dirty.txt"
+
+  run zsh "$TA_WT" merge --target base-dirty-target feat-for-dirty-target
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"target worktree 'base-dirty-target' has uncommitted changes"* ]]
+}
+
+@test "wt merge --target defaults to main" {
+  cd "$PROJECT"
+  git checkout -b feat-explicit-main
+  echo "explicit main content" > explicit-main.txt
+  git add explicit-main.txt
+  git commit -m "add explicit main feature"
+  git checkout main
+  git worktree add "$BATS_TEST_TMPDIR/wt-explicit-main" feat-explicit-main
+
+  run zsh "$TA_WT" merge --target main feat-explicit-main
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"merged 'feat-explicit-main' into main"* ]]
+
+  # Commit exists on main
+  [ -f "$PROJECT/explicit-main.txt" ]
 }

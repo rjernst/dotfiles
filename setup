@@ -231,7 +231,11 @@ setup_link "git/config"                         ".gitconfig"
 setup_link "git/ignore"                         ".git/ignore"
 
 dry_mkdir $HOME/bin
-setup_link "scripts/ta"                         "bin/ta"
+for SCRIPT in $DOTFILES/scripts/*; do
+  [[ -d "$SCRIPT" ]] && continue
+  NAME=$(basename $SCRIPT)
+  setup_link "scripts/$NAME"                    "bin/$NAME"
+done
 
 # install pre-commit hook for the dotfiles repo itself
 if [ -d "$DOTFILES/.git/hooks" ]; then

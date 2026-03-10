@@ -83,13 +83,13 @@ _dirty_status() {
 }
 
 _ahead_behind() {
-  local ab_branch="$1"
+  local ab_branch="$1" base="${2:-main}"
   if [[ "$ab_branch" == "(detached)" ]]; then
     echo "0 0"
     return
   fi
   local ab_result
-  ab_result="$(git rev-list --left-right --count "${ab_branch}...main" 2>/dev/null)" || { echo "0 0"; return; }
+  ab_result="$(git rev-list --left-right --count "${ab_branch}...${base}" 2>/dev/null)" || { echo "0 0"; return; }
   # Output is tab-separated; normalize to space
   echo "${ab_result//$'\t'/ }"
 }
@@ -225,7 +225,7 @@ _parse_worktrees() {
 # --- helper: classify worktree status ---
 # Returns: current, merged, wip, conflict, almost, ready
 _classify_status() {
-  local wt_dir="$1" wt_branch="$2"
+  local wt_dir="$1" wt_branch="$2" base="${3:-main}"
 
   # Current worktree
   if [[ "$wt_dir" == "$current_wt" ]]; then
@@ -233,8 +233,8 @@ _classify_status() {
     return
   fi
 
-  # Merged into main
-  if git merge-base --is-ancestor "$wt_branch" main 2>/dev/null; then
+  # Merged into base
+  if git merge-base --is-ancestor "$wt_branch" "$base" 2>/dev/null; then
     echo "merged"
     return
   fi
@@ -249,19 +249,19 @@ _classify_status() {
 
   # Conflict detection: use git merge-tree (three-way) to check
   local merge_base
-  merge_base="$(git merge-base main "$wt_branch" 2>/dev/null)" || true
+  merge_base="$(git merge-base "$base" "$wt_branch" 2>/dev/null)" || true
   if [[ -n "$merge_base" ]]; then
     local merge_result
-    merge_result="$(git merge-tree "$merge_base" main "$wt_branch" 2>/dev/null)" || true
+    merge_result="$(git merge-tree "$merge_base" "$base" "$wt_branch" 2>/dev/null)" || true
     if [[ "$merge_result" == *"<<<"* ]] || [[ "$merge_result" == *"changed in both"* ]]; then
       echo "conflict"
       return
     fi
   fi
 
-  # Check if ahead of main
+  # Check if ahead of base
   local ab
-  ab="$(_ahead_behind "$wt_branch")"
+  ab="$(_ahead_behind "$wt_branch" "$base")"
   local ahead="${ab%% *}"
 
   if (( ahead > 0 )); then
@@ -578,10 +578,12 @@ cmd_remove() {
 
 # --- merge subcommand ---
 cmd_merge() {
-  local branch=""
+  local branch="" target="main"
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
+      --target) target="$2"; shift 2 ;;
+      --target=*) target="${1#--target=}"; shift ;;
       -*)
         echo "ta: unknown option '$1'" >&2
         exit 2
@@ -599,11 +601,11 @@ cmd_merge() {
   done
 
   if [[ -z "$branch" ]]; then
-    echo "usage: ta wt merge <branch>" >&2
+    echo "usage: ta wt merge <branch> [--target <branch>]" >&2
     exit 2
   fi
 
-  # Resolve main worktree path
+  # Resolve target worktree path
   local main_wt=""
   local porcelain parse_dir="" parse_branch=""
   porcelain="$(git worktree list --porcelain)"
@@ -616,7 +618,7 @@ cmd_merge() {
     elif [[ "$line" == "branch "* ]]; then
       parse_branch="${line#branch refs/heads/}"
     elif [[ -z "$line" ]]; then
-      if [[ "$parse_branch" == "main" ]]; then
+      if [[ "$parse_branch" == "$target" ]]; then
         main_wt="$parse_dir"
       fi
       parse_dir="" parse_branch=""
@@ -624,7 +626,7 @@ cmd_merge() {
   done <<< "$porcelain"
 
   if [[ -z "$main_wt" ]]; then
-    echo "ta: cannot find main worktree" >&2
+    echo "ta: cannot find worktree for target branch '$target'" >&2
     exit 1
   fi
 
@@ -658,10 +660,10 @@ cmd_merge() {
     exit 1
   fi
 
-  # Validate main worktree is clean
+  # Validate target worktree is clean
   dirty="$(_dirty_status "$main_wt")"
   if [[ "$dirty" != "clean" ]]; then
-    echo "ta: main worktree has uncommitted changes ($dirty)" >&2
+    echo "ta: target worktree '$target' has uncommitted changes ($dirty)" >&2
     exit 1
   fi
 
@@ -674,8 +676,8 @@ cmd_merge() {
     exit 1
   fi
 
-  # Commit with auto-generated squash message
-  if ! git -C "$main_wt" commit --no-edit 2>&1; then
+  # Commit with message referencing the branch name
+  if ! git -C "$main_wt" commit -m "Squashed '$branch' into $target" 2>&1; then
     echo "ta: commit failed" >&2
     git -C "$main_wt" reset --hard HEAD 2>/dev/null || true
     exit 1
@@ -692,7 +694,7 @@ cmd_merge() {
   local script_dir="${0:A:h}"
   "$script_dir/ta-workspace" kill "$branch" 2>/dev/null || true
 
-  echo "ta: merged '$branch' into main ($commit_hash)"
+  echo "ta: merged '$branch' into $target ($commit_hash)"
   if [[ "$cleanup_ok" == true ]]; then
     echo "ta: worktree and branch removed"
   fi

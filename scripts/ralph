@@ -157,18 +157,15 @@ ensure_worktree() {
     fi
   done <<< "$porcelain"
 
-  # Determine remote
+  # Determine remote (optional — purely local repos have none)
   if git remote | grep -qx upstream; then
     remote=upstream
   elif git remote | grep -qx origin; then
     remote=origin
-  else
-    echo "ralph: no remote found" >&2
-    return 1
   fi
 
   # Create worktree: track remote branch if it exists, else branch from main
-  if git ls-remote --exit-code --heads "$remote" "refs/heads/$branch" &>/dev/null; then
+  if [[ -n $remote ]] && git ls-remote --exit-code --heads "$remote" "refs/heads/$branch" &>/dev/null; then
     git worktree add --track -b "$branch" "$wt_path" "${remote}/${branch}" >&2
   else
     git worktree add -b "$branch" "$wt_path" main >&2

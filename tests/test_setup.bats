@@ -249,6 +249,26 @@ RESOLVE_HELPER="${BATS_TEST_FILENAME%/*}/helpers/resolve_roles.zsh"
   [ -f "$HOME/.claude/skills/create-spec/SKILL.md" ]
 }
 
+# --- Scripts → ~/bin symlink tests ---
+
+@test "setup links all scripts into bin, skipping directories" {
+  mkdir -p "$DOTFILES/scripts/subdir"
+  echo '#!/bin/sh' > "$DOTFILES/scripts/tool-a"
+  echo '#!/bin/sh' > "$DOTFILES/scripts/tool-b"
+  echo '#!/bin/sh' > "$DOTFILES/scripts/subdir/nested"
+  mkdir -p "$HOME/bin"
+
+  for SCRIPT in "$DOTFILES"/scripts/*; do
+    [[ -d "$SCRIPT" ]] && continue
+    NAME=$(basename "$SCRIPT")
+    setup_link "scripts/$NAME" "bin/$NAME"
+  done
+
+  [ -L "$HOME/bin/tool-a" ]
+  [ -L "$HOME/bin/tool-b" ]
+  [ ! -e "$HOME/bin/subdir" ]
+}
+
 # --- Dry-run mode tests ---
 
 @test "setup_link dry-run does not create symlink" {

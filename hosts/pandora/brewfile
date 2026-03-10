@@ -64,6 +64,7 @@ brew "gnupg"
 brew "nmap"
 brew "pipenv"
 brew "shellcheck"
+brew "poppler" # provides pdftotext
 brew "vim"
 brew "xcodegen"
 brew "zsh"
