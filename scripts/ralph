@@ -177,9 +177,27 @@ ensure_worktree() {
   echo "$wt_path"
 }
 
+PWD_ABS=${PWD:A}
+
 # --- completed spec tracking ---
 typeset -A completed_specs
 WORK_DONE=0
+COMPLETED_FILE="$PWD_ABS/.ralph/.completed"
+
+# Load persisted completed specs
+if [[ -f $COMPLETED_FILE ]]; then
+  while IFS=$'\t' read -r spec_path spec_mtime; do
+    completed_specs[$spec_path]=$spec_mtime
+  done < "$COMPLETED_FILE"
+fi
+
+save_completed() {
+  mkdir -p "${COMPLETED_FILE:h}"
+  : > "$COMPLETED_FILE"
+  for spec_path in ${(k)completed_specs}; do
+    printf '%s\t%s\n' "$spec_path" "${completed_specs[$spec_path]}" >> "$COMPLETED_FILE"
+  done
+}
 
 # --- process specs ---
 process_specs() {
@@ -250,6 +268,7 @@ process_specs() {
       local completed_mtime
       zstat -A completed_mtime +mtime "$SPEC_ABS"
       completed_specs[$SPEC_ABS]=$completed_mtime[1]
+      save_completed
     else
       WORK_DONE=1
     fi
@@ -257,8 +276,6 @@ process_specs() {
 }
 
 # --- resolve spec files ---
-PWD_ABS=${PWD:A}
-
 if [[ -n $PROMPT_FILE ]]; then
   # Explicit --prompt: single-file mode (existing behavior)
   if [[ ! -f "$PROMPT_FILE" ]]; then
