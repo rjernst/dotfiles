@@ -164,11 +164,20 @@ ensure_worktree() {
     remote=origin
   fi
 
-  # Create worktree: track remote branch if it exists, else branch from main
+  # Determine default branch name
+  local default_branch
+  if [[ -n $remote ]]; then
+    default_branch=$(git symbolic-ref "refs/remotes/${remote}/HEAD" 2>/dev/null | sed "s|refs/remotes/${remote}/||") || true
+  fi
+  if [[ -z $default_branch ]]; then
+    default_branch=$(git symbolic-ref --short HEAD 2>/dev/null) || default_branch=main
+  fi
+
+  # Create worktree: track remote branch if it exists, else branch from default
   if [[ -n $remote ]] && git ls-remote --exit-code --heads "$remote" "refs/heads/$branch" &>/dev/null; then
     git worktree add --track -b "$branch" "$wt_path" "${remote}/${branch}" >&2
   else
-    git worktree add -b "$branch" "$wt_path" main >&2
+    git worktree add -b "$branch" "$wt_path" "$default_branch" >&2
   fi
 
   echo "$wt_path"
