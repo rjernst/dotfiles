@@ -61,6 +61,8 @@ case "$1" in
       echo "${GIT_TOPLEVEL:-$(pwd)}"
     elif [[ "$2" == "--git-common-dir" ]]; then
       echo "${GIT_TOPLEVEL:-$(pwd)}/.git"
+    elif [[ "$2" == "HEAD" ]]; then
+      echo "${GIT_HEAD:-abc1234567890}"
     fi
     ;;
   worktree)
@@ -332,4 +334,173 @@ branch refs/heads/feature/existing"
   local wt_path="$BATS_TEST_TMPDIR/project-feature-mount"
   # Docker run should mount worktree, not project dir
   grep -Fq "$wt_path:/work" "$DOCKER_LOG"
+}
+
+# --- parse_duration tests ---
+
+@test "parse_duration: plain number treated as seconds" {
+  run zsh -c '
+    eval "$(sed -n "/^parse_duration/,/^}/p" "'"$RALPH"'")"
+    parse_duration 30
+  '
+  [ "$status" -eq 0 ]
+  [ "$output" = "30" ]
+}
+
+@test "parse_duration: seconds suffix" {
+  run zsh -c '
+    eval "$(sed -n "/^parse_duration/,/^}/p" "'"$RALPH"'")"
+    parse_duration 30s
+  '
+  [ "$status" -eq 0 ]
+  [ "$output" = "30" ]
+}
+
+@test "parse_duration: minutes" {
+  run zsh -c '
+    eval "$(sed -n "/^parse_duration/,/^}/p" "'"$RALPH"'")"
+    parse_duration 5m
+  '
+  [ "$status" -eq 0 ]
+  [ "$output" = "300" ]
+}
+
+@test "parse_duration: hours" {
+  run zsh -c '
+    eval "$(sed -n "/^parse_duration/,/^}/p" "'"$RALPH"'")"
+    parse_duration 2h
+  '
+  [ "$status" -eq 0 ]
+  [ "$output" = "7200" ]
+}
+
+@test "parse_duration: days" {
+  run zsh -c '
+    eval "$(sed -n "/^parse_duration/,/^}/p" "'"$RALPH"'")"
+    parse_duration 1d
+  '
+  [ "$status" -eq 0 ]
+  [ "$output" = "86400" ]
+}
+
+@test "parse_duration: errors on invalid input" {
+  run zsh -c '
+    eval "$(sed -n "/^parse_duration/,/^}/p" "'"$RALPH"'")"
+    parse_duration abc
+  '
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"invalid duration"* ]]
+}
+
+@test "parse_duration: errors on invalid suffix" {
+  run zsh -c '
+    eval "$(sed -n "/^parse_duration/,/^}/p" "'"$RALPH"'")"
+    parse_duration 5x
+  '
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"invalid duration"* ]]
+}
+
+@test "parse_duration: errors on empty string" {
+  run zsh -c '
+    eval "$(sed -n "/^parse_duration/,/^}/p" "'"$RALPH"'")"
+    parse_duration ""
+  '
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"invalid duration"* ]]
+}
+
+# --- --timeout flag tests ---
+
+@test "ralph --timeout and --prompt together errors" {
+  cd "$PROJECT"
+  run zsh "$RALPH" --timeout 2h --prompt .ralph/specs/test.md
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--timeout and --prompt cannot be used together"* ]]
+}
+
+# --- completed spec tracking tests ---
+
+@test "ralph marks spec completed when HEAD unchanged" {
+  cd "$PROJECT"
+  export GIT_TOPLEVEL="$PROJECT"
+  # GIT_HEAD stays constant (default "abc1234567890"), so HEAD before == after
+  run zsh "$RALPH"
+  [ "$status" -eq 0 ]
+  # Docker should have run (spec was processed)
+  grep -q 'PROMPT_FILE=.ralph/specs/test.md' "$DOCKER_LOG"
+}
+
+@test "ralph --help shows --timeout option" {
+  run zsh "$RALPH" --help
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"--timeout"* ]]
+}
+
+# --- fswatch / watch loop tests ---
+
+@test "ralph --timeout errors when fswatch not available" {
+  # Remove any fswatch from PATH by using a clean PATH with only our stubs
+  cd "$PROJECT"
+  # Create a wrapper that hides fswatch
+  cat > "$BATS_TEST_TMPDIR/bin/fswatch" <<'STUB'
+#!/bin/bash
+# This stub should NOT be found — we'll remove it for this test
+STUB
+  rm -f "$BATS_TEST_TMPDIR/bin/fswatch"
+  run zsh "$RALPH" --timeout 1s
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"fswatch is required"* ]]
+}
+
+@test "ralph --timeout creates .ralph/specs/ if missing" {
+  local empty_project="$BATS_TEST_TMPDIR/empty-proj"
+  mkdir -p "$empty_project"
+
+  # Stub fswatch to exit non-zero (simulates timeout kill)
+  cat > "$BATS_TEST_TMPDIR/bin/fswatch" <<'STUB'
+#!/bin/bash
+exit 1
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/fswatch"
+
+  cd "$empty_project"
+  run zsh "$RALPH" --timeout 1s
+  [ "$status" -eq 0 ]
+  [ -d "$empty_project/.ralph/specs" ]
+}
+
+@test "ralph --timeout 1s with no specs exits with timeout message" {
+  local empty_project="$BATS_TEST_TMPDIR/empty-proj2"
+  mkdir -p "$empty_project/.ralph/specs"
+
+  # Stub fswatch to exit non-zero (simulates being killed by timer)
+  cat > "$BATS_TEST_TMPDIR/bin/fswatch" <<'STUB'
+#!/bin/bash
+exit 1
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/fswatch"
+
+  cd "$empty_project"
+  run zsh "$RALPH" --timeout 1s
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"timeout expired, no pending work found"* ]]
+}
+
+@test "ralph --timeout processes existing spec then watches" {
+  # Stub fswatch to exit non-zero after first call (simulates timeout)
+  cat > "$BATS_TEST_TMPDIR/bin/fswatch" <<'STUB'
+#!/bin/bash
+exit 1
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/fswatch"
+
+  export GIT_TOPLEVEL="$PROJECT"
+  cd "$PROJECT"
+  run zsh "$RALPH" --timeout 5s
+  [ "$status" -eq 0 ]
+  # Spec should have been processed
+  grep -q 'PROMPT_FILE=.ralph/specs/test.md' "$DOCKER_LOG"
+  # Should eventually time out
+  [[ "$output" == *"timeout expired"* ]]
 }
