@@ -440,15 +440,13 @@ branch refs/heads/feature/existing"
 # --- fswatch / watch loop tests ---
 
 @test "ralph --timeout errors when fswatch not available" {
-  # Remove any fswatch from PATH by using a clean PATH with only our stubs
   cd "$PROJECT"
-  # Create a wrapper that hides fswatch
-  cat > "$BATS_TEST_TMPDIR/bin/fswatch" <<'STUB'
-#!/bin/bash
-# This stub should NOT be found — we'll remove it for this test
-STUB
-  rm -f "$BATS_TEST_TMPDIR/bin/fswatch"
-  run zsh "$RALPH" --timeout 1s
+  # Ensure python3 is available in stubs dir (needed for OAuth parsing)
+  ln -sf "$(command -v python3)" "$BATS_TEST_TMPDIR/bin/python3"
+  # Restrict PATH so real fswatch is hidden; use full zsh path since it may not be in /usr/bin
+  local zsh_path
+  zsh_path=$(command -v zsh)
+  run env PATH="$BATS_TEST_TMPDIR/bin:/usr/bin" "$zsh_path" "$RALPH" --timeout 1s
   [ "$status" -eq 1 ]
   [[ "$output" == *"fswatch is required"* ]]
 }
