@@ -1,25 +1,25 @@
-# Powerline / Base16 Theme
-# Uses Base16 terminal palette so it adapts to your terminal color scheme.
+# Powerline Theme
+# Uses standard ANSI colors (0-15) for compatibility with any terminal palette.
 
 # Status update interval
 set -g status-interval 1
 
-# Basic status bar colors
-set -g status-style 'fg=colour21,bg=colour18'
+# Basic status bar colors (dark bg, light fg)
+set -g status-style 'fg=colour7,bg=colour0'
 
 # Left side of status bar
 set -g status-left-style 'bg=default,fg=default'
 set -g status-left-length 150
-set -g status-left "#[fg=colour18,bg=colour2,bold] #S #[fg=colour2,bg=colour19,nobold]#[fg=colour21,bg=colour19] #(whoami) #[fg=colour19,bg=colour18]#[fg=colour21,bg=colour18] #I:#P #[fg=colour18,bg=default,nobold] #{pane_current_command}"
+set -g status-left "#[fg=colour0,bg=colour2,bold] #S #[fg=colour2,bg=colour8,nobold]#[fg=colour7,bg=colour8] #(whoami) #[fg=colour8,bg=colour0]#[fg=colour7,bg=colour0] #I:#P #[fg=colour0,bg=default,nobold] #{pane_current_command}"
 
 # Right side of status bar
 set -g status-right-style 'bg=default,fg=default'
 set -g status-right-length 150
-set -g status-right "#[fg=colour06]#(echo #{pane_current_path} | sed \"s|^$HOME|~|\") #[fg=colour06,bg=default]#[fg=colour18,bg=colour06,bold] %Y-%m-%d %I:%M %p "
+set -g status-right "#[fg=colour6]#(echo #{pane_current_path} | sed \"s|^$HOME|~|\") #[fg=colour6,bg=default]#[fg=colour0,bg=colour6,bold] %Y-%m-%d %I:%M %p "
 
 # Window status
 set -g window-status-format " #I:#W#F "
-set -g window-status-current-format " #[fg=colour18,bg=colour02] #I:#W#F "
+set -g window-status-current-format " #[fg=colour0,bg=colour2] #I:#W#F "
 
 # Current window status
 set -g window-status-current-style 'bg=default,fg=default'
@@ -34,24 +34,24 @@ set -g window-status-separator ""
 set -g status-justify centre
 
 # Pane border
-set -g pane-border-style 'bg=default,fg=colour18'
+set -g pane-border-style 'bg=default,fg=colour8'
 
 # Active pane border
-set -g pane-active-border-style 'bg=default,fg=colour04'
+set -g pane-active-border-style 'bg=default,fg=colour4'
 
 # Pane number indicator
 set -g display-panes-colour default
 set -g display-panes-active-colour default
 
 # Clock mode
-set -g clock-mode-colour colour04
+set -g clock-mode-colour colour4
 set -g clock-mode-style 12
 
 # Message
-set -g message-style 'bg=colour16,fg=colour18'
+set -g message-style 'bg=colour3,fg=colour0'
 
 # Command message
-set -g message-command-style 'bg=colour16,fg=colour18'
+set -g message-command-style 'bg=colour3,fg=colour0'
 
-# Mode
-set -g mode-style 'bg=yellow,fg=black'
+# Mode (visual selection in copy mode)
+set -g mode-style 'bg=colour3,fg=colour0'
