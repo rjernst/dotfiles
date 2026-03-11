@@ -1,0 +1,156 @@
+#!/usr/bin/env zsh
+set -euo pipefail
+
+# workspace-switcher-list: Build grouped session list for workspace-switcher
+#
+# Usage: workspace-switcher-list <collapse-state-file> [toggle-group-key]
+# Env: CURRENT_SESSION — name of the current tmux session
+# Env: TMUX_CMD — override tmux binary (for testing)
+#
+# Arguments:
+#   collapse-state-file  Path to file storing collapsed group names (one per line)
+#   toggle-group-key     Optional: group key to toggle (agent-loops, worktrees, other)
+#                        When provided, toggles the group in the state file before output
+#
+# Output: tab-separated lines for fzf consumption
+#   Group headers:  GROUP:<group-key>\t<ansi-bold>▾ Group Name (count)</ansi-reset>
+#   Session lines:  <raw-name>\t  <indicator>  <display-name>\t<dir-basename>\t<N windows>
+
+readonly COLLAPSE_FILE="${1:?usage: workspace-switcher-list <collapse-state-file>}"
+readonly TOGGLE_ARG="${2:-}"
+readonly tmux="${TMUX_CMD:-tmux}"
+
+# --- Resolve toggle argument to group key ---
+# Accepts: group key (agent-loops, worktrees, other),
+#          GROUP: prefixed (GROUP:agent-loops), or session name (al-foo -> agent-loops)
+resolve_group_key() {
+  local arg="$1"
+  if [[ "$arg" == GROUP:* ]]; then
+    echo "${arg#GROUP:}"
+  elif [[ "$arg" == agent-loops || "$arg" == worktrees || "$arg" == other ]]; then
+    echo "$arg"
+  elif [[ "$arg" == al-* ]]; then
+    echo "agent-loops"
+  elif [[ "$arg" == wt-* ]]; then
+    echo "worktrees"
+  else
+    echo "other"
+  fi
+}
+
+TOGGLE_GROUP=""
+if [[ -n "$TOGGLE_ARG" ]]; then
+  TOGGLE_GROUP=$(resolve_group_key "$TOGGLE_ARG")
+fi
+
+# --- Toggle collapse state if requested ---
+
+if [[ -n "$TOGGLE_GROUP" ]]; then
+  typeset -a current_groups
+  if [[ -f "$COLLAPSE_FILE" ]]; then
+    while IFS= read -r g; do
+      [[ -n "$g" ]] && current_groups+=("$g")
+    done < "$COLLAPSE_FILE"
+  fi
+
+  if (( ${current_groups[(Ie)$TOGGLE_GROUP]} )); then
+    # Group is collapsed — remove it (expand)
+    current_groups=("${(@)current_groups:#$TOGGLE_GROUP}")
+  else
+    # Group is expanded — add it (collapse)
+    current_groups+=("$TOGGLE_GROUP")
+  fi
+
+  # Write updated state
+  printf '%s\n' "${current_groups[@]}" > "$COLLAPSE_FILE"
+fi
+
+# --- Collect sessions ---
+
+typeset -a agent_loops worktrees other
+
+while IFS=$'\t' read -r name windows attached; do
+  # Skip transient popup sessions
+  [[ "$name" == "popup" || "$name" == "popover" ]] && continue
+
+  # Determine indicator
+  if [[ "$name" == "${CURRENT_SESSION:-}" ]]; then
+    indicator="●"
+  elif (( attached > 0 )); then
+    indicator="◉"
+  else
+    indicator="○"
+  fi
+
+  # Get working directory basename from the active pane
+  pane_path=$("$tmux" display-message -t "$name" -p '#{pane_current_path}' 2>/dev/null || echo "")
+  dir_name="${pane_path:t}"
+  [[ -z "$dir_name" ]] && dir_name="-"
+
+  # Pluralize windows
+  if (( windows == 1 )); then
+    win_label="1 window"
+  else
+    win_label="$windows windows"
+  fi
+
+  # Categorize by prefix
+  if [[ "$name" == al-* ]]; then
+    display_name="${name#al-}"
+    agent_loops+=("${name}\t  ${indicator}  ${display_name}\t${dir_name}\t${win_label}")
+  elif [[ "$name" == wt-* ]]; then
+    display_name="${name#wt-}"
+    worktrees+=("${name}\t  ${indicator}  ${display_name}\t${dir_name}\t${win_label}")
+  else
+    other+=("${name}\t  ${indicator}  ${name}\t${dir_name}\t${win_label}")
+  fi
+done < <("$tmux" list-sessions -F '#{session_name}	#{session_windows}	#{session_attached}' 2>/dev/null | sort)
+
+# --- Read collapse state ---
+
+typeset -A collapsed
+if [[ -f "$COLLAPSE_FILE" ]]; then
+  while IFS= read -r group; do
+    [[ -n "$group" ]] && collapsed[$group]=1
+  done < "$COLLAPSE_FILE"
+fi
+
+# --- Output helper ---
+
+print_group() {
+  local key="$1" label="$2"
+  shift 2
+  local -a items=("$@")
+  local count=${#items}
+
+  # Determine collapse indicator
+  if (( ${+collapsed[$key]} )); then
+    local arrow="▸"
+  else
+    local arrow="▾"
+  fi
+
+  # Group header with ANSI bold
+  printf "GROUP:%s\t\033[1m%s %s (%d)\033[0m\n" "$key" "$arrow" "$label" "$count"
+
+  # Session lines (only if expanded)
+  if (( ! ${+collapsed[$key]} )); then
+    local line
+    for line in "${items[@]}"; do
+      printf '%b\n' "$line"
+    done
+  fi
+}
+
+# --- Output groups in fixed order: Agent Loops, Worktrees, Other ---
+
+# Agent Loops — always shown (even if empty)
+print_group "agent-loops" "Agent Loops" "${agent_loops[@]}"
+
+# Worktrees — always shown (even if empty)
+print_group "worktrees" "Worktrees" "${worktrees[@]}"
+
+# Other — hidden when empty
+if (( ${#other} > 0 )); then
+  print_group "other" "Other" "${other[@]}"
+fi
