@@ -19,6 +19,13 @@ setup() {
   unset TMUX
 }
 
+# Detect available shell (zsh preferred, bash fallback)
+if command -v zsh &>/dev/null; then
+  SHELL_CMD=zsh
+else
+  SHELL_CMD=bash
+fi
+
 # --- mock helpers ---
 
 # Mock ta-wt that returns worktree JSON
@@ -148,8 +155,12 @@ case "\$1" in
   switch-client|attach-session)
     exit 0
     ;;
-  send-keys)
+  send-keys|rename-window|new-window|select-window)
     exit 0
+    ;;
+  show-environment)
+    echo "DOTFILES_AGENT_WINDOWS: unknown variable" >&2
+    exit 1
     ;;
   *) exit 0 ;;
 esac
@@ -175,6 +186,47 @@ case "$1" in
   send-keys)
     exit 0
     ;;
+  show-environment)
+    exit 1
+    ;;
+  switch-client|attach-session)
+    exit 0
+    ;;
+  *) exit 0 ;;
+esac
+SCRIPT
+  chmod +x "$TMUX_CMD"
+}
+
+# Mock tmux that logs all calls and supports agent window testing
+create_mock_tmux_logging() {
+  local call_log="$BATS_TEST_TMPDIR/tmux-call-log"
+  local agent_windows="${1:-off}"
+  : > "$call_log"
+
+  cat > "$TMUX_CMD" <<SCRIPT
+#!/usr/bin/env bash
+CALL_LOG="$call_log"
+echo "\$@" >> "\$CALL_LOG"
+case "\$1" in
+  list-sessions)
+    echo "no server running" >&2
+    exit 1
+    ;;
+  has-session)
+    exit 1
+    ;;
+  new-session|new-window|rename-window|select-window|send-keys)
+    exit 0
+    ;;
+  show-environment)
+    if [[ "$agent_windows" == "on" ]]; then
+      echo "DOTFILES_AGENT_WINDOWS=on"
+    else
+      echo "DOTFILES_AGENT_WINDOWS: unknown variable" >&2
+      exit 1
+    fi
+    ;;
   switch-client|attach-session)
     exit 0
     ;;
@@ -196,7 +248,7 @@ SCRIPT
 
   # Use a simpler approach: run the script and look for the session name in output
   create_mock_tmux_empty
-  run zsh "$TA_WORKSPACE" create feature/fix-thing
+  run "$SHELL_CMD" "$TA_WORKSPACE" create feature/fix-thing
   [ "$status" -eq 0 ]
   [[ "$output" == *"wt-feature-fix-thing"* ]]
 }
@@ -213,7 +265,7 @@ fi
 SCRIPT
   chmod +x "$TA_WT_CMD"
 
-  run zsh "$TA_WORKSPACE" create fix/area/detail
+  run "$SHELL_CMD" "$TA_WORKSPACE" create fix/area/detail
   [ "$status" -eq 0 ]
   [[ "$output" == *"wt-fix-area-detail"* ]]
 }
@@ -228,7 +280,7 @@ fi
 SCRIPT
   chmod +x "$TA_WT_CMD"
 
-  run zsh "$TA_WORKSPACE" create 'fix@thing#1'
+  run "$SHELL_CMD" "$TA_WORKSPACE" create 'fix@thing#1'
   [ "$status" -eq 0 ]
   [[ "$output" == *"wt-fix-thing-1"* ]]
 }
@@ -243,7 +295,7 @@ fi
 SCRIPT
   chmod +x "$TA_WT_CMD"
 
-  run zsh "$TA_WORKSPACE" create '/leading-slash'
+  run "$SHELL_CMD" "$TA_WORKSPACE" create '/leading-slash'
   [ "$status" -eq 0 ]
   [[ "$output" == *"wt-leading-slash"* ]]
   # Should NOT have wt--leading
@@ -253,19 +305,21 @@ SCRIPT
 # --- dispatcher tests ---
 
 @test "ta workspace dispatches to ta-workspace" {
+  # ta dispatcher uses zsh-specific ${0:A:h}, requires zsh
+  command -v zsh &>/dev/null || skip "zsh not available"
   run zsh "$TA" workspace
   [ "$status" -eq 2 ]
   [[ "$output" == *"usage: ta workspace"* ]]
 }
 
 @test "ta-workspace with no args shows usage" {
-  run zsh "$TA_WORKSPACE"
+  run "$SHELL_CMD" "$TA_WORKSPACE"
   [ "$status" -eq 2 ]
   [[ "$output" == *"usage:"* ]]
 }
 
 @test "ta-workspace unknown command fails" {
-  run zsh "$TA_WORKSPACE" bogus
+  run "$SHELL_CMD" "$TA_WORKSPACE" bogus
   [ "$status" -eq 2 ]
   [[ "$output" == *"unknown workspace command"* ]]
 }
@@ -273,7 +327,7 @@ SCRIPT
 # --- create tests ---
 
 @test "create: no branch shows usage" {
-  run zsh "$TA_WORKSPACE" create
+  run "$SHELL_CMD" "$TA_WORKSPACE" create
   [ "$status" -eq 2 ]
   [[ "$output" == *"usage:"* ]]
 }
@@ -282,7 +336,7 @@ SCRIPT
   create_mock_tmux_empty
   create_mock_ta_wt
 
-  run zsh "$TA_WORKSPACE" create feature/fix-thing
+  run "$SHELL_CMD" "$TA_WORKSPACE" create feature/fix-thing
   [ "$status" -eq 0 ]
   [[ "$output" == *"created session"* ]]
   [[ "$output" == *"wt-feature-fix-thing"* ]]
@@ -293,7 +347,7 @@ SCRIPT
   create_mock_tmux_with_sessions
   create_mock_ta_wt
 
-  run zsh "$TA_WORKSPACE" create feature/fix-thing
+  run "$SHELL_CMD" "$TA_WORKSPACE" create feature/fix-thing
   [ "$status" -eq 0 ]
   [[ "$output" == *"already exists"* ]]
 }
@@ -302,7 +356,7 @@ SCRIPT
   create_mock_tmux_empty
   create_mock_ta_wt
 
-  run zsh "$TA_WORKSPACE" create nonexistent/branch
+  run "$SHELL_CMD" "$TA_WORKSPACE" create nonexistent/branch
   [ "$status" -eq 1 ]
   [[ "$output" == *"no worktree found"* ]]
 }
@@ -318,23 +372,22 @@ case "\$1" in
   has-session) exit 1 ;;
   new-session) exit 0 ;;
   send-keys)
-    echo "\$@" > "$state_file"
+    echo "\$@" >> "$state_file"
     exit 0
     ;;
+  show-environment) exit 1 ;;
   *) exit 0 ;;
 esac
 SCRIPT
   chmod +x "$TMUX_CMD"
 
-  run zsh "$TA_WORKSPACE" create feature/fix-thing --cmd "git status"
+  run "$SHELL_CMD" "$TA_WORKSPACE" create feature/fix-thing --cmd "git status"
   [ "$status" -eq 0 ]
   [[ "$output" == *"created session"* ]]
 
-  # Verify send-keys was called
+  # Verify send-keys was called with the command
   [ -f "$state_file" ]
-  local logged
-  logged="$(cat "$state_file")"
-  [[ "$logged" == *"git status"* ]]
+  grep -q "git status" "$state_file"
 }
 
 # --- list tests ---
@@ -342,7 +395,7 @@ SCRIPT
 @test "list: with no tmux server shows empty message" {
   create_mock_tmux_no_server
 
-  run zsh "$TA_WORKSPACE" list
+  run "$SHELL_CMD" "$TA_WORKSPACE" list
   [ "$status" -eq 0 ]
   [[ "$output" == *"no tmux sessions"* ]]
 }
@@ -350,7 +403,7 @@ SCRIPT
 @test "list: only shows wt-* sessions" {
   create_mock_tmux_with_sessions
 
-  run zsh "$TA_WORKSPACE" list
+  run "$SHELL_CMD" "$TA_WORKSPACE" list
   [ "$status" -eq 0 ]
   [[ "$output" == *"wt-feature-fix-thing"* ]]
   # Should NOT show non-wt sessions
@@ -364,7 +417,7 @@ SCRIPT
 @test "list: shows header with SESSION columns" {
   create_mock_tmux_with_sessions
 
-  run zsh "$TA_WORKSPACE" list
+  run "$SHELL_CMD" "$TA_WORKSPACE" list
   [ "$status" -eq 0 ]
   [[ "$output" == *"SESSION"* ]]
   [[ "$output" == *"ATTACHED"* ]]
@@ -392,7 +445,7 @@ esac
 SCRIPT
   chmod +x "$TMUX_CMD"
 
-  run zsh "$TA_WORKSPACE" list
+  run "$SHELL_CMD" "$TA_WORKSPACE" list
   [ "$status" -eq 0 ]
   [[ "$output" == *"no workspace sessions"* ]]
 }
@@ -400,7 +453,7 @@ SCRIPT
 # --- attach tests ---
 
 @test "attach: no branch shows usage" {
-  run zsh "$TA_WORKSPACE" attach
+  run "$SHELL_CMD" "$TA_WORKSPACE" attach
   [ "$status" -eq 2 ]
   [[ "$output" == *"usage:"* ]]
 }
@@ -409,7 +462,7 @@ SCRIPT
   create_mock_tmux_empty
   create_mock_ta_wt
 
-  run zsh "$TA_WORKSPACE" attach feature/fix-thing
+  run "$SHELL_CMD" "$TA_WORKSPACE" attach feature/fix-thing
   [ "$status" -eq 0 ]
   [[ "$output" == *"created session"* ]]
 }
@@ -420,7 +473,7 @@ SCRIPT
 
   # Ensure TMUX is unset (outside tmux)
   unset TMUX
-  run zsh "$TA_WORKSPACE" attach feature/fix-thing
+  run "$SHELL_CMD" "$TA_WORKSPACE" attach feature/fix-thing
   [ "$status" -eq 0 ]
   # Should NOT create (session already exists)
   [[ "$output" != *"created session"* ]]
@@ -444,7 +497,7 @@ SCRIPT
   chmod +x "$TMUX_CMD"
 
   # Simulate being inside tmux
-  TMUX="/tmp/tmux-1000/default,12345,0" run zsh "$TA_WORKSPACE" attach feature/fix-thing
+  TMUX="/tmp/tmux-1000/default,12345,0" run "$SHELL_CMD" "$TA_WORKSPACE" attach feature/fix-thing
   [ "$status" -eq 0 ]
 
   # Verify switch-client was called (not attach-session)
@@ -455,7 +508,7 @@ SCRIPT
 # --- kill tests ---
 
 @test "kill: no branch shows usage" {
-  run zsh "$TA_WORKSPACE" kill
+  run "$SHELL_CMD" "$TA_WORKSPACE" kill
   [ "$status" -eq 2 ]
   [[ "$output" == *"usage:"* ]]
 }
@@ -463,7 +516,7 @@ SCRIPT
 @test "kill: nonexistent session returns error" {
   create_mock_tmux_with_sessions
 
-  run zsh "$TA_WORKSPACE" kill nonexistent/branch
+  run "$SHELL_CMD" "$TA_WORKSPACE" kill nonexistent/branch
   [ "$status" -eq 1 ]
   [[ "$output" == *"not found"* ]]
 }
@@ -471,7 +524,7 @@ SCRIPT
 @test "kill: kills existing session" {
   create_mock_tmux_with_sessions
 
-  run zsh "$TA_WORKSPACE" kill feature/fix-thing
+  run "$SHELL_CMD" "$TA_WORKSPACE" kill feature/fix-thing
   [ "$status" -eq 0 ]
   [[ "$output" == *"killed session"* ]]
   [[ "$output" == *"wt-feature-fix-thing"* ]]
@@ -481,7 +534,67 @@ SCRIPT
   create_mock_tmux_with_sessions
 
   # wt-feature-fix-thing has attached=0 in the mock state
-  run zsh "$TA_WORKSPACE" kill feature/fix-thing
+  run "$SHELL_CMD" "$TA_WORKSPACE" kill feature/fix-thing
   [ "$status" -eq 0 ]
   [[ "$output" == *"killed"* ]]
+}
+
+# --- multi-window workspace tests ---
+
+@test "create: renames window 0 to shell" {
+  create_mock_tmux_logging off
+  create_mock_ta_wt
+
+  run "$SHELL_CMD" "$TA_WORKSPACE" create feature/fix-thing
+  [ "$status" -eq 0 ]
+
+  local call_log="$BATS_TEST_TMPDIR/tmux-call-log"
+  grep -q "rename-window.*shell" "$call_log"
+}
+
+@test "create: without DOTFILES_AGENT_WINDOWS, session has no extra windows" {
+  create_mock_tmux_logging off
+  create_mock_ta_wt
+
+  run "$SHELL_CMD" "$TA_WORKSPACE" create feature/fix-thing
+  [ "$status" -eq 0 ]
+
+  local call_log="$BATS_TEST_TMPDIR/tmux-call-log"
+  # Should not create additional windows
+  ! grep -q "new-window" "$call_log"
+}
+
+@test "create: with DOTFILES_AGENT_WINDOWS=on, creates agent and agent-loop windows" {
+  create_mock_tmux_logging on
+  create_mock_ta_wt
+
+  run "$SHELL_CMD" "$TA_WORKSPACE" create feature/fix-thing
+  [ "$status" -eq 0 ]
+
+  local call_log="$BATS_TEST_TMPDIR/tmux-call-log"
+  # Should create agent window
+  grep -q "new-window.*-n agent " "$call_log" || grep -q "new-window.*-n agent$" "$call_log"
+  # Should create agent-loop window
+  grep -q "new-window.*-n agent-loop" "$call_log"
+  # Should send claude to agent window
+  grep -q "send-keys.*:agent claude" "$call_log"
+  # Should send ralph to agent-loop window
+  grep -q "send-keys.*:agent-loop ralph" "$call_log"
+  # Should select window 0
+  grep -q "select-window.*:0" "$call_log"
+}
+
+@test "create: --cmd flag applies to shell window only with agent windows" {
+  create_mock_tmux_logging on
+  create_mock_ta_wt
+
+  run "$SHELL_CMD" "$TA_WORKSPACE" create feature/fix-thing --cmd "git status"
+  [ "$status" -eq 0 ]
+
+  local call_log="$BATS_TEST_TMPDIR/tmux-call-log"
+  # The --cmd sends to the shell window
+  grep -q "send-keys.*:shell git status" "$call_log"
+  # Agent windows still get their commands
+  grep -q "send-keys.*:agent claude" "$call_log"
+  grep -q "send-keys.*:agent-loop ralph" "$call_log"
 }

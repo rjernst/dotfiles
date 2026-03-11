@@ -24,7 +24,12 @@ fi
 : ${TMUX_CMD:=tmux}
 
 # Allow overriding ta-wt path for testing
-script_dir="${0:A:h}"
+# ${0:A:h} is zsh-specific (resolve symlinks, get dir); fall back for bash
+if [[ -n "${ZSH_VERSION:-}" ]]; then
+  script_dir="${0:A:h}"
+else
+  script_dir="$(cd "$(dirname "$0")" && pwd)"
+fi
 : ${TA_WT_CMD:=${script_dir}/ta-wt}
 
 # --- helper: sanitize branch name to session name ---
@@ -52,7 +57,7 @@ _tmux_running() {
 _worktree_path() {
   local branch="$1"
   local json
-  json="$(zsh "$TA_WT_CMD" list --json 2>/dev/null)" || { echo ""; return 1; }
+  json="$("$TA_WT_CMD" list --json 2>/dev/null)" || { echo ""; return 1; }
 
   local wt_path
   wt_path="$(echo "$json" | jq -r --arg b "$branch" '.[] | select(.branch == $b) | .path' 2>/dev/null)" || { echo ""; return 1; }
@@ -113,9 +118,28 @@ cmd_create() {
   # Create detached tmux session
   "$TMUX_CMD" new-session -d -s "$session_name" -c "$wt_path"
 
-  # Send command if provided
+  # Rename window 0 to "shell"
+  "$TMUX_CMD" rename-window -t "$session_name:0" "shell"
+
+  # Send command if provided (applies to window 0 / shell)
   if [[ -n "$send_cmd" ]]; then
-    "$TMUX_CMD" send-keys -t "$session_name" "$send_cmd" Enter
+    "$TMUX_CMD" send-keys -t "$session_name:shell" "$send_cmd" Enter
+  fi
+
+  # Check if agent windows are enabled
+  local agent_windows=""
+  agent_windows="$("$TMUX_CMD" show-environment -g DOTFILES_AGENT_WINDOWS 2>/dev/null | cut -d= -f2)" || true
+  if [[ "$agent_windows" == "on" ]]; then
+    # Create agent window
+    "$TMUX_CMD" new-window -t "$session_name" -n "agent" -c "$wt_path"
+    "$TMUX_CMD" send-keys -t "$session_name:agent" "claude" Enter
+
+    # Create agent-loop window
+    "$TMUX_CMD" new-window -t "$session_name" -n "agent-loop" -c "$wt_path"
+    "$TMUX_CMD" send-keys -t "$session_name:agent-loop" "ralph" Enter
+
+    # Select shell window so user lands there
+    "$TMUX_CMD" select-window -t "$session_name:0"
   fi
 
   echo "ta: created session '$session_name' in $wt_path"

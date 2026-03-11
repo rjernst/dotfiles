@@ -1,0 +1,38 @@
+#!/usr/bin/env zsh
+
+# tmux-window-name — Output formatted window name for tmux auto-rename
+# Usage: tmux-window-name <pane_current_path>
+# Output: "repo [branch]" for git repos, or directory basename otherwise
+
+pane_path="${1:-.}"
+
+# If path doesn't exist, fall back to basename
+if [[ ! -d "$pane_path" ]]; then
+  echo "${pane_path##*/}"
+  exit 0
+fi
+
+# Get git info — fail fast if not a git repo
+toplevel=$(git -C "$pane_path" rev-parse --show-toplevel 2>/dev/null) || {
+  echo "${pane_path##*/}"
+  exit 0
+}
+
+repo="${toplevel##*/}"
+branch=$(git -C "$pane_path" rev-parse --abbrev-ref HEAD 2>/dev/null) || {
+  echo "$repo"
+  exit 0
+}
+
+# Main/master branches show just the repo name
+if [[ "$branch" == "main" || "$branch" == "master" ]]; then
+  echo "$repo"
+  exit 0
+fi
+
+# Strip common prefixes
+branch="${branch#feature/}"
+branch="${branch#bugfix/}"
+branch="${branch#hotfix/}"
+
+echo "$repo [$branch]"

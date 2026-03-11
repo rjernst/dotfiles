@@ -1,0 +1,59 @@
+Tmux Cheatsheet
+═══════════════
+Prefix: C-Space (Ctrl+Space)
+
+Navigation ─────────────────────────────────────────
+  j               Select pane down
+  k               Select pane up
+  l               Select pane right
+  C-p             Previous window
+  C-n             Next window
+  0-9             Select window by number
+
+Pane Resizing ──────────────────────────────────────
+  C-h             Resize pane left  (10 cells)
+  C-j             Resize pane down  (10 cells)
+  C-k             Resize pane up    (10 cells)
+  C-l             Resize pane right (10 cells)
+  z               Toggle pane zoom (fullscreen)
+
+Splits & Layout ────────────────────────────────────
+  |               Split horizontally (same directory)
+  -               Split vertically   (same directory)
+  x               Kill current pane
+  Space           Cycle pane layouts
+  !               Break pane into new window
+
+Window Management ──────────────────────────────────
+  c               New window
+  &               Kill window
+  ,               Rename window
+  >               Move window to index
+  .               Swap window with index
+
+Sessions & Workspaces ──────────────────────────────
+  w               Workspace switcher popup
+  d               Detach from session
+  s               List sessions
+  $               Rename session
+  (               Previous session
+  )               Next session
+
+Copy Mode (vi) ─────────────────────────────────────
+  [               Enter copy mode
+  v               Begin selection
+  y               Copy to clipboard
+  Enter           Copy to clipboard
+  ]               Paste from clipboard
+  q               Exit copy mode
+  /               Search forward
+  ?               Search backward
+
+Popups ─────────────────────────────────────────────
+  h               Help cheatsheet (this popup)
+  J               Toggle popup shell (90%)
+
+Other ──────────────────────────────────────────────
+  r               Refresh client
+  :               Command prompt
+  t               Show clock
