@@ -33,8 +33,16 @@ setup() {
 }
 
 @test "elasticsearch-support role creates zsh plugin symlink" {
+  # Stub required commands (tsh, kubectl, jq)
+  MOCK_BIN="$BATS_TEST_TMPDIR/mock-bin"
+  mkdir -p "$MOCK_BIN"
+  for cmd in tsh kubectl jq; do
+    printf '#!/bin/bash\nexit 0\n' > "$MOCK_BIN/$cmd"
+    chmod +x "$MOCK_BIN/$cmd"
+  done
+  export PATH="$MOCK_BIN:$PATH"
+
   run zsh "$HELPER" elasticsearch-support
-  # May warn about gcloud missing — that's expected
   [ -L "$HOME/.zsh/plugins/elasticsearch-support.zsh" ]
 }
 

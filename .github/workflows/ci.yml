@@ -98,7 +98,7 @@ jobs:
 
           # Stub claude inside the container by bind-mounting over the real binary
           mkdir -p "$tmp/bin"
-          printf '#!/bin/bash\ncat > /dev/null\necho "claude stub ok"\n' > "$tmp/bin/claude"
+          printf '#!/bin/bash\ncat > /dev/null\necho "claude stub ok"\ngit commit --allow-empty -m "stub commit" 2>/dev/null\n' > "$tmp/bin/claude"
           chmod +x "$tmp/bin/claude"
 
           docker run --rm \
