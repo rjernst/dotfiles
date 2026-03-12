@@ -1,16 +1,15 @@
 #!/usr/bin/env bats
 
 # Tests for scripts/ralph (host wrapper) argument parsing and validation.
-# Stubs docker, git, and security so no container is actually started.
+# Stubs docker, git, gh, and security so no container is actually started.
 
 setup() {
   RALPH="${BATS_TEST_FILENAME%/*}/../scripts/ralph"
   export TMPDIR="$BATS_TEST_TMPDIR"
 
-  # Create a project dir with a spec file in .ralph/specs/
+  # Create a project dir
   PROJECT="$BATS_TEST_TMPDIR/project"
-  mkdir -p "$PROJECT/.ralph/specs"
-  printf 'branch: test-branch\n\ntest prompt\n' > "$PROJECT/.ralph/specs/test.md"
+  mkdir -p "$PROJECT"
 
   # Stub docker — record the command and exit
   DOCKER_LOG="$BATS_TEST_TMPDIR/docker.log"
@@ -37,6 +36,13 @@ STUB
 echo '{"claudeAiOauth":{"accessToken":"fake-token"}}'
 STUB
   chmod +x "$BATS_TEST_TMPDIR/bin/security"
+
+  # Stub gh — default no-op
+  cat > "$BATS_TEST_TMPDIR/bin/gh" <<'STUB'
+#!/bin/bash
+echo "stub"
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/gh"
 
   # Stub git — handles config, worktree, remote, ls-remote, rev-parse.
   # Control behavior via env vars: GIT_TOPLEVEL, GIT_WORKTREE_LIST,
@@ -95,6 +101,13 @@ case "$1" in
       exit 2
     fi
     ;;
+  symbolic-ref)
+    if [[ "$2" == "--short" ]]; then
+      echo "main"
+    else
+      echo "refs/remotes/origin/main"
+    fi
+    ;;
   *)
     command git "$@"
     ;;
@@ -109,7 +122,8 @@ STUB
   run zsh "$RALPH" --help
   [ "$status" -eq 0 ]
   [[ "$output" == *"Usage:"* ]]
-  [[ "$output" == *"--prompt"* ]]
+  [[ "$output" == *"--issue"* ]]
+  [[ "$output" == *"--poll"* ]]
 }
 
 @test "ralph -h shows usage" {
@@ -125,215 +139,13 @@ STUB
   [[ "$output" == *"Unknown option"* ]]
 }
 
-# --- spec discovery tests ---
-
-@test "ralph reads specs from .ralph/specs/" {
+@test "ralph with no args shows usage" {
   cd "$PROJECT"
   run zsh "$RALPH"
-  [ "$status" -eq 0 ]
-  grep -q 'PROMPT_FILE=.ralph/specs/test.md' "$DOCKER_LOG"
-}
-
-@test "ralph fails when no spec files found" {
-  cd "$BATS_TEST_TMPDIR"
-  run zsh "$RALPH"
-  [ "$status" -eq 1 ]
-  [[ "$output" == *"no spec files found"* ]]
-}
-
-@test "ralph processes multiple specs sequentially" {
-  printf 'branch: branch-a\n\nfirst spec\n' > "$PROJECT/.ralph/specs/aaa.md"
-  printf 'branch: branch-b\n\nsecond spec\n' > "$PROJECT/.ralph/specs/bbb.md"
-  rm "$PROJECT/.ralph/specs/test.md"
-  export GIT_TOPLEVEL="$PROJECT"
-  cd "$PROJECT"
-  run zsh "$RALPH"
-  [ "$status" -eq 0 ]
-  grep -q 'PROMPT_FILE=.ralph/specs/aaa.md' "$DOCKER_LOG"
-  grep -q 'PROMPT_FILE=.ralph/specs/bbb.md' "$DOCKER_LOG"
-}
-
-@test "ralph skips spec without branch directive" {
-  # Add a spec without branch:
-  printf '## Tasks\ndo stuff\n' > "$PROJECT/.ralph/specs/no-branch.md"
-  export GIT_TOPLEVEL="$PROJECT"
-  cd "$PROJECT"
-  run zsh "$RALPH"
-  [ "$status" -eq 0 ]
-  # The spec without branch: should be skipped with a warning
-  [[ "$output" == *"skipping .ralph/specs/no-branch.md"* ]]
-  [[ "$output" == *"missing required 'branch:' directive"* ]]
-  # The other spec (test.md) should still run
-  grep -q 'PROMPT_FILE=.ralph/specs/test.md' "$DOCKER_LOG"
-}
-
-# --- --prompt override tests ---
-
-@test "ralph --prompt accepts custom file" {
-  mkdir -p "$PROJECT/specs"
-  printf 'branch: spec-branch\n\nspec content\n' > "$PROJECT/specs/myspec.md"
-  cd "$PROJECT"
-  run zsh "$RALPH" --prompt specs/myspec.md
-  [ "$status" -eq 0 ]
-  # Docker run should have PROMPT_FILE=specs/myspec.md
-  grep -q 'PROMPT_FILE=specs/myspec.md' "$DOCKER_LOG"
-}
-
-@test "ralph --prompt fails when file does not exist" {
-  cd "$PROJECT"
-  run zsh "$RALPH" --prompt no-such-file.md
-  [ "$status" -eq 1 ]
-  [[ "$output" == *"prompt file not found: no-such-file.md"* ]]
-}
-
-# --- option passing tests ---
-
-@test "ralph passes default model to container" {
-  cd "$PROJECT"
-  run zsh "$RALPH"
-  [ "$status" -eq 0 ]
-  grep -q 'MODEL=sonnet' "$DOCKER_LOG"
-}
-
-@test "ralph --model passes custom model" {
-  cd "$PROJECT"
-  run zsh "$RALPH" --model opus
-  [ "$status" -eq 0 ]
-  grep -q 'MODEL=opus' "$DOCKER_LOG"
-}
-
-@test "ralph passes max iterations" {
-  cd "$PROJECT"
-  run zsh "$RALPH" 5
-  [ "$status" -eq 0 ]
-  grep -q 'MAX_ITERATIONS=5' "$DOCKER_LOG"
-}
-
-@test "ralph defaults to unlimited iterations" {
-  cd "$PROJECT"
-  run zsh "$RALPH"
-  [ "$status" -eq 0 ]
-  grep -q 'MAX_ITERATIONS=0' "$DOCKER_LOG"
-}
-
-@test "ralph --push passes PUSH=1" {
-  cd "$PROJECT"
-  run zsh "$RALPH" --push
-  [ "$status" -eq 0 ]
-  grep -q 'PUSH=1' "$DOCKER_LOG"
-}
-
-@test "ralph without --push passes PUSH=0" {
-  cd "$PROJECT"
-  run zsh "$RALPH"
-  [ "$status" -eq 0 ]
-  grep -q 'PUSH=0' "$DOCKER_LOG"
-}
-
-@test "ralph --packages uses custom image tag" {
-  cd "$PROJECT"
-  run zsh "$RALPH" --packages "nodejs openjdk-21-jdk"
-  [ "$status" -eq 0 ]
-  # Should have a build with EXTRA_PACKAGES and a custom tag
-  grep -q 'EXTRA_PACKAGES=nodejs openjdk-21-jdk' "$DOCKER_LOG"
-  grep -q 'ralph:custom-' "$DOCKER_LOG"
-}
-
-@test "ralph uses uid-based image tag without --packages" {
-  cd "$PROJECT"
-  run zsh "$RALPH"
-  [ "$status" -eq 0 ]
-  grep -q "ralph:uid-" "$DOCKER_LOG"
-}
-
-@test "ralph mounts project directory at /work" {
-  cd "$PROJECT"
-  run zsh "$RALPH"
-  [ "$status" -eq 0 ]
-  # The docker run command should contain the /work mount
-  grep -q '/work' "$DOCKER_LOG"
-}
-
-# --- worktree tests ---
-
-@test "ralph parses branch: from spec file" {
-  printf 'branch: feature/test\n\n## Tasks\n- [ ] Do it\n' > "$PROJECT/.ralph/specs/test.md"
-  export GIT_TOPLEVEL="$PROJECT"
-  cd "$PROJECT"
-  run zsh "$RALPH"
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"using worktree"* ]]
-  [[ "$output" == *"feature/test"* ]]
-}
-
-@test "ralph reuses existing worktree" {
-  printf 'branch: feature/existing\n\n## Tasks\n' > "$PROJECT/.ralph/specs/test.md"
-  # Simulate existing worktree at a known path
-  local existing_path="$BATS_TEST_TMPDIR/project-feature-existing"
-  mkdir -p "$existing_path"
-  export GIT_TOPLEVEL="$PROJECT"
-  # Porcelain format: stanza ends with blank line
-  export GIT_WORKTREE_LIST="worktree $existing_path
-HEAD abc1234567890
-branch refs/heads/feature/existing"
-  cd "$PROJECT"
-  run zsh "$RALPH"
-  [ "$status" -eq 0 ]
-  # Docker should mount the existing worktree path
-  grep -Fq "$existing_path:/work" "$DOCKER_LOG"
-  # Spec should be copied into existing worktree
-  [ -f "$existing_path/.ralph/specs/test.md" ]
-}
-
-@test "ralph creates worktree from remote branch" {
-  printf 'branch: feature/remote\n\n## Tasks\n' > "$PROJECT/.ralph/specs/test.md"
-  export GIT_TOPLEVEL="$PROJECT"
-  export GIT_LS_REMOTE_FOUND="1"
-  cd "$PROJECT"
-  run zsh "$RALPH"
-  [ "$status" -eq 0 ]
-  # Worktree directory should be created
-  local wt_path="$BATS_TEST_TMPDIR/project-feature-remote"
-  [ -d "$wt_path" ]
-  # Docker should mount worktree path
-  grep -Fq "$wt_path:/work" "$DOCKER_LOG"
-}
-
-@test "ralph creates worktree from main when branch not on remote" {
-  printf 'branch: feature/new\n\n## Tasks\n' > "$PROJECT/.ralph/specs/test.md"
-  export GIT_TOPLEVEL="$PROJECT"
-  export GIT_LS_REMOTE_FOUND="0"
-  cd "$PROJECT"
-  run zsh "$RALPH"
-  [ "$status" -eq 0 ]
-  # Worktree directory should be created
-  local wt_path="$BATS_TEST_TMPDIR/project-feature-new"
-  [ -d "$wt_path" ]
-  grep -Fq "$wt_path:/work" "$DOCKER_LOG"
-}
-
-@test "ralph copies spec file into worktree" {
-  printf 'branch: feature/copy\n\n## Tasks\n- [ ] task 1\n' > "$PROJECT/.ralph/specs/test.md"
-  export GIT_TOPLEVEL="$PROJECT"
-  cd "$PROJECT"
-  run zsh "$RALPH"
-  [ "$status" -eq 0 ]
-  local wt_path="$BATS_TEST_TMPDIR/project-feature-copy"
-  # Spec file should be copied to worktree
-  [ -f "$wt_path/.ralph/specs/test.md" ]
-  # Content should match
-  grep -q "task 1" "$wt_path/.ralph/specs/test.md"
-}
-
-@test "ralph docker mount uses worktree path when branch specified" {
-  printf 'branch: feature/mount\n\n## Tasks\n' > "$PROJECT/.ralph/specs/test.md"
-  export GIT_TOPLEVEL="$PROJECT"
-  cd "$PROJECT"
-  run zsh "$RALPH"
-  [ "$status" -eq 0 ]
-  local wt_path="$BATS_TEST_TMPDIR/project-feature-mount"
-  # Docker run should mount worktree, not project dir
-  grep -Fq "$wt_path:/work" "$DOCKER_LOG"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"no mode specified"* ]]
+  [[ "$output" == *"--issue"* ]]
+  [[ "$output" == *"--poll"* ]]
 }
 
 # --- parse_duration tests ---
@@ -410,95 +222,597 @@ branch refs/heads/feature/existing"
   [[ "$output" == *"invalid duration"* ]]
 }
 
-# --- --timeout flag tests ---
+# --- parse_issue_branch tests ---
 
-@test "ralph --timeout and --prompt together errors" {
-  cd "$PROJECT"
-  run zsh "$RALPH" --timeout 2h --prompt .ralph/specs/test.md
-  [ "$status" -eq 2 ]
-  [[ "$output" == *"--timeout and --prompt cannot be used together"* ]]
-}
-
-# --- completed spec tracking tests ---
-
-@test "ralph marks spec completed when HEAD unchanged" {
-  cd "$PROJECT"
-  export GIT_TOPLEVEL="$PROJECT"
-  # GIT_HEAD stays constant (default "abc1234567890"), so HEAD before == after
-  run zsh "$RALPH"
+@test "parse_issue_branch extracts branch from title" {
+  run zsh -c '
+    eval "$(sed -n "/^parse_issue_branch/,/^}/p" "'"$RALPH"'")"
+    parse_issue_branch "[my-branch] Some Title"
+  '
   [ "$status" -eq 0 ]
-  # Docker should have run (spec was processed)
-  grep -q 'PROMPT_FILE=.ralph/specs/test.md' "$DOCKER_LOG"
+  [ "$output" = "my-branch" ]
 }
 
-@test "ralph --help shows --timeout option" {
-  run zsh "$RALPH" --help
+@test "parse_issue_branch handles branches with slashes" {
+  run zsh -c '
+    eval "$(sed -n "/^parse_issue_branch/,/^}/p" "'"$RALPH"'")"
+    parse_issue_branch "[feature/foo] Title"
+  '
   [ "$status" -eq 0 ]
-  [[ "$output" == *"--timeout"* ]]
+  [ "$output" = "feature/foo" ]
 }
 
-# --- fswatch / watch loop tests ---
+@test "parse_issue_branch handles branches with numbers and hyphens" {
+  run zsh -c '
+    eval "$(sed -n "/^parse_issue_branch/,/^}/p" "'"$RALPH"'")"
+    parse_issue_branch "[fix-123-bug] Title"
+  '
+  [ "$status" -eq 0 ]
+  [ "$output" = "fix-123-bug" ]
+}
 
-@test "ralph --timeout errors when fswatch not available" {
+@test "parse_issue_branch errors on malformed title" {
+  run zsh -c '
+    eval "$(sed -n "/^parse_issue_branch/,/^}/p" "'"$RALPH"'")"
+    parse_issue_branch "No brackets here"
+  '
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"cannot parse branch from issue title"* ]]
+}
+
+# --- resolve_repo tests ---
+
+@test "resolve_repo calls gh repo view with correct args" {
+  GH_LOG="$BATS_TEST_TMPDIR/gh.log"
+  cat > "$BATS_TEST_TMPDIR/bin/gh" <<'STUB'
+#!/bin/bash
+echo "$@" >> "$GH_LOG"
+echo "owner/repo"
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/gh"
+
+  run zsh -c '
+    export PATH="'"$BATS_TEST_TMPDIR/bin"':$PATH"
+    eval "$(sed -n "/^resolve_repo/,/^}/p" "'"$RALPH"'")"
+    resolve_repo
+  '
+  [ "$status" -eq 0 ]
+  [ "$output" = "owner/repo" ]
+  grep -q "repo view --json nameWithOwner -q .nameWithOwner" "$GH_LOG"
+}
+
+# --- gh requirement test ---
+
+@test "ralph fails when gh is not installed" {
   cd "$PROJECT"
-  # Ensure python3 is available in stubs dir (needed for OAuth parsing)
+  # Remove gh stub from PATH
+  rm "$BATS_TEST_TMPDIR/bin/gh"
+  # Ensure python3 is available
   ln -sf "$(command -v python3)" "$BATS_TEST_TMPDIR/bin/python3"
-  # Restrict PATH so real fswatch is hidden; use full zsh path since it may not be in /usr/bin
   local zsh_path
   zsh_path=$(command -v zsh)
-  run env PATH="$BATS_TEST_TMPDIR/bin:/usr/bin" "$zsh_path" "$RALPH" --timeout 1s
+  run env PATH="$BATS_TEST_TMPDIR/bin:/usr/bin" "$zsh_path" "$RALPH" --issue 1
   [ "$status" -eq 1 ]
-  [[ "$output" == *"fswatch is required"* ]]
+  [[ "$output" == *"gh is not installed"* ]]
 }
 
-@test "ralph --timeout creates .ralph/specs/ if missing" {
-  local empty_project="$BATS_TEST_TMPDIR/empty-proj"
-  mkdir -p "$empty_project"
+# --- option passing tests ---
 
-  # Stub fswatch to exit non-zero (simulates timeout kill)
-  cat > "$BATS_TEST_TMPDIR/bin/fswatch" <<'STUB'
+@test "ralph --packages uses custom image tag" {
+  GH_LOG="$BATS_TEST_TMPDIR/gh.log"
+  cat > "$BATS_TEST_TMPDIR/bin/gh" <<'STUB'
 #!/bin/bash
-exit 1
+case "$1" in
+  repo) echo "owner/repo" ;;
+  issue)
+    case "$2" in
+      view) echo '{"title":"[pkg-test] Test","body":"body"}' ;;
+      edit) ;;
+    esac
+    ;;
+esac
 STUB
-  chmod +x "$BATS_TEST_TMPDIR/bin/fswatch"
-
-  cd "$empty_project"
-  run zsh "$RALPH" --timeout 1s
-  [ "$status" -eq 0 ]
-  [ -d "$empty_project/.ralph/specs" ]
-}
-
-@test "ralph --timeout 1s with no specs exits with timeout message" {
-  local empty_project="$BATS_TEST_TMPDIR/empty-proj2"
-  mkdir -p "$empty_project/.ralph/specs"
-
-  # Stub fswatch to exit non-zero (simulates being killed by timer)
-  cat > "$BATS_TEST_TMPDIR/bin/fswatch" <<'STUB'
-#!/bin/bash
-exit 1
-STUB
-  chmod +x "$BATS_TEST_TMPDIR/bin/fswatch"
-
-  cd "$empty_project"
-  run zsh "$RALPH" --timeout 1s
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"timeout expired, no pending work found"* ]]
-}
-
-@test "ralph --timeout processes existing spec then watches" {
-  # Stub fswatch to exit non-zero after first call (simulates timeout)
-  cat > "$BATS_TEST_TMPDIR/bin/fswatch" <<'STUB'
-#!/bin/bash
-exit 1
-STUB
-  chmod +x "$BATS_TEST_TMPDIR/bin/fswatch"
+  chmod +x "$BATS_TEST_TMPDIR/bin/gh"
 
   export GIT_TOPLEVEL="$PROJECT"
   cd "$PROJECT"
-  run zsh "$RALPH" --timeout 5s
+  run zsh "$RALPH" --issue 1 --packages "nodejs openjdk-21-jdk"
   [ "$status" -eq 0 ]
-  # Spec should have been processed
-  grep -q 'PROMPT_FILE=.ralph/specs/test.md' "$DOCKER_LOG"
-  # Should eventually time out
-  [[ "$output" == *"timeout expired"* ]]
+  # Should have a build with EXTRA_PACKAGES and a custom tag
+  grep -q 'EXTRA_PACKAGES=nodejs openjdk-21-jdk' "$DOCKER_LOG"
+  grep -q 'ralph:custom-' "$DOCKER_LOG"
+}
+
+@test "ralph uses uid-based image tag without --packages" {
+  cat > "$BATS_TEST_TMPDIR/bin/gh" <<'STUB'
+#!/bin/bash
+case "$1" in
+  repo) echo "owner/repo" ;;
+  issue)
+    case "$2" in
+      view) echo '{"title":"[uid-test] Test","body":"body"}' ;;
+      edit) ;;
+    esac
+    ;;
+esac
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/gh"
+
+  export GIT_TOPLEVEL="$PROJECT"
+  cd "$PROJECT"
+  run zsh "$RALPH" --issue 1
+  [ "$status" -eq 0 ]
+  grep -q "ralph:uid-" "$DOCKER_LOG"
+}
+
+@test "ralph --push passes PUSH=1" {
+  cat > "$BATS_TEST_TMPDIR/bin/gh" <<'STUB'
+#!/bin/bash
+case "$1" in
+  repo) echo "owner/repo" ;;
+  issue)
+    case "$2" in
+      view) echo '{"title":"[push-test] Test","body":"body"}' ;;
+      edit) ;;
+    esac
+    ;;
+esac
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/gh"
+
+  export GIT_TOPLEVEL="$PROJECT"
+  cd "$PROJECT"
+  run zsh "$RALPH" --issue 1 --push
+  [ "$status" -eq 0 ]
+  grep -q 'PUSH=1' "$DOCKER_LOG"
+}
+
+@test "ralph without --push passes PUSH=0" {
+  cat > "$BATS_TEST_TMPDIR/bin/gh" <<'STUB'
+#!/bin/bash
+case "$1" in
+  repo) echo "owner/repo" ;;
+  issue)
+    case "$2" in
+      view) echo '{"title":"[nopush-test] Test","body":"body"}' ;;
+      edit) ;;
+    esac
+    ;;
+esac
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/gh"
+
+  export GIT_TOPLEVEL="$PROJECT"
+  cd "$PROJECT"
+  run zsh "$RALPH" --issue 1
+  [ "$status" -eq 0 ]
+  grep -q 'PUSH=0' "$DOCKER_LOG"
+}
+
+@test "ralph passes default model to container" {
+  cat > "$BATS_TEST_TMPDIR/bin/gh" <<'STUB'
+#!/bin/bash
+case "$1" in
+  repo) echo "owner/repo" ;;
+  issue)
+    case "$2" in
+      view) echo '{"title":"[model-test] Test","body":"body"}' ;;
+      edit) ;;
+    esac
+    ;;
+esac
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/gh"
+
+  export GIT_TOPLEVEL="$PROJECT"
+  cd "$PROJECT"
+  run zsh "$RALPH" --issue 1
+  [ "$status" -eq 0 ]
+  grep -q 'MODEL=sonnet' "$DOCKER_LOG"
+}
+
+@test "ralph --model passes custom model" {
+  cat > "$BATS_TEST_TMPDIR/bin/gh" <<'STUB'
+#!/bin/bash
+case "$1" in
+  repo) echo "owner/repo" ;;
+  issue)
+    case "$2" in
+      view) echo '{"title":"[model-test] Test","body":"body"}' ;;
+      edit) ;;
+    esac
+    ;;
+esac
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/gh"
+
+  export GIT_TOPLEVEL="$PROJECT"
+  cd "$PROJECT"
+  run zsh "$RALPH" --issue 1 --model opus
+  [ "$status" -eq 0 ]
+  grep -q 'MODEL=opus' "$DOCKER_LOG"
+}
+
+# --- worktree tests ---
+
+@test "ralph --issue creates worktree from remote branch" {
+  cat > "$BATS_TEST_TMPDIR/bin/gh" <<'STUB'
+#!/bin/bash
+case "$1" in
+  repo) echo "owner/repo" ;;
+  issue)
+    case "$2" in
+      view) echo '{"title":"[feature/remote] Test","body":"body"}' ;;
+      edit) ;;
+    esac
+    ;;
+esac
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/gh"
+
+  export GIT_TOPLEVEL="$PROJECT"
+  export GIT_LS_REMOTE_FOUND="1"
+  cd "$PROJECT"
+  run zsh "$RALPH" --issue 1
+  [ "$status" -eq 0 ]
+  local wt_path="$BATS_TEST_TMPDIR/project-feature-remote"
+  [ -d "$wt_path" ]
+  grep -Fq "$wt_path:/work" "$DOCKER_LOG"
+}
+
+@test "ralph --issue creates worktree from main when branch not on remote" {
+  cat > "$BATS_TEST_TMPDIR/bin/gh" <<'STUB'
+#!/bin/bash
+case "$1" in
+  repo) echo "owner/repo" ;;
+  issue)
+    case "$2" in
+      view) echo '{"title":"[feature/new] Test","body":"body"}' ;;
+      edit) ;;
+    esac
+    ;;
+esac
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/gh"
+
+  export GIT_TOPLEVEL="$PROJECT"
+  export GIT_LS_REMOTE_FOUND="0"
+  cd "$PROJECT"
+  run zsh "$RALPH" --issue 1
+  [ "$status" -eq 0 ]
+  local wt_path="$BATS_TEST_TMPDIR/project-feature-new"
+  [ -d "$wt_path" ]
+  grep -Fq "$wt_path:/work" "$DOCKER_LOG"
+}
+
+@test "ralph --issue reuses existing worktree" {
+  local existing_path="$BATS_TEST_TMPDIR/project-feature-existing"
+  mkdir -p "$existing_path"
+  export GIT_TOPLEVEL="$PROJECT"
+  export GIT_WORKTREE_LIST="worktree $existing_path
+HEAD abc1234567890
+branch refs/heads/feature/existing"
+
+  cat > "$BATS_TEST_TMPDIR/bin/gh" <<'STUB'
+#!/bin/bash
+case "$1" in
+  repo) echo "owner/repo" ;;
+  issue)
+    case "$2" in
+      view) echo '{"title":"[feature/existing] Test","body":"body"}' ;;
+      edit) ;;
+    esac
+    ;;
+esac
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/gh"
+
+  cd "$PROJECT"
+  run zsh "$RALPH" --issue 1
+  [ "$status" -eq 0 ]
+  grep -Fq "$existing_path:/work" "$DOCKER_LOG"
+}
+
+# --- --issue flag tests ---
+
+@test "ralph --issue fetches issue, creates worktree, runs container" {
+  GH_LOG="$BATS_TEST_TMPDIR/gh.log"
+  cat > "$BATS_TEST_TMPDIR/bin/gh" <<'STUB'
+#!/bin/bash
+echo "$@" >> "$GH_LOG"
+case "$1" in
+  repo)
+    echo "owner/repo"
+    ;;
+  issue)
+    case "$2" in
+      view)
+        echo '{"title":"[test-issue] Test Feature","body":"## Tasks\n- [ ] Do thing"}'
+        ;;
+      edit)
+        ;;
+    esac
+    ;;
+esac
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/gh"
+
+  export GIT_TOPLEVEL="$PROJECT"
+  cd "$PROJECT"
+  run zsh "$RALPH" --issue 42
+  [ "$status" -eq 0 ]
+  # Should have fetched the issue
+  grep -q "issue view 42 --json title,body --repo owner/repo" "$GH_LOG"
+  # Should have run docker
+  grep -q "PROMPT_FILE=.ralph/current-spec.md" "$DOCKER_LOG"
+  # Should reference the branch
+  [[ "$output" == *"processing issue #42 on branch test-issue"* ]]
+  [[ "$output" == *"using worktree"* ]]
+}
+
+@test "ralph --issue writes spec to .ralph/current-spec.md in worktree" {
+  cat > "$BATS_TEST_TMPDIR/bin/gh" <<'STUB'
+#!/bin/bash
+case "$1" in
+  repo) echo "owner/repo" ;;
+  issue)
+    case "$2" in
+      view) echo '{"title":"[spec-write-test] Test","body":"spec body content"}' ;;
+      edit) ;;
+    esac
+    ;;
+esac
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/gh"
+
+  export GIT_TOPLEVEL="$PROJECT"
+  cd "$PROJECT"
+  run zsh "$RALPH" --issue 10
+  [ "$status" -eq 0 ]
+  local wt_path="$BATS_TEST_TMPDIR/project-spec-write-test"
+  [ -f "$wt_path/.ralph/current-spec.md" ]
+  grep -q "spec body content" "$wt_path/.ralph/current-spec.md"
+}
+
+@test "ralph --issue updates labels: ready→in-progress→done" {
+  GH_LOG="$BATS_TEST_TMPDIR/gh.log"
+  cat > "$BATS_TEST_TMPDIR/bin/gh" <<'STUB'
+#!/bin/bash
+echo "$@" >> "$GH_LOG"
+case "$1" in
+  repo) echo "owner/repo" ;;
+  issue)
+    case "$2" in
+      view) echo '{"title":"[label-test] Test","body":"body"}' ;;
+      edit) ;;
+    esac
+    ;;
+esac
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/gh"
+
+  export GIT_TOPLEVEL="$PROJECT"
+  cd "$PROJECT"
+  # GIT_HEAD stays constant so HEAD before == after → marks done
+  run zsh "$RALPH" --issue 5
+  [ "$status" -eq 0 ]
+  # Should have set in-progress
+  grep -q "issue edit 5 --remove-label status:ready --add-label status:in-progress" "$GH_LOG"
+  # Should have set done (since no commit was made)
+  grep -q "issue edit 5 --remove-label status:in-progress --add-label status:done" "$GH_LOG"
+}
+
+@test "ralph --issue passes correct PROMPT_FILE to container" {
+  cat > "$BATS_TEST_TMPDIR/bin/gh" <<'STUB'
+#!/bin/bash
+case "$1" in
+  repo) echo "owner/repo" ;;
+  issue)
+    case "$2" in
+      view) echo '{"title":"[prompt-test] Test","body":"body"}' ;;
+      edit) ;;
+    esac
+    ;;
+esac
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/gh"
+
+  export GIT_TOPLEVEL="$PROJECT"
+  cd "$PROJECT"
+  run zsh "$RALPH" --issue 7
+  [ "$status" -eq 0 ]
+  grep -q "PROMPT_FILE=.ralph/current-spec.md" "$DOCKER_LOG"
+}
+
+@test "ralph --poll and --issue together errors" {
+  cd "$PROJECT"
+  run zsh "$RALPH" --poll --issue 42
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--poll and --issue cannot be used together"* ]]
+}
+
+@test "ralph --issue labels needs-attention on container failure" {
+  GH_LOG="$BATS_TEST_TMPDIR/gh.log"
+  cat > "$BATS_TEST_TMPDIR/bin/gh" <<'STUB'
+#!/bin/bash
+echo "$@" >> "$GH_LOG"
+case "$1" in
+  repo) echo "owner/repo" ;;
+  issue)
+    case "$2" in
+      view) echo '{"title":"[fail-test] Test","body":"body"}' ;;
+      edit) ;;
+    esac
+    ;;
+esac
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/gh"
+
+  # Make docker run fail
+  cat > "$BATS_TEST_TMPDIR/bin/docker" <<'STUB'
+#!/bin/bash
+if [[ "$1" == "image" && "$2" == "inspect" ]]; then
+  exit 1
+fi
+echo "$@" >> "$DOCKER_LOG"
+if [[ "$1" == "build" ]]; then
+  echo "sha256:fake"
+  exit 0
+fi
+if [[ "$1" == "run" ]]; then
+  exit 1
+fi
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/docker"
+
+  export GIT_TOPLEVEL="$PROJECT"
+  cd "$PROJECT"
+  run zsh "$RALPH" --issue 99
+  [ "$status" -eq 1 ]
+  grep -q "issue edit 99 --remove-label status:in-progress --add-label status:needs-attention" "$GH_LOG"
+}
+
+# --- --poll flag tests ---
+
+@test "ralph --poll calls gh issue list with correct labels and author" {
+  GH_LOG="$BATS_TEST_TMPDIR/gh.log"
+  cat > "$BATS_TEST_TMPDIR/bin/gh" <<'STUB'
+#!/bin/bash
+echo "$@" >> "$GH_LOG"
+case "$1" in
+  repo) echo "owner/repo" ;;
+  issue)
+    case "$2" in
+      list) echo "[]" ;;  # No ready issues
+    esac
+    ;;
+esac
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/gh"
+
+  export GIT_TOPLEVEL="$PROJECT"
+  cd "$PROJECT"
+  # Use --timeout 1s to make the poll loop exit quickly
+  run zsh "$RALPH" --poll --timeout 1s
+  [ "$status" -eq 0 ]
+  # Should have called gh issue list with correct flags
+  grep -q 'issue list --label spec,status:ready --author @me --repo owner/repo --json number,title' "$GH_LOG"
+}
+
+@test "ralph --poll --interval 10s uses custom interval" {
+  GH_LOG="$BATS_TEST_TMPDIR/gh.log"
+  cat > "$BATS_TEST_TMPDIR/bin/gh" <<'STUB'
+#!/bin/bash
+echo "$@" >> "$GH_LOG"
+case "$1" in
+  repo) echo "owner/repo" ;;
+  issue)
+    case "$2" in
+      list) echo "[]" ;;
+    esac
+    ;;
+esac
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/gh"
+
+  export GIT_TOPLEVEL="$PROJECT"
+  cd "$PROJECT"
+  # --timeout 1s ensures exit before the 10s interval sleep
+  run zsh "$RALPH" --poll --interval 10s --timeout 1s
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"poll timeout reached"* ]]
+}
+
+@test "ralph --poll --timeout 1s exits after timeout" {
+  cat > "$BATS_TEST_TMPDIR/bin/gh" <<'STUB'
+#!/bin/bash
+case "$1" in
+  repo) echo "owner/repo" ;;
+  issue)
+    case "$2" in
+      list) echo "[]" ;;
+    esac
+    ;;
+esac
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/gh"
+
+  export GIT_TOPLEVEL="$PROJECT"
+  cd "$PROJECT"
+  run zsh "$RALPH" --poll --timeout 1s
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"poll timeout reached"* ]]
+}
+
+@test "ralph --poll processes multiple ready issues sequentially" {
+  GH_LOG="$BATS_TEST_TMPDIR/gh.log"
+  POLL_ITERATION=0
+  cat > "$BATS_TEST_TMPDIR/bin/gh" <<'STUB'
+#!/bin/bash
+echo "$@" >> "$GH_LOG"
+case "$1" in
+  repo) echo "owner/repo" ;;
+  issue)
+    case "$2" in
+      list)
+        # Return two issues on first call, empty on subsequent
+        if [ ! -f "$BATS_TEST_TMPDIR/poll_done" ]; then
+          touch "$BATS_TEST_TMPDIR/poll_done"
+          echo '[{"number":10,"title":"[branch-a] First"},{"number":20,"title":"[branch-b] Second"}]'
+        else
+          echo "[]"
+        fi
+        ;;
+      view)
+        # Extract issue number from args
+        num="$3"
+        if [ "$num" = "10" ]; then
+          echo '{"title":"[branch-a] First","body":"## Tasks\n- [ ] Do A"}'
+        else
+          echo '{"title":"[branch-b] Second","body":"## Tasks\n- [ ] Do B"}'
+        fi
+        ;;
+      edit) ;;
+    esac
+    ;;
+esac
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/gh"
+
+  export GIT_TOPLEVEL="$PROJECT"
+  cd "$PROJECT"
+  run zsh "$RALPH" --poll --timeout 1s
+  [ "$status" -eq 0 ]
+  # Should have processed both issues
+  [[ "$output" == *"found ready issue #10"* ]]
+  [[ "$output" == *"found ready issue #20"* ]]
+  [[ "$output" == *"processing issue #10"* ]]
+  [[ "$output" == *"processing issue #20"* ]]
+}
+
+@test "ralph --interval without --poll errors" {
+  cd "$PROJECT"
+  run zsh "$RALPH" --interval 10s
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--interval requires --poll"* ]]
+}
+
+@test "ralph --timeout without --poll errors" {
+  cd "$PROJECT"
+  run zsh "$RALPH" --timeout 1s
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--timeout requires --poll"* ]]
+}
+
+@test "ralph --help shows --poll option" {
+  run zsh "$RALPH" --help
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"--poll"* ]]
+  [[ "$output" == *"--interval"* ]]
+}
+
+@test "ralph --help shows --issue option" {
+  run zsh "$RALPH" --help
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"--issue"* ]]
 }

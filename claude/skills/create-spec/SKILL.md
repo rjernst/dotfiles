@@ -10,11 +10,11 @@ You are an AI planning agent. Your job is to collaboratively create a new featur
   - A task to run all tests, checks, and formatting commands—fix any issues found
   - A final task to create a commit with all changes
 
-## File-Based Spec Workflow
+## GitHub Issues Workflow
 1. User invokes `/create-spec`
 2. Agent interviews user and drafts spec (following protocol below)
-3. Agent writes spec to `.ralph/specs/<feature>.md` in the current repo
-4. User runs `ralph` to execute (auto-discovers specs from `.ralph/specs/`)
+3. Agent creates a GitHub Issue via `gh issue create` with the spec as the body
+4. User runs `ralph --issue <number>` or `ralph --poll` to execute
 
 ## Interview Protocol (conversational, one topic at a time)
 Do NOT dump all questions at once. Run a short, dynamic interview that asks only what's needed, one topic per message, until you have enough to produce the spec in the exact template below.
@@ -49,20 +49,26 @@ Potential topics (ask in this order, skipping any that are clearly implied):
 ### Stopping rule
 You're done interviewing when you can fill every required field in the spec template with concrete, self-contained information (defaults are allowed if clearly stated).
 
-### Then: write the spec file immediately (no draft review step)
+### Then: create the GitHub Issue immediately (no draft review step)
 Once you have enough info:
 - Draft the spec body in the exact template format (see below)
-- Write the file to `.ralph/specs/<feature>.md` in the current repo
-- Display the file path so the user can review
+- Create a GitHub Issue using `gh issue create` with:
+  - **Title:** `[<branch-name>] Feature Name`
+  - **Labels:** `spec,status:ready`
+  - **Body:** The spec content (see template below)
+- Display the issue URL so the user can review
 
-If anything is ambiguous, ask the minimum follow-up questions, then write the spec.
+If anything is ambiguous, ask the minimum follow-up questions, then create the issue.
 
-## Spec Template
-The spec file should follow this structure. The `branch:` line must be the very first line (parsed by Ralph's `parse_branch` to auto-create a worktree).
+## Issue Title Format
+The title must follow this pattern: `[<branch-name>] Feature Name`
+
+The branch name is extracted by Ralph from the first bracketed segment. Use lowercase with hyphens (e.g., `[add-dry-run-flag] Add Dry Run Flag`).
+
+## Spec Template (Issue Body)
+The issue body should follow this structure. Note: no `branch:` frontmatter — the branch name goes in the issue title instead.
 
 ```markdown
-branch: <branch-name>
-
 # Spec: <Feature Name>
 
 ## Overview
@@ -139,6 +145,25 @@ Each step follows this structure:
 - **Tests:** <Test framework and patterns (e.g., BATS with temp git repos)>
 - **Error messages:** <Error prefix convention (e.g., prefix with script name)>
 - **Exit codes:** <Exit code conventions (e.g., 0=success, 1=runtime error, 2=usage error)>
+```
+
+## Creating the Issue
+Use this command to create the issue (replace placeholders):
+
+```zsh
+gh issue create \
+  --title "[<branch-name>] <Feature Name>" \
+  --label "spec,status:ready" \
+  --body "<spec body>"
+```
+
+For long spec bodies, write the body to a temp file and use `--body-file`:
+
+```zsh
+gh issue create \
+  --title "[<branch-name>] <Feature Name>" \
+  --label "spec,status:ready" \
+  --body-file /tmp/spec-body.md
 ```
 
 ## Repo-Specific Context

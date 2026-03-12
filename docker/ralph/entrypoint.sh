@@ -14,25 +14,12 @@ git config --global user.name "${GIT_USER:-ralph}"
 git config --global user.email "${GIT_EMAIL:-ralph@localhost}"
 git config --global --add safe.directory /work
 
-ITERATION=0
-while true; do
-  ITERATION=$((ITERATION + 1))
+HEAD_BEFORE=$(git rev-parse HEAD 2>/dev/null || echo "none")
 
-  if [[ ${MAX_ITERATIONS:-0} -gt 0 && $ITERATION -gt $MAX_ITERATIONS ]]; then
-    echo "ralph: reached max iterations ($MAX_ITERATIONS)"
-    break
-  fi
-
-  echo "══════════════════════════════════════════"
-  echo "  ralph: iteration $ITERATION"
-  echo "══════════════════════════════════════════"
-
-  HEAD_BEFORE=$(git rev-parse HEAD 2>/dev/null || echo "none")
-
-  claude -p \
-    --dangerously-skip-permissions \
-    --model "${MODEL:-sonnet}" \
-    <<PROMPT || echo "ralph: claude exited with error ($?), continuing..."
+claude -p \
+  --dangerously-skip-permissions \
+  --model "${MODEL:-sonnet}" \
+  <<PROMPT || echo "ralph: claude exited with error ($?), continuing..."
 You are an AI coding agent. You will be invoked repeatedly — once per task.
 Read the spec file at \`$PROMPT_FILE\` for what to build.
 
@@ -58,13 +45,11 @@ Rules:
 - Search the codebase before assuming something isn't implemented
 PROMPT
 
-  HEAD_AFTER=$(git rev-parse HEAD 2>/dev/null || echo "none")
-  if [[ "$HEAD_BEFORE" == "$HEAD_AFTER" ]]; then
-    echo "ralph: no commit made — spec appears complete"
-    break
-  fi
+HEAD_AFTER=$(git rev-parse HEAD 2>/dev/null || echo "none")
+if [[ "$HEAD_BEFORE" == "$HEAD_AFTER" ]]; then
+  echo "ralph: no commit made — spec appears complete"
+fi
 
-  if [[ ${PUSH:-0} -eq 1 ]]; then
-    git push || echo "ralph: push failed, continuing..."
-  fi
-done
+if [[ ${PUSH:-0} -eq 1 ]]; then
+  git push || echo "ralph: push failed, continuing..."
+fi

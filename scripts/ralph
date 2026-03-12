@@ -1,21 +1,22 @@
 #!/usr/bin/env zsh
-# ralph — Dockerized AI coding loop
+# ralph — GitHub Issues-driven AI coding loop
 #
-# Repeatedly invokes Claude Code inside a Docker container. Each iteration
-# gets fresh context, reads the prompt file + git history, implements the
-# next task, commits, and exits. The entrypoint loop restarts the agent.
+# Fetches specs from GitHub Issues (labeled spec + status:ready), runs
+# Claude Code in Docker to implement one task per iteration, updates
+# issue checkboxes, and labels issues done when complete.
 #
-# Usage: ralph [options] [max-iterations]
+# Usage: ralph [options]
 #
 # Options:
+#   --issue <number>      Execute a single GitHub Issue spec
+#   --poll                Poll for status:ready issues and process them
+#   --interval <duration> Poll interval (default: 30s, requires --poll)
+#   --timeout <duration>  Limit poll duration (e.g. 30m, 4h, 1d; requires --poll)
 #   --packages "pkg ..."  Extra apt packages baked into image
 #   --push                Git push after each iteration
-#   --prompt <file>       Prompt file (overrides .ralph/specs/ discovery)
 #   --model <model>       Claude model (default: sonnet)
-#   --timeout <duration>  Watch for specs up to <duration> (e.g. 30m, 4h, 1d)
 #   -h, --help            Show usage
 set -e
-zmodload zsh/stat
 
 SELF=${0:A}
 
@@ -47,12 +48,13 @@ parse_duration() {
 }
 
 # --- defaults ---
-PROMPT_FILE=""
 PACKAGES=""
 PUSH=0
 TIMEOUT=0
 MODEL=sonnet
-MAX_ITERATIONS=0
+ISSUE_NUMBER=""
+POLL=0
+INTERVAL=30
 
 # --- parse args ---
 while [[ $# -gt 0 ]]; do
@@ -61,8 +63,12 @@ while [[ $# -gt 0 ]]; do
       PACKAGES=$2; shift 2 ;;
     --push)
       PUSH=1; shift ;;
-    --prompt)
-      PROMPT_FILE=$2; shift 2 ;;
+    --issue)
+      ISSUE_NUMBER=$2; shift 2 ;;
+    --poll)
+      POLL=1; shift ;;
+    --interval)
+      INTERVAL=$(parse_duration "$2"); shift 2 ;;
     --model)
       MODEL=$2; shift 2 ;;
     --timeout)
@@ -71,13 +77,21 @@ while [[ $# -gt 0 ]]; do
       usage 0 ;;
     -*)
       echo "Unknown option: $1" >&2; usage 1 ;;
-    *)
-      MAX_ITERATIONS=$1; shift ;;
   esac
 done
 
-if (( TIMEOUT > 0 )) && [[ -n $PROMPT_FILE ]]; then
-  echo "ralph: --timeout and --prompt cannot be used together" >&2
+if (( POLL )) && [[ -n $ISSUE_NUMBER ]]; then
+  echo "ralph: --poll and --issue cannot be used together" >&2
+  exit 2
+fi
+
+if (( ! POLL )) && (( INTERVAL != 30 )); then
+  echo "ralph: --interval requires --poll" >&2
+  exit 2
+fi
+
+if (( TIMEOUT > 0 )) && (( ! POLL )); then
+  echo "ralph: --timeout requires --poll" >&2
   exit 2
 fi
 
@@ -86,8 +100,8 @@ if ! command -v docker &>/dev/null; then
   exit 1
 fi
 
-if (( TIMEOUT > 0 )) && ! command -v fswatch &>/dev/null; then
-  echo "ralph: fswatch is required for --timeout (install: brew install fswatch)" >&2
+if ! command -v gh &>/dev/null; then
+  echo "ralph: gh is not installed (install: brew install gh)" >&2
   exit 1
 fi
 
@@ -126,9 +140,113 @@ KEYCHAIN_JSON=$(security find-generic-password -s "Claude Code-credentials" -w 2
 }
 OAUTH_TOKEN=$(echo "$KEYCHAIN_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin)['claudeAiOauth']['accessToken'])")
 
-# --- parse branch from prompt frontmatter ---
-parse_branch() {
-  sed -n '/^$/q; /^#/q; s/^branch: *//p' "$1" | head -1
+# --- resolve repo from origin remote ---
+resolve_repo() {
+  gh repo view --json nameWithOwner -q .nameWithOwner
+}
+
+# --- parse branch from issue title [branch] prefix ---
+parse_issue_branch() {
+  local title=$1
+  if [[ $title =~ '^\[([^\]]+)\]' ]]; then
+    echo "$match[1]"
+  else
+    echo "ralph: cannot parse branch from issue title: $title" >&2
+    return 1
+  fi
+}
+
+# --- process a single GitHub Issue ---
+process_issue() {
+  local issue_number=$1
+  local repo
+  repo=$(resolve_repo) || {
+    echo "ralph: could not detect repo from origin remote" >&2
+    return 1
+  }
+
+  # Fetch issue data
+  local issue_json
+  issue_json=$(gh issue view "$issue_number" --json title,body --repo "$repo") || {
+    echo "ralph: failed to fetch issue #$issue_number from $repo" >&2
+    return 1
+  }
+
+  local title body branch
+  title=$(echo "$issue_json" | python3 -c "import sys,json; print(json.load(sys.stdin)['title'])")
+  body=$(echo "$issue_json" | python3 -c "import sys,json; print(json.load(sys.stdin)['body'])")
+
+  branch=$(parse_issue_branch "$title") || return 1
+
+  local work_dir
+  work_dir=$(ensure_worktree "$branch")
+  echo "ralph: processing issue #$issue_number on branch $branch"
+  echo "ralph: using worktree at $work_dir"
+
+  # Label in-progress
+  gh issue edit "$issue_number" --remove-label "status:ready" --add-label "status:in-progress" --repo "$repo" 2>/dev/null || true
+
+  local spec_path=".ralph/current-spec.md"
+  local head_before head_after
+
+  while true; do
+    # Write current issue body as spec file
+    mkdir -p "$work_dir/.ralph"
+    echo "$body" > "$work_dir/$spec_path"
+
+    # Worktree git dir mount
+    local worktree_mount=()
+    if [[ -f "$work_dir/.git" ]]; then
+      local main_git_dir
+      main_git_dir=$(git -C "$work_dir" rev-parse --git-common-dir 2>/dev/null)
+      if [[ -n $main_git_dir ]]; then
+        main_git_dir=${main_git_dir:A}
+        worktree_mount=(-v "$main_git_dir:$main_git_dir")
+      fi
+    fi
+
+    # Record HEAD before
+    head_before=$(git -C "$work_dir" rev-parse HEAD 2>/dev/null || echo "none")
+
+    # Run container (single iteration)
+    echo "ralph: starting iteration (image=$IMAGE_TAG, issue=#$issue_number, model=$MODEL)"
+    docker run --rm $TTY_FLAGS \
+      -v "$work_dir:/work" \
+      "${worktree_mount[@]}" \
+      -v "$HOME/.gitconfig:/home/ralph/.gitconfig:ro" \
+      -v "$HOME/.ssh:/home/ralph/.ssh:ro" \
+      -e "PUSH=$PUSH" \
+      -e "PROMPT_FILE=$spec_path" \
+      -e "MODEL=$MODEL" \
+      -e "GIT_USER=$GIT_USER" \
+      -e "GIT_EMAIL=$GIT_EMAIL" \
+      -e "CLAUDE_CODE_OAUTH_TOKEN=$OAUTH_TOKEN" \
+      "$IMAGE_TAG" || {
+        echo "ralph: container failed for issue #$issue_number" >&2
+        gh issue edit "$issue_number" --remove-label "status:in-progress" --add-label "status:needs-attention" --repo "$repo" 2>/dev/null || true
+        return 1
+      }
+
+    # Check if work was done
+    head_after=$(git -C "$work_dir" rev-parse HEAD 2>/dev/null || echo "none")
+
+    if [[ $head_before == $head_after ]]; then
+      # No commit — all tasks complete
+      echo "ralph: no commit made, marking issue #$issue_number done"
+      gh issue edit "$issue_number" --remove-label "status:in-progress" --add-label "status:done" --repo "$repo" 2>/dev/null || true
+      break
+    fi
+
+    # Update issue body from spec file (container may have checked off tasks)
+    body=$(<"$work_dir/$spec_path")
+    gh issue edit "$issue_number" --body "$body" --repo "$repo" 2>/dev/null || true
+    echo "ralph: iteration complete, updated issue #$issue_number"
+
+    # Optional push
+    if (( PUSH )); then
+      git -C "$work_dir" push 2>/dev/null || true
+    fi
+  done
 }
 
 # --- ensure worktree exists for branch ---
@@ -183,165 +301,76 @@ ensure_worktree() {
   echo "$wt_path"
 }
 
-PWD_ABS=${PWD:A}
-
-# --- completed spec tracking ---
-typeset -A completed_specs
-WORK_DONE=0
-COMPLETED_FILE="$PWD_ABS/.ralph/.completed"
-
-# Load persisted completed specs
-if [[ -f $COMPLETED_FILE ]]; then
-  while IFS=$'\t' read -r spec_path spec_mtime; do
-    completed_specs[$spec_path]=$spec_mtime
-  done < "$COMPLETED_FILE"
-fi
-
-save_completed() {
-  mkdir -p "${COMPLETED_FILE:h}"
-  : > "$COMPLETED_FILE"
-  for spec_path in ${(k)completed_specs}; do
-    printf '%s\t%s\n' "$spec_path" "${completed_specs[$spec_path]}" >> "$COMPLETED_FILE"
-  done
-}
-
-# --- process specs ---
-process_specs() {
-  WORK_DONE=0
-  local SPEC_ABS SPEC_REL BRANCH WORK_DIR HEAD_BEFORE HEAD_AFTER
-
-  for SPEC_ABS in "$@"; do
-    # Check if spec is already completed (mtime unchanged)
-    local current_mtime
-    zstat -A current_mtime +mtime "$SPEC_ABS"
-    current_mtime=$current_mtime[1]
-    if [[ -n ${completed_specs[$SPEC_ABS]:-} ]] && [[ ${completed_specs[$SPEC_ABS]} == $current_mtime ]]; then
-      echo "ralph: skipping completed spec ${SPEC_ABS#"$PWD_ABS"/}"
-      continue
-    fi
-
-    SPEC_REL=${SPEC_ABS#"$PWD_ABS"/}
-
-    # --- parse branch: directive ---
-    BRANCH=$(parse_branch "$SPEC_ABS")
-    if [[ -z $BRANCH ]]; then
-      echo "ralph: skipping $SPEC_REL — missing required 'branch:' directive" >&2
-      continue
-    fi
-
-    # --- worktree from branch: directive ---
-    WORK_DIR=$(ensure_worktree "$BRANCH")
-    mkdir -p "$WORK_DIR/${SPEC_REL:h}"
-    cp "$SPEC_ABS" "$WORK_DIR/$SPEC_REL"
-    echo "ralph: using worktree at $WORK_DIR for branch $BRANCH"
-
-    # --- worktree support ---
-    WORKTREE_MOUNT=()
-    if [[ -f "$WORK_DIR/.git" ]]; then
-      MAIN_GIT_DIR=$(git -C "$WORK_DIR" rev-parse --git-common-dir 2>/dev/null)
-      if [[ -n $MAIN_GIT_DIR ]]; then
-        MAIN_GIT_DIR=${MAIN_GIT_DIR:A}
-        WORKTREE_MOUNT=(-v "$MAIN_GIT_DIR:$MAIN_GIT_DIR")
-        echo "ralph: detected worktree, mounting $MAIN_GIT_DIR"
-      fi
-    fi
-
-    # --- record HEAD before ---
-    HEAD_BEFORE=$(git -C "$WORK_DIR" rev-parse HEAD 2>/dev/null || echo "none")
-
-    # --- run container ---
-    echo "ralph: starting (image=$IMAGE_TAG, prompt=$SPEC_REL, model=$MODEL)"
-    docker run --rm $TTY_FLAGS \
-      -v "$WORK_DIR:/work" \
-      "${WORKTREE_MOUNT[@]}" \
-      -v "$HOME/.gitconfig:/home/ralph/.gitconfig:ro" \
-      -v "$HOME/.ssh:/home/ralph/.ssh:ro" \
-      -e "MAX_ITERATIONS=$MAX_ITERATIONS" \
-      -e "PUSH=$PUSH" \
-      -e "PROMPT_FILE=$SPEC_REL" \
-      -e "MODEL=$MODEL" \
-      -e "GIT_USER=$GIT_USER" \
-      -e "GIT_EMAIL=$GIT_EMAIL" \
-      -e "CLAUDE_CODE_OAUTH_TOKEN=$OAUTH_TOKEN" \
-      "$IMAGE_TAG" || {
-        echo "ralph: warning — docker failed for $SPEC_REL, continuing" >&2
-      }
-
-    # --- check if work was done ---
-    HEAD_AFTER=$(git -C "$WORK_DIR" rev-parse HEAD 2>/dev/null || echo "none")
-    if [[ $HEAD_BEFORE == $HEAD_AFTER ]]; then
-      # No commit produced — mark spec as completed
-      local completed_mtime
-      zstat -A completed_mtime +mtime "$SPEC_ABS"
-      completed_specs[$SPEC_ABS]=$completed_mtime[1]
-      save_completed
-    else
-      WORK_DONE=1
-    fi
-  done
-}
-
-# --- resolve spec files ---
-if [[ -n $PROMPT_FILE ]]; then
-  # Explicit --prompt: single-file mode (existing behavior)
-  if [[ ! -f "$PROMPT_FILE" ]]; then
-    echo "ralph: prompt file not found: $PROMPT_FILE" >&2
-    exit 1
-  fi
-  PROMPT_ABS=${PROMPT_FILE:A}
-  SPECS=("$PROMPT_ABS")
-else
-  # Auto-discover specs from .ralph/specs/
-  SPECS=(.ralph/specs/*.md(N))
-  if [[ ${#SPECS} -eq 0 ]] && (( TIMEOUT == 0 )); then
-    echo "ralph: no spec files found in .ralph/specs/" >&2
-    echo "Create a spec or use --prompt <file>" >&2
-    exit 1
-  fi
-  # Resolve to absolute paths
-  SPECS=("${SPECS[@]:A}")
-fi
-
 # --- configure git inside container ---
 GIT_USER=$(git config user.name 2>/dev/null || echo "ralph")
 GIT_EMAIL=$(git config user.email 2>/dev/null || echo "ralph@localhost")
 
-# --- process each spec ---
+# --- TTY detection ---
 TTY_FLAGS="-i"
 [[ -t 1 ]] && TTY_FLAGS="-it"
 
-if (( TIMEOUT > 0 )); then
-  # --- watch loop ---
-  mkdir -p .ralph/specs
-  DEADLINE=$(( EPOCHSECONDS + TIMEOUT ))
-  while true; do
-    SPECS=("$PWD_ABS"/.ralph/specs/*.md(N))
-    if (( ${#SPECS} > 0 )); then
-      process_specs "${SPECS[@]}"
-      if (( WORK_DONE )); then
-        DEADLINE=$(( EPOCHSECONDS + TIMEOUT ))
-      fi
-    fi
-    REMAINING=$(( DEADLINE - EPOCHSECONDS ))
-    if (( REMAINING <= 0 )); then
-      echo "ralph: timeout expired, no pending work found"
-      break
-    fi
-    echo "ralph: watching .ralph/specs/ (${REMAINING}s remaining)"
-    fswatch -1 --latency 1 .ralph/specs/ &
-    FSWATCH_PID=$!
-    ( sleep $REMAINING && kill $FSWATCH_PID 2>/dev/null ) &
-    TIMER_PID=$!
-    FSWATCH_EXIT=0
-    wait $FSWATCH_PID 2>/dev/null || FSWATCH_EXIT=$?
-    kill $TIMER_PID 2>/dev/null || true
-    wait $TIMER_PID 2>/dev/null || true
-    if (( FSWATCH_EXIT != 0 )); then
-      echo "ralph: timeout expired, no pending work found"
-      break
-    fi
-  done
-else
-  # --- single-pass mode ---
-  process_specs "${SPECS[@]}"
+# --- issue mode ---
+if [[ -n $ISSUE_NUMBER ]]; then
+  process_issue "$ISSUE_NUMBER"
+  exit $?
 fi
+
+# --- poll mode ---
+if (( POLL )); then
+  REPO=$(resolve_repo) || {
+    echo "ralph: could not detect repo from origin remote" >&2
+    exit 1
+  }
+
+  POLL_DEADLINE=0
+  if (( TIMEOUT > 0 )); then
+    POLL_DEADLINE=$(( EPOCHSECONDS + TIMEOUT ))
+  fi
+
+  trap 'echo "ralph: poll interrupted"; exit 0' INT TERM
+
+  while true; do
+    # Check deadline
+    if (( POLL_DEADLINE > 0 )) && (( EPOCHSECONDS >= POLL_DEADLINE )); then
+      echo "ralph: poll timeout reached"
+      break
+    fi
+
+    # Fetch ready issues
+    issues_json=$(gh issue list --label "spec,status:ready" --author "@me" --repo "$REPO" --json number,title 2>/dev/null) || {
+      echo "ralph: failed to list issues from $REPO" >&2
+      sleep "$INTERVAL"
+      continue
+    }
+
+    # Parse issue numbers
+    issue_numbers=$(echo "$issues_json" | python3 -c "
+import sys, json
+issues = json.load(sys.stdin)
+for i in issues:
+    print(i['number'])
+" 2>/dev/null) || true
+
+    if [[ -n $issue_numbers ]]; then
+      while IFS= read -r num; do
+        echo "ralph: found ready issue #$num"
+        process_issue "$num" || true
+      done <<< "$issue_numbers"
+    else
+      echo "ralph: no ready issues found"
+    fi
+
+    # Check deadline before sleeping
+    if (( POLL_DEADLINE > 0 )) && (( EPOCHSECONDS >= POLL_DEADLINE )); then
+      echo "ralph: poll timeout reached"
+      break
+    fi
+
+    sleep "$INTERVAL"
+  done
+  exit 0
+fi
+
+# --- no mode specified ---
+echo "ralph: no mode specified. Use --issue <number> or --poll" >&2
+usage 2

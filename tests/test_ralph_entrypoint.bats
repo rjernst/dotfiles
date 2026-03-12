@@ -1,6 +1,6 @@
 #!/usr/bin/env bats
 
-# Tests for docker/ralph/entrypoint.sh loop logic.
+# Tests for docker/ralph/entrypoint.sh single iteration logic.
 # Stubs claude and git so no real agent or container is needed.
 
 setup() {
@@ -57,23 +57,13 @@ run_entrypoint() {
   run bash "$ENTRYPOINT"
 }
 
-@test "entrypoint stops at max iterations" {
-  export MAX_ITERATIONS=3
+@test "entrypoint runs claude exactly once" {
   run_entrypoint
   [ "$status" -eq 0 ]
-  [[ "$output" == *"reached max iterations (3)"* ]]
-}
-
-@test "entrypoint runs correct number of iterations" {
-  export MAX_ITERATIONS=3
-  run_entrypoint
-  [ "$status" -eq 0 ]
-  # Claude should be invoked 3 times
-  [ "$(grep -c 'claude invoked' "$CLAUDE_LOG")" -eq 3 ]
+  [ "$(grep -c 'claude invoked' "$CLAUDE_LOG")" -eq 1 ]
 }
 
 @test "entrypoint passes model to claude" {
-  export MAX_ITERATIONS=1
   export MODEL=opus
   run_entrypoint
   [ "$status" -eq 0 ]
@@ -81,22 +71,12 @@ run_entrypoint() {
 }
 
 @test "entrypoint uses --dangerously-skip-permissions" {
-  export MAX_ITERATIONS=1
   run_entrypoint
   [ "$status" -eq 0 ]
   grep -q -- '--dangerously-skip-permissions' "$CLAUDE_LOG"
 }
 
-@test "entrypoint prints iteration banners" {
-  export MAX_ITERATIONS=2
-  run_entrypoint
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"iteration 1"* ]]
-  [[ "$output" == *"iteration 2"* ]]
-}
-
 @test "entrypoint configures git identity" {
-  export MAX_ITERATIONS=1
   run_entrypoint
   [ "$status" -eq 0 ]
   grep -q 'git config --global user.name testuser' "$GIT_LOG"
@@ -104,14 +84,12 @@ run_entrypoint() {
 }
 
 @test "entrypoint marks /work as safe directory" {
-  export MAX_ITERATIONS=1
   run_entrypoint
   [ "$status" -eq 0 ]
   grep -q 'git config --global --add safe.directory /work' "$GIT_LOG"
 }
 
 @test "entrypoint pushes when PUSH=1" {
-  export MAX_ITERATIONS=1
   export PUSH=1
   run_entrypoint
   [ "$status" -eq 0 ]
@@ -119,63 +97,54 @@ run_entrypoint() {
 }
 
 @test "entrypoint does not push when PUSH=0" {
-  export MAX_ITERATIONS=1
   export PUSH=0
   run_entrypoint
   [ "$status" -eq 0 ]
   ! grep -q 'git push' "$GIT_LOG"
 }
 
-@test "entrypoint exits early when claude fails without committing" {
-  # Replace claude stub with one that fails (no HEAD advance)
+@test "entrypoint prints no-commit message when HEAD unchanged" {
+  # Claude succeeds but doesn't advance HEAD
+  cat > "$BATS_TEST_TMPDIR/bin/claude" <<'STUB'
+#!/bin/bash
+echo "claude invoked: $*" >> "$CLAUDE_LOG"
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/claude"
+
+  run_entrypoint
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"no commit made"* ]]
+}
+
+@test "entrypoint does not print no-commit message when HEAD changes" {
+  run_entrypoint
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"no commit made"* ]]
+}
+
+@test "entrypoint handles claude error gracefully" {
   cat > "$BATS_TEST_TMPDIR/bin/claude" <<'STUB'
 #!/bin/bash
 exit 1
 STUB
   chmod +x "$BATS_TEST_TMPDIR/bin/claude"
 
-  export MAX_ITERATIONS=3
   run_entrypoint
   [ "$status" -eq 0 ]
-  [[ "$output" == *"iteration 1"* ]]
   [[ "$output" == *"claude exited with error"* ]]
   [[ "$output" == *"no commit made"* ]]
-  # Should NOT reach iteration 2
-  [[ "$output" != *"iteration 2"* ]]
-}
-
-@test "entrypoint exits early when no commit is made" {
-  # Claude succeeds but doesn't advance HEAD (spec complete scenario)
-  cat > "$BATS_TEST_TMPDIR/bin/claude" <<'STUB'
-#!/bin/bash
-echo "claude invoked: $*" >> "$CLAUDE_LOG"
-# Don't advance HEAD counter — simulates "all tasks done, no commit"
-STUB
-  chmod +x "$BATS_TEST_TMPDIR/bin/claude"
-
-  export MAX_ITERATIONS=5
-  run_entrypoint
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"iteration 1"* ]]
-  [[ "$output" == *"no commit made"* ]]
-  # Only one iteration should run
-  [[ "$output" != *"iteration 2"* ]]
 }
 
 @test "entrypoint creates writable gitconfig copy" {
-  # Simulate a read-only host gitconfig
   echo "[user]\n\tname = host" > "$HOME/.gitconfig"
   chmod 444 "$HOME/.gitconfig"
 
-  export MAX_ITERATIONS=1
   run_entrypoint
   [ "$status" -eq 0 ]
-  # The writable copy should exist
   [ -f "$HOME/.ralph-gitconfig" ]
 }
 
 @test "entrypoint defaults model to sonnet" {
-  export MAX_ITERATIONS=1
   unset MODEL
   run_entrypoint
   [ "$status" -eq 0 ]

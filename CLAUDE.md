@@ -84,9 +84,9 @@ hooks/
 claude/
   CLAUDE.md            # Global Claude Code instructions (symlinked to ~/.claude/CLAUDE.md)
   skills/              # Claude Code skills (symlinked to ~/.claude/skills)
-    create-spec/       # /create-spec — interactive Ralph spec generator
+    create-spec/       # /create-spec — interactive Ralph spec generator (creates GitHub Issues)
 scripts/                 # All files auto-symlinked to ~/bin by setup
-  ralph                # Dockerized AI coding loop (see docker/ralph/)
+  ralph                # GitHub Issues-driven AI coding loop (see docker/ralph/)
   ta                   # Terminal Agent tool (subcommand dispatcher)
   ta-wt                # Worktree manager (list, create, remove, prune, status)
   ta-workspace         # Tmux workspace session manager (create, list, attach, kill)
@@ -102,7 +102,7 @@ scripts/                 # All files auto-symlinked to ~/bin by setup
 docker/
   ralph/               # Docker image for ralph AI coding loop
     Dockerfile         # Claude Code + git container image
-    entrypoint.sh      # Iteration loop: read spec, run claude, commit, repeat
+    entrypoint.sh      # Single-iteration runner: invoke Claude, commit, exit
 ```
 
 ## Key Conventions
@@ -138,12 +138,16 @@ docker/
 - `ta tmux windows` — List tmux windows
 - `ta tmux panes` — List tmux panes with command, PID, CWD
 - `ta tmux capture <pane_id>` — Capture scrollback from a pane
-- `ralph` — Run dockerized AI coding loop on specs in `.ralph/specs/`
-- `ralph --prompt <file>` — Run on a single prompt file
+- `ralph --issue <number>` — Execute a single GitHub Issue spec
+- `ralph --poll` — Poll for `status:ready` issues and execute them
+- `ralph --poll --interval 10s` — Custom poll interval (default: 30s)
+- `ralph --poll --timeout 2h` — Poll with deadline
 - `ralph --model <model>` — Use a specific Claude model (default: sonnet)
 - `ralph --push` — Git push after each iteration
 - `ralph --packages "pkg ..."` — Bake extra apt packages into the image
-- `/create-spec` — Interactive Ralph spec generator (Claude Code skill)
+- `/create-spec` — Interactive Ralph spec generator (creates GitHub Issues with `spec` + `status:ready` labels)
+  - Issue title format: `[<branch-name>] Feature Title`
+  - Labels: `spec` (identifies as Ralph spec), `status:ready` / `status:in-progress` / `status:done` / `status:needs-attention`
 
 ## Making Changes
 
