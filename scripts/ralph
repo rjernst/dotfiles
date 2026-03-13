@@ -142,13 +142,15 @@ OAUTH_TOKEN=$(echo "$KEYCHAIN_JSON" | python3 -c "import sys,json; print(json.lo
 
 # --- resolve repo from origin remote ---
 resolve_repo() {
-  gh repo view --json nameWithOwner -q .nameWithOwner
+  git remote get-url origin 2>/dev/null \
+    | sed -E 's#.*github\.com[:/]##; s#\.git$##'
 }
 
 # --- parse branch from issue title [branch] prefix ---
 parse_issue_branch() {
   local title=$1
-  if [[ $title =~ '^\[([^\]]+)\]' ]]; then
+  local pat='^\[([^]]+)\]'
+  if [[ $title =~ $pat ]]; then
     echo "$match[1]"
   else
     echo "ralph: cannot parse branch from issue title: $title" >&2
@@ -166,15 +168,15 @@ process_issue() {
   }
 
   # Fetch issue data
-  local issue_json
-  issue_json=$(gh issue view "$issue_number" --json title,body --repo "$repo") || {
+  local title body branch
+  title=$(gh issue view "$issue_number" --json title -q .title --repo "$repo") || {
     echo "ralph: failed to fetch issue #$issue_number from $repo" >&2
     return 1
   }
-
-  local title body branch
-  title=$(echo "$issue_json" | python3 -c "import sys,json; print(json.load(sys.stdin)['title'])")
-  body=$(echo "$issue_json" | python3 -c "import sys,json; print(json.load(sys.stdin)['body'])")
+  body=$(gh issue view "$issue_number" --json body -q .body --repo "$repo") || {
+    echo "ralph: failed to fetch issue #$issue_number from $repo" >&2
+    return 1
+  }
 
   branch=$(parse_issue_branch "$title") || return 1
 
