@@ -188,13 +188,12 @@ process_issue() {
   # Label in-progress
   gh issue edit "$issue_number" --remove-label "status:ready" --add-label "status:in-progress" --repo "$repo" 2>/dev/null || true
 
-  local spec_path=".ralph/current-spec.md"
-  local head_before head_after
+  local spec_tmpfile head_before head_after
+  spec_tmpfile=$(mktemp)
 
   while true; do
     # Write current issue body as spec file
-    mkdir -p "$work_dir/.ralph"
-    echo "$body" > "$work_dir/$spec_path"
+    echo "$body" > "$spec_tmpfile"
 
     # Worktree git dir mount
     local worktree_mount=()
@@ -212,13 +211,14 @@ process_issue() {
 
     # Run container (single iteration)
     echo "ralph: starting iteration (image=$IMAGE_TAG, issue=#$issue_number, model=$MODEL)"
-    docker run --rm $TTY_FLAGS \
+    docker run --rm \
       -v "$work_dir:/work" \
       "${worktree_mount[@]}" \
       -v "$HOME/.gitconfig:/home/ralph/.gitconfig:ro" \
       -v "$HOME/.ssh:/home/ralph/.ssh:ro" \
       -e "PUSH=$PUSH" \
-      -e "PROMPT_FILE=$spec_path" \
+      -v "$spec_tmpfile:/tmp/spec.md" \
+      -e "PROMPT_FILE=/tmp/spec.md" \
       -e "MODEL=$MODEL" \
       -e "GIT_USER=$GIT_USER" \
       -e "GIT_EMAIL=$GIT_EMAIL" \
@@ -226,6 +226,7 @@ process_issue() {
       "$IMAGE_TAG" || {
         echo "ralph: container failed for issue #$issue_number" >&2
         gh issue edit "$issue_number" --remove-label "status:in-progress" --add-label "status:needs-attention" --repo "$repo" 2>/dev/null || true
+        rm -f "$spec_tmpfile"
         return 1
       }
 
@@ -236,11 +237,12 @@ process_issue() {
       # No commit — all tasks complete
       echo "ralph: no commit made, marking issue #$issue_number done"
       gh issue edit "$issue_number" --remove-label "status:in-progress" --add-label "status:done" --repo "$repo" 2>/dev/null || true
+      rm -f "$spec_tmpfile"
       break
     fi
 
     # Update issue body from spec file (container may have checked off tasks)
-    body=$(<"$work_dir/$spec_path")
+    body=$(<"$spec_tmpfile")
     gh issue edit "$issue_number" --body "$body" --repo "$repo" 2>/dev/null || true
     echo "ralph: iteration complete, updated issue #$issue_number"
 
@@ -307,9 +309,6 @@ ensure_worktree() {
 GIT_USER=$(git config user.name 2>/dev/null || echo "ralph")
 GIT_EMAIL=$(git config user.email 2>/dev/null || echo "ralph@localhost")
 
-# --- TTY detection ---
-TTY_FLAGS="-i"
-[[ -t 1 ]] && TTY_FLAGS="-it"
 
 # --- issue mode ---
 if [[ -n $ISSUE_NUMBER ]]; then

@@ -544,13 +544,13 @@ STUB
   # Should have fetched the issue
   grep -q "issue view 42 --json title,body --repo owner/repo" "$GH_LOG"
   # Should have run docker
-  grep -q "PROMPT_FILE=.ralph/current-spec.md" "$DOCKER_LOG"
+  grep -q "PROMPT_FILE=/tmp/spec.md" "$DOCKER_LOG"
   # Should reference the branch
   [[ "$output" == *"processing issue #42 on branch test-issue"* ]]
   [[ "$output" == *"using worktree"* ]]
 }
 
-@test "ralph --issue writes spec to .ralph/current-spec.md in worktree" {
+@test "ralph --issue writes spec to temp file mounted into container" {
   cat > "$BATS_TEST_TMPDIR/bin/gh" <<'STUB'
 #!/bin/bash
 case "$1" in
@@ -569,9 +569,11 @@ STUB
   cd "$PROJECT"
   run zsh "$RALPH" --issue 10
   [ "$status" -eq 0 ]
+  # Spec should NOT be written to the worktree
   local wt_path="$BATS_TEST_TMPDIR/project-spec-write-test"
-  [ -f "$wt_path/.ralph/current-spec.md" ]
-  grep -q "spec body content" "$wt_path/.ralph/current-spec.md"
+  [ ! -d "$wt_path/.ralph" ]
+  # Temp file should be mounted at /tmp/spec.md
+  grep -qE '/tmp/[^ ]+:/tmp/spec.md' "$DOCKER_LOG"
 }
 
 @test "ralph --issue updates labels: ready→in-progress→done" {
@@ -621,7 +623,7 @@ STUB
   cd "$PROJECT"
   run zsh "$RALPH" --issue 7
   [ "$status" -eq 0 ]
-  grep -q "PROMPT_FILE=.ralph/current-spec.md" "$DOCKER_LOG"
+  grep -q "PROMPT_FILE=/tmp/spec.md" "$DOCKER_LOG"
 }
 
 @test "ralph --poll and --issue together errors" {
