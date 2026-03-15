@@ -329,18 +329,24 @@ if (( POLL )); then
     POLL_DEADLINE=$(( EPOCHSECONDS + TIMEOUT ))
   fi
 
-  trap 'echo "ralph: poll interrupted"; exit 0' INT TERM
+  trap 'printf "\n"; echo "ralph: poll interrupted"; exit 0' INT TERM
+
+  local last_was_idle=0
+  local timestamp
 
   while true; do
     # Check deadline
     if (( POLL_DEADLINE > 0 )) && (( EPOCHSECONDS >= POLL_DEADLINE )); then
+      (( last_was_idle )) && printf "\n"
       echo "ralph: poll timeout reached"
       break
     fi
 
     # Fetch ready issues
     issues_json=$(gh issue list --label "spec,status:ready" --author "@me" --repo "$REPO" --json number,title 2>/dev/null) || {
+      (( last_was_idle )) && printf "\n"
       echo "ralph: failed to list issues from $REPO" >&2
+      last_was_idle=0
       sleep "$INTERVAL"
       continue
     }
@@ -354,16 +360,21 @@ for i in issues:
 " 2>/dev/null) || true
 
     if [[ -n $issue_numbers ]]; then
+      (( last_was_idle )) && printf "\n"
+      last_was_idle=0
       while IFS= read -r num; do
         echo "ralph: found ready issue #$num"
         process_issue "$num" || true
       done <<< "$issue_numbers"
     else
-      echo "ralph: no ready issues found"
+      timestamp=$(strftime "%H:%M:%S" "$EPOCHSECONDS")
+      printf "\rralph: no ready issues found (last checked at %s)%s" "$timestamp" $'\e[K'
+      last_was_idle=1
     fi
 
     # Check deadline before sleeping
     if (( POLL_DEADLINE > 0 )) && (( EPOCHSECONDS >= POLL_DEADLINE )); then
+      (( last_was_idle )) && printf "\n"
       echo "ralph: poll timeout reached"
       break
     fi
