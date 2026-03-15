@@ -19,6 +19,7 @@ HEAD_BEFORE=$(git rev-parse HEAD 2>/dev/null || echo "none")
 claude -p \
   --dangerously-skip-permissions \
   --model "${MODEL:-sonnet}" \
+  --reasoning-effort high \
   <<PROMPT || echo "ralph: claude exited with error ($?), continuing..."
 You are an AI coding agent. You will be invoked repeatedly — once per task.
 Read the spec file at \`$PROMPT_FILE\` for what to build.
