@@ -41,16 +41,24 @@ Parse `git worktree list --porcelain` output. Each worktree block starts with `w
 **If only `origin` exists (personal project):**
 - Use `main` as the base branch (or `master` if `main` doesn't exist: check with `git show-ref --verify --quiet refs/remotes/origin/main`)
 
-#### Step 3A: Confirm and merge
+#### Step 3A: Craft commit message and merge
 
-Present to the user:
+Follow the [Commit message crafting](#commit-message-crafting) procedure to produce a commit message for the branch (`git log <base-branch>..<current-branch>`).
+
+Present to the user for confirmation:
 ```
-Merge `<current-branch>` into `<base-branch>`?
+Merge `<current-branch>` into `<base-branch>` with this commit message?
+
+---
+<proposed commit message>
+---
 ```
 
-If the user confirms, run:
+If the user requests changes, revise the message and update the temp file. Repeat until approved.
+
+Once confirmed, run:
 ```
-ta wt merge --target <base-branch> <current-branch>
+ta wt merge --target <base-branch> --message-file "$tmp_msg" <current-branch>
 ```
 
 Report the output. If it fails, show the error and stop.
@@ -97,12 +105,27 @@ If there are no worktrees to show, inform the user and stop.
 If any worktree the user selects has status `wip` or `conflict`, warn them:
 > "Warning: `<branch>` has status `<status>`. It may not be ready to merge. Proceed anyway?"
 
-#### Step 5B: Merge selected branches
+#### Step 5B: Craft commit messages and merge selected branches
 
-Ask the user which branch(es) to merge. For each selected branch, run:
-```
-ta wt merge --target <current-branch> <selected-branch>
-```
+Ask the user which branch(es) to merge. For each selected branch:
+
+1. Follow the [Commit message crafting](#commit-message-crafting) procedure (`git log <current-branch>..<selected-branch>`).
+
+2. Show the proposed message as part of the merge confirmation:
+   ```
+   Merge `<selected-branch>` into `<current-branch>` with this commit message?
+
+   ---
+   <proposed commit message>
+   ---
+   ```
+
+   If the user requests changes, revise the message and update the temp file. Repeat until approved.
+
+3. Once confirmed, run:
+   ```
+   ta wt merge --target <current-branch> --message-file "$tmp_msg" <selected-branch>
+   ```
 
 Report results for each merge. If a merge fails, show the error and ask whether to continue with remaining branches.
 
@@ -114,5 +137,30 @@ Report results for each merge. If a merge fails, show the error and ask whether 
 - **Merge fails due to conflicts**: Report the conflict and stop. Do not attempt to resolve it.
 - **Merge fails due to dirty state**: Report which worktree is dirty. Suggest the user clean it up and retry.
 - **Ambiguous base branch**: If multiple upstream branches are equally close ancestors, list them and ask the user to pick.
+
+---
+
+## Commit message crafting
+
+Use this procedure whenever a commit message is needed for a merge:
+
+1. Get the commit history:
+   ```
+   git log <base>..<branch> --format="%h %s"
+   ```
+
+2. Craft a concise summary commit message from those commits:
+   - **First line**: Short imperative summary under 72 chars (e.g. "Add retry logic for failed API requests")
+   - **Body** (optional, after a blank line): Bullet points summarizing key changes
+   - Synthesize the commits into a meaningful description — do NOT just list the raw commit messages
+   - Focus on *what changed and why*, not the individual steps taken
+
+3. Write the message to a temp file:
+   ```
+   tmp_msg=$(mktemp)
+   cat > "$tmp_msg" << 'MSG'
+   <your crafted message here>
+   MSG
+   ```
 
 $ARGUMENTS

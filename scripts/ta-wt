@@ -578,12 +578,16 @@ cmd_remove() {
 
 # --- merge subcommand ---
 cmd_merge() {
-  local branch="" target="main"
+  local branch="" target="main" msg="" msg_file=""
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --target) target="$2"; shift 2 ;;
       --target=*) target="${1#--target=}"; shift ;;
+      --message) msg="$2"; shift 2 ;;
+      --message=*) msg="${1#--message=}"; shift ;;
+      --message-file) msg_file="$2"; shift 2 ;;
+      --message-file=*) msg_file="${1#--message-file=}"; shift ;;
       -*)
         echo "ta: unknown option '$1'" >&2
         exit 2
@@ -601,7 +605,19 @@ cmd_merge() {
   done
 
   if [[ -z "$branch" ]]; then
-    echo "usage: ta wt merge <branch> [--target <branch>]" >&2
+    echo "usage: ta wt merge <branch> [--target <branch>] [--message <msg> | --message-file <path>]" >&2
+    exit 2
+  fi
+
+  # Validate --message and --message-file are mutually exclusive
+  if [[ -n "$msg" && -n "$msg_file" ]]; then
+    echo "ta: cannot use both --message and --message-file" >&2
+    exit 2
+  fi
+
+  # Validate --message-file exists and is readable
+  if [[ -n "$msg_file" && ! -r "$msg_file" ]]; then
+    echo "ta: message file not found: $msg_file" >&2
     exit 2
   fi
 
@@ -676,8 +692,16 @@ cmd_merge() {
     exit 1
   fi
 
-  # Commit with message referencing the branch name
-  if ! git -C "$main_wt" commit -m "Squashed '$branch' into $target" 2>&1; then
+  # Commit with custom or default message
+  local commit_cmd=(git -C "$main_wt" commit)
+  if [[ -n "$msg_file" ]]; then
+    commit_cmd+=(--file "$msg_file")
+  elif [[ -n "$msg" ]]; then
+    commit_cmd+=(-m "$msg")
+  else
+    commit_cmd+=(-m "Squashed '$branch' into $target")
+  fi
+  if ! "${commit_cmd[@]}" 2>&1; then
     echo "ta: commit failed" >&2
     git -C "$main_wt" reset --hard HEAD 2>/dev/null || true
     exit 1

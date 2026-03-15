@@ -782,6 +782,70 @@ setup() {
   [[ "$output" == *"target worktree 'base-dirty-target' has uncommitted changes"* ]]
 }
 
+@test "wt merge --message uses custom commit message" {
+  cd "$PROJECT"
+  git checkout -b feat-merge-custom-msg
+  echo "custom msg content" > custom-msg.txt
+  git add custom-msg.txt
+  git commit -m "commit for custom msg"
+  git checkout main
+  git worktree add "$BATS_TEST_TMPDIR/wt-merge-custom-msg" feat-merge-custom-msg
+
+  run zsh "$TA_WT" merge --message "My custom squash message" feat-merge-custom-msg
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"merged"* ]]
+
+  local msg
+  msg="$(git -C "$PROJECT" log -1 --format='%s')"
+  [ "$msg" = "My custom squash message" ]
+}
+
+@test "wt merge --message-file reads message from file" {
+  cd "$PROJECT"
+  git checkout -b feat-merge-file-msg
+  echo "file msg content" > file-msg.txt
+  git add file-msg.txt
+  git commit -m "commit for file msg"
+  git checkout main
+  git worktree add "$BATS_TEST_TMPDIR/wt-merge-file-msg" feat-merge-file-msg
+
+  echo "Message from file" > "$BATS_TEST_TMPDIR/commit-msg.txt"
+
+  run zsh "$TA_WT" merge --message-file "$BATS_TEST_TMPDIR/commit-msg.txt" feat-merge-file-msg
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"merged"* ]]
+
+  local msg
+  msg="$(git -C "$PROJECT" log -1 --format='%s')"
+  [ "$msg" = "Message from file" ]
+}
+
+@test "wt merge --message and --message-file together fails" {
+  cd "$PROJECT"
+  git checkout -b feat-merge-both
+  git commit --allow-empty -m "both flags"
+  git checkout main
+  git worktree add "$BATS_TEST_TMPDIR/wt-merge-both" feat-merge-both
+
+  echo "msg" > "$BATS_TEST_TMPDIR/both-msg.txt"
+
+  run zsh "$TA_WT" merge --message "inline" --message-file "$BATS_TEST_TMPDIR/both-msg.txt" feat-merge-both
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"cannot use both --message and --message-file"* ]]
+}
+
+@test "wt merge --message-file with nonexistent file fails" {
+  cd "$PROJECT"
+  git checkout -b feat-merge-nofile
+  git commit --allow-empty -m "no file"
+  git checkout main
+  git worktree add "$BATS_TEST_TMPDIR/wt-merge-nofile" feat-merge-nofile
+
+  run zsh "$TA_WT" merge --message-file "/tmp/nonexistent-file-12345.txt" feat-merge-nofile
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"message file not found"* ]]
+}
+
 @test "wt merge --target defaults to main" {
   cd "$PROJECT"
   git checkout -b feat-explicit-main
