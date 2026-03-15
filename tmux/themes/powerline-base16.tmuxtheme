@@ -2,7 +2,7 @@
 # Uses standard ANSI colors (0-15) for compatibility with any terminal palette.
 
 # Status update interval
-set -g status-interval 1
+set -g status-interval 15
 
 # Basic status bar colors (dark bg, light fg)
 set -g status-style 'fg=colour7,bg=colour0'
