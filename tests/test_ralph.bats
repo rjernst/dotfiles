@@ -46,11 +46,12 @@ STUB
 
   # Stub git — handles config, worktree, remote, ls-remote, rev-parse.
   # Control behavior via env vars: GIT_TOPLEVEL, GIT_WORKTREE_LIST,
-  # GIT_REMOTE, GIT_LS_REMOTE_FOUND
+  # GIT_REMOTE, GIT_LS_REMOTE_FOUND, GIT_REPO
   export GIT_TOPLEVEL=""
   export GIT_WORKTREE_LIST=""
   export GIT_REMOTE="origin"
   export GIT_LS_REMOTE_FOUND="0"
+  export GIT_REPO="owner/repo"
   cat > "$BATS_TEST_TMPDIR/bin/git" <<'STUB'
 #!/bin/bash
 # Handle -C <dir> prefix
@@ -92,7 +93,11 @@ case "$1" in
     esac
     ;;
   remote)
-    echo "${GIT_REMOTE:-origin}"
+    if [[ "$2" == "get-url" ]]; then
+      echo "git@github.com:${GIT_REPO:-owner/repo}.git"
+    else
+      echo "${GIT_REMOTE:-origin}"
+    fi
     ;;
   ls-remote)
     if [[ "${GIT_LS_REMOTE_FOUND}" == "1" ]]; then
@@ -262,14 +267,9 @@ STUB
 
 # --- resolve_repo tests ---
 
-@test "resolve_repo calls gh repo view with correct args" {
-  GH_LOG="$BATS_TEST_TMPDIR/gh.log"
-  cat > "$BATS_TEST_TMPDIR/bin/gh" <<'STUB'
-#!/bin/bash
-echo "$@" >> "$GH_LOG"
-echo "owner/repo"
-STUB
-  chmod +x "$BATS_TEST_TMPDIR/bin/gh"
+@test "resolve_repo extracts repo from git remote origin URL" {
+  GIT_LOG="$BATS_TEST_TMPDIR/git.log"
+  export GIT_REPO="owner/repo"
 
   run zsh -c '
     export PATH="'"$BATS_TEST_TMPDIR/bin"':$PATH"
@@ -278,7 +278,6 @@ STUB
   '
   [ "$status" -eq 0 ]
   [ "$output" = "owner/repo" ]
-  grep -q "repo view --json nameWithOwner -q .nameWithOwner" "$GH_LOG"
 }
 
 # --- gh requirement test ---
@@ -299,14 +298,19 @@ STUB
 # --- option passing tests ---
 
 @test "ralph --packages uses custom image tag" {
-  GH_LOG="$BATS_TEST_TMPDIR/gh.log"
+  export GH_LOG="$BATS_TEST_TMPDIR/gh.log"
   cat > "$BATS_TEST_TMPDIR/bin/gh" <<'STUB'
 #!/bin/bash
 case "$1" in
-  repo) echo "owner/repo" ;;
   issue)
     case "$2" in
-      view) echo '{"title":"[pkg-test] Test","body":"body"}' ;;
+      view)
+        if [[ " $* " == *" -q .title "* ]]; then
+          echo "[pkg-test] Test"
+        elif [[ " $* " == *" -q .body "* ]]; then
+          echo "body"
+        fi
+        ;;
       edit) ;;
     esac
     ;;
@@ -327,10 +331,15 @@ STUB
   cat > "$BATS_TEST_TMPDIR/bin/gh" <<'STUB'
 #!/bin/bash
 case "$1" in
-  repo) echo "owner/repo" ;;
   issue)
     case "$2" in
-      view) echo '{"title":"[uid-test] Test","body":"body"}' ;;
+      view)
+        if [[ " $* " == *" -q .title "* ]]; then
+          echo "[uid-test] Test"
+        elif [[ " $* " == *" -q .body "* ]]; then
+          echo "body"
+        fi
+        ;;
       edit) ;;
     esac
     ;;
@@ -349,10 +358,15 @@ STUB
   cat > "$BATS_TEST_TMPDIR/bin/gh" <<'STUB'
 #!/bin/bash
 case "$1" in
-  repo) echo "owner/repo" ;;
   issue)
     case "$2" in
-      view) echo '{"title":"[push-test] Test","body":"body"}' ;;
+      view)
+        if [[ " $* " == *" -q .title "* ]]; then
+          echo "[push-test] Test"
+        elif [[ " $* " == *" -q .body "* ]]; then
+          echo "body"
+        fi
+        ;;
       edit) ;;
     esac
     ;;
@@ -371,10 +385,15 @@ STUB
   cat > "$BATS_TEST_TMPDIR/bin/gh" <<'STUB'
 #!/bin/bash
 case "$1" in
-  repo) echo "owner/repo" ;;
   issue)
     case "$2" in
-      view) echo '{"title":"[nopush-test] Test","body":"body"}' ;;
+      view)
+        if [[ " $* " == *" -q .title "* ]]; then
+          echo "[nopush-test] Test"
+        elif [[ " $* " == *" -q .body "* ]]; then
+          echo "body"
+        fi
+        ;;
       edit) ;;
     esac
     ;;
@@ -393,10 +412,15 @@ STUB
   cat > "$BATS_TEST_TMPDIR/bin/gh" <<'STUB'
 #!/bin/bash
 case "$1" in
-  repo) echo "owner/repo" ;;
   issue)
     case "$2" in
-      view) echo '{"title":"[model-test] Test","body":"body"}' ;;
+      view)
+        if [[ " $* " == *" -q .title "* ]]; then
+          echo "[model-test] Test"
+        elif [[ " $* " == *" -q .body "* ]]; then
+          echo "body"
+        fi
+        ;;
       edit) ;;
     esac
     ;;
@@ -415,10 +439,15 @@ STUB
   cat > "$BATS_TEST_TMPDIR/bin/gh" <<'STUB'
 #!/bin/bash
 case "$1" in
-  repo) echo "owner/repo" ;;
   issue)
     case "$2" in
-      view) echo '{"title":"[model-test] Test","body":"body"}' ;;
+      view)
+        if [[ " $* " == *" -q .title "* ]]; then
+          echo "[model-test] Test"
+        elif [[ " $* " == *" -q .body "* ]]; then
+          echo "body"
+        fi
+        ;;
       edit) ;;
     esac
     ;;
@@ -439,10 +468,15 @@ STUB
   cat > "$BATS_TEST_TMPDIR/bin/gh" <<'STUB'
 #!/bin/bash
 case "$1" in
-  repo) echo "owner/repo" ;;
   issue)
     case "$2" in
-      view) echo '{"title":"[feature/remote] Test","body":"body"}' ;;
+      view)
+        if [[ " $* " == *" -q .title "* ]]; then
+          echo "[feature/remote] Test"
+        elif [[ " $* " == *" -q .body "* ]]; then
+          echo "body"
+        fi
+        ;;
       edit) ;;
     esac
     ;;
@@ -464,10 +498,15 @@ STUB
   cat > "$BATS_TEST_TMPDIR/bin/gh" <<'STUB'
 #!/bin/bash
 case "$1" in
-  repo) echo "owner/repo" ;;
   issue)
     case "$2" in
-      view) echo '{"title":"[feature/new] Test","body":"body"}' ;;
+      view)
+        if [[ " $* " == *" -q .title "* ]]; then
+          echo "[feature/new] Test"
+        elif [[ " $* " == *" -q .body "* ]]; then
+          echo "body"
+        fi
+        ;;
       edit) ;;
     esac
     ;;
@@ -496,10 +535,15 @@ branch refs/heads/feature/existing"
   cat > "$BATS_TEST_TMPDIR/bin/gh" <<'STUB'
 #!/bin/bash
 case "$1" in
-  repo) echo "owner/repo" ;;
   issue)
     case "$2" in
-      view) echo '{"title":"[feature/existing] Test","body":"body"}' ;;
+      view)
+        if [[ " $* " == *" -q .title "* ]]; then
+          echo "[feature/existing] Test"
+        elif [[ " $* " == *" -q .body "* ]]; then
+          echo "body"
+        fi
+        ;;
       edit) ;;
     esac
     ;;
@@ -516,18 +560,19 @@ STUB
 # --- --issue flag tests ---
 
 @test "ralph --issue fetches issue, creates worktree, runs container" {
-  GH_LOG="$BATS_TEST_TMPDIR/gh.log"
+  export GH_LOG="$BATS_TEST_TMPDIR/gh.log"
   cat > "$BATS_TEST_TMPDIR/bin/gh" <<'STUB'
 #!/bin/bash
 echo "$@" >> "$GH_LOG"
 case "$1" in
-  repo)
-    echo "owner/repo"
-    ;;
   issue)
     case "$2" in
       view)
-        echo '{"title":"[test-issue] Test Feature","body":"## Tasks\n- [ ] Do thing"}'
+        if [[ " $* " == *" -q .title "* ]]; then
+          echo "[test-issue] Test Feature"
+        elif [[ " $* " == *" -q .body "* ]]; then
+          echo "## Tasks\n- [ ] Do thing"
+        fi
         ;;
       edit)
         ;;
@@ -541,8 +586,8 @@ STUB
   cd "$PROJECT"
   run zsh "$RALPH" --issue 42
   [ "$status" -eq 0 ]
-  # Should have fetched the issue
-  grep -q "issue view 42 --json title,body --repo owner/repo" "$GH_LOG"
+  # Should have fetched the issue title
+  grep -q "issue view 42 --json title -q .title --repo owner/repo" "$GH_LOG"
   # Should have run docker
   grep -q "PROMPT_FILE=/tmp/spec.md" "$DOCKER_LOG"
   # Should reference the branch
@@ -554,10 +599,15 @@ STUB
   cat > "$BATS_TEST_TMPDIR/bin/gh" <<'STUB'
 #!/bin/bash
 case "$1" in
-  repo) echo "owner/repo" ;;
   issue)
     case "$2" in
-      view) echo '{"title":"[spec-write-test] Test","body":"spec body content"}' ;;
+      view)
+        if [[ " $* " == *" -q .title "* ]]; then
+          echo "[spec-write-test] Test"
+        elif [[ " $* " == *" -q .body "* ]]; then
+          echo "spec body content"
+        fi
+        ;;
       edit) ;;
     esac
     ;;
@@ -573,19 +623,24 @@ STUB
   local wt_path="$BATS_TEST_TMPDIR/project-spec-write-test"
   [ ! -d "$wt_path/.ralph" ]
   # Temp file should be mounted at /tmp/spec.md
-  grep -qE '/tmp/[^ ]+:/tmp/spec.md' "$DOCKER_LOG"
+  grep -qE '[^ ]+:/tmp/spec.md' "$DOCKER_LOG"
 }
 
 @test "ralph --issue updates labels: ready→in-progress→done" {
-  GH_LOG="$BATS_TEST_TMPDIR/gh.log"
+  export GH_LOG="$BATS_TEST_TMPDIR/gh.log"
   cat > "$BATS_TEST_TMPDIR/bin/gh" <<'STUB'
 #!/bin/bash
 echo "$@" >> "$GH_LOG"
 case "$1" in
-  repo) echo "owner/repo" ;;
   issue)
     case "$2" in
-      view) echo '{"title":"[label-test] Test","body":"body"}' ;;
+      view)
+        if [[ " $* " == *" -q .title "* ]]; then
+          echo "[label-test] Test"
+        elif [[ " $* " == *" -q .body "* ]]; then
+          echo "body"
+        fi
+        ;;
       edit) ;;
     esac
     ;;
@@ -608,10 +663,15 @@ STUB
   cat > "$BATS_TEST_TMPDIR/bin/gh" <<'STUB'
 #!/bin/bash
 case "$1" in
-  repo) echo "owner/repo" ;;
   issue)
     case "$2" in
-      view) echo '{"title":"[prompt-test] Test","body":"body"}' ;;
+      view)
+        if [[ " $* " == *" -q .title "* ]]; then
+          echo "[prompt-test] Test"
+        elif [[ " $* " == *" -q .body "* ]]; then
+          echo "body"
+        fi
+        ;;
       edit) ;;
     esac
     ;;
@@ -634,15 +694,20 @@ STUB
 }
 
 @test "ralph --issue labels needs-attention on container failure" {
-  GH_LOG="$BATS_TEST_TMPDIR/gh.log"
+  export GH_LOG="$BATS_TEST_TMPDIR/gh.log"
   cat > "$BATS_TEST_TMPDIR/bin/gh" <<'STUB'
 #!/bin/bash
 echo "$@" >> "$GH_LOG"
 case "$1" in
-  repo) echo "owner/repo" ;;
   issue)
     case "$2" in
-      view) echo '{"title":"[fail-test] Test","body":"body"}' ;;
+      view)
+        if [[ " $* " == *" -q .title "* ]]; then
+          echo "[fail-test] Test"
+        elif [[ " $* " == *" -q .body "* ]]; then
+          echo "body"
+        fi
+        ;;
       edit) ;;
     esac
     ;;
@@ -677,12 +742,11 @@ STUB
 # --- --poll flag tests ---
 
 @test "ralph --poll calls gh issue list with correct labels and author" {
-  GH_LOG="$BATS_TEST_TMPDIR/gh.log"
+  export GH_LOG="$BATS_TEST_TMPDIR/gh.log"
   cat > "$BATS_TEST_TMPDIR/bin/gh" <<'STUB'
 #!/bin/bash
 echo "$@" >> "$GH_LOG"
 case "$1" in
-  repo) echo "owner/repo" ;;
   issue)
     case "$2" in
       list) echo "[]" ;;  # No ready issues
@@ -694,20 +758,19 @@ STUB
 
   export GIT_TOPLEVEL="$PROJECT"
   cd "$PROJECT"
-  # Use --timeout 1s to make the poll loop exit quickly
-  run zsh "$RALPH" --poll --timeout 1s
+  # Use short interval and timeout to make the poll loop exit quickly
+  run zsh "$RALPH" --poll --interval 1s --timeout 1s
   [ "$status" -eq 0 ]
   # Should have called gh issue list with correct flags
   grep -q 'issue list --label spec,status:ready --author @me --repo owner/repo --json number,title' "$GH_LOG"
 }
 
 @test "ralph --poll --interval 10s uses custom interval" {
-  GH_LOG="$BATS_TEST_TMPDIR/gh.log"
+  export GH_LOG="$BATS_TEST_TMPDIR/gh.log"
   cat > "$BATS_TEST_TMPDIR/bin/gh" <<'STUB'
 #!/bin/bash
 echo "$@" >> "$GH_LOG"
 case "$1" in
-  repo) echo "owner/repo" ;;
   issue)
     case "$2" in
       list) echo "[]" ;;
@@ -729,7 +792,6 @@ STUB
   cat > "$BATS_TEST_TMPDIR/bin/gh" <<'STUB'
 #!/bin/bash
 case "$1" in
-  repo) echo "owner/repo" ;;
   issue)
     case "$2" in
       list) echo "[]" ;;
@@ -741,19 +803,18 @@ STUB
 
   export GIT_TOPLEVEL="$PROJECT"
   cd "$PROJECT"
-  run zsh "$RALPH" --poll --timeout 1s
+  run zsh "$RALPH" --poll --interval 1s --timeout 1s
   [ "$status" -eq 0 ]
   [[ "$output" == *"poll timeout reached"* ]]
 }
 
 @test "ralph --poll processes multiple ready issues sequentially" {
-  GH_LOG="$BATS_TEST_TMPDIR/gh.log"
+  export GH_LOG="$BATS_TEST_TMPDIR/gh.log"
   POLL_ITERATION=0
   cat > "$BATS_TEST_TMPDIR/bin/gh" <<'STUB'
 #!/bin/bash
 echo "$@" >> "$GH_LOG"
 case "$1" in
-  repo) echo "owner/repo" ;;
   issue)
     case "$2" in
       list)
@@ -768,10 +829,18 @@ case "$1" in
       view)
         # Extract issue number from args
         num="$3"
-        if [ "$num" = "10" ]; then
-          echo '{"title":"[branch-a] First","body":"## Tasks\n- [ ] Do A"}'
-        else
-          echo '{"title":"[branch-b] Second","body":"## Tasks\n- [ ] Do B"}'
+        if [[ " $* " == *" -q .title "* ]]; then
+          if [ "$num" = "10" ]; then
+            echo "[branch-a] First"
+          else
+            echo "[branch-b] Second"
+          fi
+        elif [[ " $* " == *" -q .body "* ]]; then
+          if [ "$num" = "10" ]; then
+            printf '## Tasks\n- [ ] Do A'
+          else
+            printf '## Tasks\n- [ ] Do B'
+          fi
         fi
         ;;
       edit) ;;
@@ -783,7 +852,7 @@ STUB
 
   export GIT_TOPLEVEL="$PROJECT"
   cd "$PROJECT"
-  run zsh "$RALPH" --poll --timeout 1s
+  run zsh "$RALPH" --poll --interval 1s --timeout 3s
   [ "$status" -eq 0 ]
   # Should have processed both issues
   [[ "$output" == *"found ready issue #10"* ]]

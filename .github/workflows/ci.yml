@@ -90,7 +90,7 @@ jobs:
             [ "$(pwd)" = "/work" ]
           '
 
-      - name: Smoke test entrypoint loop
+      - name: Smoke test entrypoint
         run: |
           tmp=$(mktemp -d)
           git init -q "$tmp"
@@ -98,20 +98,18 @@ jobs:
 
           # Stub claude inside the container by bind-mounting over the real binary
           mkdir -p "$tmp/bin"
-          printf '#!/bin/bash\ncat > /dev/null\necho "claude stub ok"\ngit commit --allow-empty -m "stub commit" 2>/dev/null\n' > "$tmp/bin/claude"
+          printf '#!/bin/bash\ncat > /dev/null\necho "claude stub ok"\ngit commit --allow-empty -m "stub commit"\n' > "$tmp/bin/claude"
           chmod +x "$tmp/bin/claude"
 
           docker run --rm \
             -v "$tmp:/work" \
             -v "$tmp/bin/claude:/usr/local/bin/claude:ro" \
-            -e MAX_ITERATIONS=2 \
             -e PROMPT_FILE=PROMPT.md \
             -e MODEL=sonnet \
             -e PUSH=0 \
             ralph:latest 2>&1 | tee "$tmp/output.log"
 
-          grep -q "iteration 1" "$tmp/output.log"
-          grep -q "iteration 2" "$tmp/output.log"
-          grep -q "reached max iterations (2)" "$tmp/output.log"
           grep -q "claude stub ok" "$tmp/output.log"
+          # Entrypoint should NOT report "no commit made" since the stub commits
+          ! grep -q "no commit made" "$tmp/output.log"
           rm -rf "$tmp"

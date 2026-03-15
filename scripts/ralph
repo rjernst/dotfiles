@@ -17,6 +17,7 @@
 #   --model <model>       Claude model (default: sonnet)
 #   -h, --help            Show usage
 set -e
+zmodload zsh/datetime
 
 SELF=${0:A}
 
