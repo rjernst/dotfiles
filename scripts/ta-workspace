@@ -1,7 +1,7 @@
 #!/usr/bin/env zsh
 
 # ta-workspace — Tmux workspace session manager
-# Subcommands: create, list, attach, kill
+# Subcommands: create, list, attach, kill, prune
 
 set -eu
 
@@ -13,6 +13,7 @@ usage() {
   echo "  list      List all wt-* tmux sessions"
   echo "  attach    Attach to a workspace session"
   echo "  kill      Kill a workspace session"
+  echo "  prune     Find and remove orphaned wt-* sessions"
   exit 2
 }
 
@@ -347,6 +348,102 @@ cmd_kill() {
   echo "ta: killed session '$session_name'"
 }
 
+# --- prune subcommand ---
+cmd_prune() {
+  local apply=false
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --apply) apply=true; shift ;;
+      -*)
+        echo "ta: unknown option '$1'" >&2
+        exit 2
+        ;;
+      *)
+        echo "ta: unexpected argument '$1'" >&2
+        exit 2
+        ;;
+    esac
+  done
+
+  if ! git rev-parse --git-dir > /dev/null 2>&1; then
+    echo "ta: must be run from within a git repository" >&2
+    exit 1
+  fi
+
+  if ! _tmux_running; then
+    echo "ta: no orphaned sessions"
+    return 0
+  fi
+
+  # Get all wt-* sessions
+  local raw
+  raw="$("$TMUX_CMD" list-sessions -F '#{session_name}' 2>/dev/null)" || {
+    echo "ta: no orphaned sessions"
+    return 0
+  }
+
+  # Get list of worktree paths
+  local wt_paths
+  wt_paths="$(git worktree list --porcelain 2>/dev/null | grep '^worktree ' | sed 's/^worktree //')" || wt_paths=""
+
+  # Collect orphaned sessions as newline-separated strings
+  local orphaned_list=""
+  local count=0
+  local line
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    [[ "$line" == wt-* ]] || continue
+
+    # Get the session's working directory
+    local cwd
+    cwd="$("$TMUX_CMD" display-message -t "${line}:" -p '#{pane_current_path}' 2>/dev/null)" || cwd=""
+
+    # Check if the CWD exists as a directory and is a worktree
+    local is_worktree=false
+    if [[ -n "$cwd" && -d "$cwd" ]]; then
+      local wt_path
+      while IFS= read -r wt_path; do
+        [[ -z "$wt_path" ]] && continue
+        if [[ "$cwd" == "$wt_path" || "$cwd" == "$wt_path"/* ]]; then
+          is_worktree=true
+          break
+        fi
+      done <<< "$wt_paths"
+    fi
+
+    if [[ "$is_worktree" == false ]]; then
+      if [[ -n "$orphaned_list" ]]; then
+        orphaned_list="${orphaned_list}"$'\n'
+      fi
+      orphaned_list="${orphaned_list}${line}	${cwd:-<unknown>}"
+      count=$((count + 1))
+    fi
+  done <<< "$raw"
+
+  if [[ $count -eq 0 ]]; then
+    echo "ta: no orphaned sessions"
+    return 0
+  fi
+
+  if [[ "$apply" == false ]]; then
+    echo "Orphaned workspace sessions (worktree no longer exists):"
+    while IFS=$'\t' read -r sess_name sess_cwd; do
+      printf "  %-24s %s\n" "$sess_name" "$sess_cwd"
+    done <<< "$orphaned_list"
+    echo ""
+    echo "Run with --apply to remove these sessions."
+  else
+    local killed=0
+    while IFS=$'\t' read -r sess_name sess_cwd; do
+      "$TMUX_CMD" kill-session -t "$sess_name"
+      echo "ta: killed orphaned session '$sess_name'"
+      killed=$((killed + 1))
+    done <<< "$orphaned_list"
+    echo "ta: pruned $killed orphaned sessions"
+  fi
+}
+
 # --- dispatch ---
 subcmd="$1"
 shift
@@ -356,6 +453,7 @@ case "$subcmd" in
   list)   cmd_list "$@" ;;
   attach) cmd_attach "$@" ;;
   kill)   cmd_kill "$@" ;;
+  prune)  cmd_prune "$@" ;;
   *)
     echo "ta: unknown workspace command '$subcmd'" >&2
     exit 2

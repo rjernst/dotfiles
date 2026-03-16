@@ -775,6 +775,311 @@ SCRIPT
   grep -q "send-keys.*:review git status" "$call_log"
 }
 
+# --- prune tests ---
+
+# Mock tmux with sessions and configurable CWDs for prune testing
+create_mock_tmux_for_prune() {
+  local state_file="$BATS_TEST_TMPDIR/tmux-state"
+  local cwd_file="$BATS_TEST_TMPDIR/tmux-cwds"
+
+  # Sessions: mix of wt-* and non-wt-*
+  cat > "$state_file" <<'STATE'
+main	3	1
+wt-feature-good	2	0
+wt-feature-orphan	1	0
+wt-another-orphan	1	0
+work	1	0
+STATE
+
+  # CWDs for each session
+  cat > "$cwd_file" <<STATE
+wt-feature-good=$BATS_TEST_TMPDIR/worktrees/good
+wt-feature-orphan=/path/that/does/not/exist
+wt-another-orphan=$BATS_TEST_TMPDIR/not-a-worktree
+STATE
+
+  # Create the directory that exists but is NOT a worktree
+  mkdir -p "$BATS_TEST_TMPDIR/not-a-worktree"
+  # Create the directory that IS a worktree
+  mkdir -p "$BATS_TEST_TMPDIR/worktrees/good"
+
+  cat > "$TMUX_CMD" <<SCRIPT
+#!/usr/bin/env bash
+STATE_FILE="$state_file"
+CWD_FILE="$cwd_file"
+case "\$1" in
+  list-sessions)
+    if [[ "\$*" == *"#{session_name}"* ]]; then
+      while IFS=\$'\t' read -r name windows attached; do
+        echo "\$name"
+      done < "\$STATE_FILE"
+    else
+      while IFS=\$'\t' read -r name windows attached; do
+        printf "%s\t%s\t%s\n" "\$name" "\$windows" "\$attached"
+      done < "\$STATE_FILE"
+    fi
+    ;;
+  has-session)
+    target=""
+    shift
+    while [[ \$# -gt 0 ]]; do
+      case "\$1" in
+        -t) target="\$2"; shift 2 ;;
+        *) shift ;;
+      esac
+    done
+    grep -q "^\${target}\b" "\$STATE_FILE" 2>/dev/null
+    ;;
+  display-message)
+    target="" fmt=""
+    shift
+    while [[ \$# -gt 0 ]]; do
+      case "\$1" in
+        -t) target="\$2"; shift 2 ;;
+        -p) fmt="\$2"; shift 2 ;;
+        *) shift ;;
+      esac
+    done
+    if [[ "\$fmt" == *"pane_current_path"* ]]; then
+      name="\${target%:}"
+      cwd="\$(grep "^\${name}=" "\$CWD_FILE" 2>/dev/null | cut -d= -f2)"
+      echo "\${cwd:-/unknown}"
+    fi
+    ;;
+  kill-session)
+    target=""
+    shift
+    while [[ \$# -gt 0 ]]; do
+      case "\$1" in
+        -t) target="\$2"; shift 2 ;;
+        *) shift ;;
+      esac
+    done
+    if [[ -n "\$target" ]]; then
+      tmp="\$(mktemp)"
+      grep -v "^\${target}\b" "\$STATE_FILE" > "\$tmp" 2>/dev/null || true
+      mv "\$tmp" "\$STATE_FILE"
+    fi
+    ;;
+  *) exit 0 ;;
+esac
+SCRIPT
+  chmod +x "$TMUX_CMD"
+}
+
+# Helper: mock git worktree list --porcelain output
+mock_git_for_prune() {
+  local git_mock="$MOCK_DIR/git"
+  cat > "$git_mock" <<SCRIPT
+#!/usr/bin/env bash
+if [[ "\$1" == "worktree" && "\$2" == "list" && "\$3" == "--porcelain" ]]; then
+  echo "worktree /home/user/code/elasticsearch"
+  echo "HEAD abc123"
+  echo "branch refs/heads/main"
+  echo ""
+  echo "worktree $BATS_TEST_TMPDIR/worktrees/good"
+  echo "HEAD def456"
+  echo "branch refs/heads/feature/good"
+  echo ""
+else
+  # Fall through to real git for other commands
+  /usr/bin/git "\$@"
+fi
+SCRIPT
+  chmod +x "$git_mock"
+  export PATH="$MOCK_DIR:$PATH"
+}
+
+@test "prune: fails outside a git repository" {
+  local git_mock="$MOCK_DIR/git"
+  cat > "$git_mock" <<'SCRIPT'
+#!/usr/bin/env bash
+if [[ "$1" == "rev-parse" && "$2" == "--git-dir" ]]; then
+  echo "fatal: not a git repository" >&2
+  exit 128
+fi
+SCRIPT
+  chmod +x "$git_mock"
+  export PATH="$MOCK_DIR:$PATH"
+
+  run "$SHELL_CMD" "$TA_WORKSPACE" prune
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"must be run from within a git repository"* ]]
+}
+
+@test "prune: no tmux server shows no orphaned sessions" {
+  create_mock_tmux_no_server
+
+  run "$SHELL_CMD" "$TA_WORKSPACE" prune
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"no orphaned sessions"* ]]
+}
+
+@test "prune: no wt-* sessions shows no orphaned sessions" {
+  local state_file="$BATS_TEST_TMPDIR/tmux-state"
+  cat > "$state_file" <<'STATE'
+main	3	1
+work	1	0
+STATE
+  cat > "$TMUX_CMD" <<SCRIPT
+#!/usr/bin/env bash
+case "\$1" in
+  list-sessions)
+    if [[ "\$*" == *"#{session_name}"* ]]; then
+      while IFS=\$'\t' read -r name windows attached; do
+        echo "\$name"
+      done < "$state_file"
+    else
+      cat "$state_file"
+    fi
+    ;;
+  *) exit 0 ;;
+esac
+SCRIPT
+  chmod +x "$TMUX_CMD"
+
+  mock_git_for_prune
+  run "$SHELL_CMD" "$TA_WORKSPACE" prune
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"no orphaned sessions"* ]]
+}
+
+@test "prune: dry-run lists orphaned sessions" {
+  create_mock_tmux_for_prune
+  mock_git_for_prune
+
+  run "$SHELL_CMD" "$TA_WORKSPACE" prune
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Orphaned workspace sessions"* ]]
+  [[ "$output" == *"wt-feature-orphan"* ]]
+  [[ "$output" == *"wt-another-orphan"* ]]
+  # Good session should NOT appear
+  [[ "$output" != *"wt-feature-good"* ]]
+  # Non-wt sessions should not appear as listed items
+  ! echo "$output" | grep -q "^  work "
+  [[ "$output" == *"Run with --apply"* ]]
+}
+
+@test "prune: dry-run does not kill sessions" {
+  create_mock_tmux_for_prune
+  mock_git_for_prune
+
+  run "$SHELL_CMD" "$TA_WORKSPACE" prune
+  [ "$status" -eq 0 ]
+
+  # Verify sessions still exist in state
+  local state_file="$BATS_TEST_TMPDIR/tmux-state"
+  grep -q "wt-feature-orphan" "$state_file"
+  grep -q "wt-another-orphan" "$state_file"
+}
+
+@test "prune: --apply kills orphaned sessions and reports count" {
+  create_mock_tmux_for_prune
+  mock_git_for_prune
+
+  run "$SHELL_CMD" "$TA_WORKSPACE" prune --apply
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"killed orphaned session 'wt-feature-orphan'"* ]]
+  [[ "$output" == *"killed orphaned session 'wt-another-orphan'"* ]]
+  [[ "$output" == *"pruned 2 orphaned sessions"* ]]
+
+  # Verify orphaned sessions are removed from state
+  local state_file="$BATS_TEST_TMPDIR/tmux-state"
+  ! grep -q "wt-feature-orphan" "$state_file"
+  ! grep -q "wt-another-orphan" "$state_file"
+  # Good session should still exist
+  grep -q "wt-feature-good" "$state_file"
+}
+
+@test "prune: session in worktree subdirectory is not orphaned" {
+  local state_file="$BATS_TEST_TMPDIR/tmux-state"
+  local cwd_file="$BATS_TEST_TMPDIR/tmux-cwds"
+
+  cat > "$state_file" <<'STATE'
+wt-feature-subdir	1	0
+STATE
+
+  # CWD is a subdirectory of a valid worktree
+  mkdir -p "$BATS_TEST_TMPDIR/worktrees/good/src/main"
+  cat > "$cwd_file" <<STATE
+wt-feature-subdir=$BATS_TEST_TMPDIR/worktrees/good/src/main
+STATE
+
+  cat > "$TMUX_CMD" <<SCRIPT
+#!/usr/bin/env bash
+STATE_FILE="$state_file"
+CWD_FILE="$cwd_file"
+case "\$1" in
+  list-sessions)
+    if [[ "\$*" == *"#{session_name}"* ]]; then
+      while IFS=\$'\t' read -r name windows attached; do
+        echo "\$name"
+      done < "\$STATE_FILE"
+    fi
+    ;;
+  display-message)
+    target="" fmt=""
+    shift
+    while [[ \$# -gt 0 ]]; do
+      case "\$1" in
+        -t) target="\$2"; shift 2 ;;
+        -p) fmt="\$2"; shift 2 ;;
+        *) shift ;;
+      esac
+    done
+    if [[ "\$fmt" == *"pane_current_path"* ]]; then
+      name="\${target%:}"
+      cwd="\$(grep "^\${name}=" "\$CWD_FILE" 2>/dev/null | cut -d= -f2)"
+      echo "\${cwd:-/unknown}"
+    fi
+    ;;
+  *) exit 0 ;;
+esac
+SCRIPT
+  chmod +x "$TMUX_CMD"
+
+  mock_git_for_prune
+
+  run "$SHELL_CMD" "$TA_WORKSPACE" prune
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"no orphaned sessions"* ]]
+}
+
+@test "prune: session with existing dir but not a worktree is orphaned" {
+  create_mock_tmux_for_prune
+  mock_git_for_prune
+
+  run "$SHELL_CMD" "$TA_WORKSPACE" prune
+  [ "$status" -eq 0 ]
+  # not-a-worktree dir exists but is not in git worktree list
+  [[ "$output" == *"wt-another-orphan"* ]]
+}
+
+@test "prune: non-wt sessions are ignored" {
+  create_mock_tmux_for_prune
+  mock_git_for_prune
+
+  run "$SHELL_CMD" "$TA_WORKSPACE" prune
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"main"* ]] || [[ "$output" == *"main"* && "$output" != *"  main "* ]]
+  [[ "$output" != *"  work"* ]]
+}
+
+@test "create: --cmd flag applies to shell window only with agent windows" {
+  create_mock_tmux_logging on
+  create_mock_ta_wt
+
+  run "$SHELL_CMD" "$TA_WORKSPACE" create feature/fix-thing --cmd "git status"
+  [ "$status" -eq 0 ]
+
+  local call_log="$BATS_TEST_TMPDIR/tmux-call-log"
+  # Window 0 should be named "review", not "shell"
+  grep -q "rename-window.*review" "$call_log"
+  ! grep -q "rename-window.*shell" "$call_log"
+  # Command sent to review window
+  grep -q "send-keys.*:review git status" "$call_log"
+}
+
 @test "create: --layout agent creates shell and agent windows" {
   create_mock_tmux_logging
   create_mock_ta_wt
