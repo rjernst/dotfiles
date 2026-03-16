@@ -247,6 +247,15 @@ _classify_status() {
     echo "merged"
     return
   fi
+  # Squash-merge fallback: check if a merged PR exists for this branch
+  if command -v gh > /dev/null 2>&1; then
+    local pr_result
+    pr_result="$(gh pr list --head "$wt_branch" --state merged --json number --limit 1 2>/dev/null)" || true
+    if [[ -n "$pr_result" && "$pr_result" != "[]" ]]; then
+      echo "merged"
+      return
+    fi
+  fi
 
   # Dirty working tree
   local dirty
@@ -329,12 +338,18 @@ cmd_prune() {
     # Skip current worktree
     [[ "$wt_dir" == "$current_wt" ]] && continue
 
-    # Check if merged into main (true merge or squash-merge)
+    # Check if merged into main (true merge, squash-merge, or merged PR)
     local is_merged=false
     if git merge-base --is-ancestor "$wt_branch" main 2>/dev/null; then
       is_merged=true
     elif [[ "$(git merge-tree --write-tree main "$wt_branch" 2>/dev/null | head -1)" == "$(git rev-parse 'main^{tree}' 2>/dev/null)" ]]; then
       is_merged=true
+    elif command -v gh > /dev/null 2>&1; then
+      local pr_result
+      pr_result="$(gh pr list --head "$wt_branch" --state merged --json number --limit 1 2>/dev/null)" || true
+      if [[ -n "$pr_result" && "$pr_result" != "[]" ]]; then
+        is_merged=true
+      fi
     fi
     if [[ "$is_merged" == false ]]; then
       continue
