@@ -34,7 +34,7 @@ All `gh issue create` calls **must** use `--repo <origin-repo>`.
 
 ## Input Detection
 
-The skill receives `$ARGUMENTS`. Detect the input type:
+The skill receives the text after `/create-spec` on the command line as `$ARGUMENTS`. Detect the input type:
 
 | Input | Detection | Action |
 |-------|-----------|--------|
@@ -46,9 +46,9 @@ The skill receives `$ARGUMENTS`. Detect the input type:
 ## Issue Lookup and Search
 
 ### Numeric input
-1. Try fork first: `gh issue view <number> --repo <origin-repo> --json title,body,labels,url 2>/dev/null`
-2. If not found, try upstream: `gh issue view <number> --repo <upstream-repo> --json title,body,labels,url 2>/dev/null`
-3. If neither exists, inform the user and fall back to blank interview.
+1. Try fork first: `gh issue view <number> --repo <origin-repo> --json title,body,labels,url`
+2. If the command fails (non-zero exit code), try upstream: `gh issue view <number> --repo <upstream-repo> --json title,body,labels,url`
+3. If neither succeeds, inform the user (include the error if it's not a simple "not found") and fall back to blank interview.
 
 ### URL input
 1. Fetch directly: `gh issue view <url> --json title,body,labels,url`
@@ -62,9 +62,9 @@ The skill receives `$ARGUMENTS`. Detect the input type:
 5. If multiple plausible matches: present options, ask user to pick.
 6. If no matches: inform user, fall back to blank interview.
 
-When an issue is found, fetch the full issue content:
+When an issue is found, fetch the full issue content from whichever repo matched:
 ```
-gh issue view <number> --repo <repo> --json title,body,labels,url
+gh issue view <number> --repo <origin-repo or upstream-repo> --json title,body,labels,url
 ```
 
 ### No input (conversation context)
@@ -161,6 +161,8 @@ The branch name is specified in the frontmatter of the spec body (see template b
 ## Spec Template (Issue Body)
 The issue body starts with YAML-style frontmatter containing the `branch` name (required) and optionally a `base` branch.
 
+**Source issue line:** Only include the `Source issue:` line if the spec was created from an existing GitHub issue. Use `#<number>` for same-repo issues or `<owner/repo>#<number>` for cross-repo references.
+
 ```markdown
 ---
 branch: <branch-name>
@@ -168,7 +170,7 @@ base: <base-branch>          # optional — omit if branching from default (main
 ---
 # Spec: <Feature Name>
 
-Source issue: #<number> (or <repo>#<number> if cross-repo)  ← only include if created from an existing issue
+Source issue: #<number> (or <repo>#<number> if cross-repo)
 
 ## Overview
 <Brief description of the feature and its purpose. Self-contained — an autonomous agent must understand the full context from this section alone.>
