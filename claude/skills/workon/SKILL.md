@@ -11,8 +11,8 @@ You are a workspace switcher. Your job is to open (or create) a workspace for a 
 ### Step 1: Parse arguments
 
 `$ARGUMENTS` contains the optional input. It may be:
-- **Empty** → go to Step 2 (interactive picker)
-- **A branch name or natural language description** → go to Step 3 (semantic resolution)
+- **Empty** -> go to Step 2 (interactive picker)
+- **A branch name or natural language description** -> go to Step 3 (semantic resolution)
 
 ---
 
@@ -43,19 +43,19 @@ git branch --format='%(refname:short)'
 git branch -r --format='%(refname:short)'
 ```
 
-Build a deduplicated list of branch names. For remote branches, strip the remote prefix (e.g., `origin/feature/foo` → `feature/foo`).
+Build a deduplicated list of branch names. For remote branches, strip the remote prefix (e.g., `origin/feature/foo` -> `feature/foo`).
 
 **Priority order:** worktree matches > local branches > remote branches.
 
 Now use your natural language understanding to match the user's input against the branch list. This is semantic matching — match by **meaning**, not string similarity:
-- `"the UI updates work"` → matches `feature/dashboard-ui-refresh`
-- `"auth fix"` → matches `bugfix/oauth-token-refresh`
-- `"fix-auth"` → matches `feature/fix-auth-middleware` (exact substring also works)
+- `"the UI updates work"` -> matches `feature/dashboard-ui-refresh`
+- `"auth fix"` -> matches `bugfix/oauth-token-refresh`
+- `"fix-auth"` -> matches `feature/fix-auth-middleware` (exact substring also works)
 
 **Resolution rules:**
-- **Exactly one strong match** → confirm with the user: "I found `<branch>` — is that the one?" Then go to Step 4.
-- **Multiple plausible matches** → present the options and ask the user to pick (use `AskUserQuestion`). Then go to Step 4.
-- **No plausible match** → ask the user if they want to create a new branch. If yes, ask for the branch name (suggest one based on their input) and go to Step 4 with `create_new=true`.
+- **Exactly one strong match** -> confirm with the user: "I found `<branch>` -- is that the one?" Then go to Step 4.
+- **Multiple plausible matches** -> present the options and ask the user to pick (use `AskUserQuestion`). Then go to Step 4.
+- **No plausible match** -> ask the user if they want to create a new branch. If yes, ask for the branch name (suggest one based on their input) and go to Step 4 with `create_new=true`.
 
 ---
 
@@ -64,13 +64,13 @@ Now use your natural language understanding to match the user's input against th
 Using the selected branch name, check whether a worktree already exists:
 
 1. Run `ta wt status --json` and check if the branch appears in the output.
-2. **Has worktree** → go to Step 5.
-3. **Branch exists (local or remote) but no worktree** → run:
+2. **Has worktree** -> go to Step 5.
+3. **Branch exists (local or remote) but no worktree** -> run:
    ```
    ta wt create <branch>
    ```
    Then go to Step 5.
-4. **Branch doesn't exist** (new branch) → confirm with the user, then run:
+4. **Branch doesn't exist** (new branch) -> confirm with the user, then run:
    ```
    ta wt create <branch> --from=main
    ```
@@ -83,8 +83,8 @@ Using the selected branch name, check whether a worktree already exists:
 
 First check if a workspace session already exists by running `ta workspace list` and looking for a `wt-*` session matching the branch.
 
-- **Session exists** → skip creation, go straight to attach.
-- **No session** → run: `ta workspace create <branch> --layout agent`
+- **Session exists** -> skip creation, go straight to attach.
+- **No session** -> run: `ta workspace create <branch> --layout agent`
 
 Then attach:
 

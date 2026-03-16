@@ -225,27 +225,27 @@ RESOLVE_HELPER="${BATS_TEST_FILENAME%/*}/helpers/resolve_roles.zsh"
 
 # --- Skills symlink tests ---
 
-@test "skills directory symlink makes code-review skill accessible" {
-  mkdir -p "$DOTFILES/claude/skills/code-review"
-  echo "# Code Review" > "$DOTFILES/claude/skills/code-review/SKILL.md"
+@test "skills directory symlink makes review skill accessible" {
+  mkdir -p "$DOTFILES/claude/skills/review"
+  echo "# Review" > "$DOTFILES/claude/skills/review/SKILL.md"
   mkdir -p "$HOME/.claude"
 
   setup_link "claude/skills" ".claude/skills"
 
   [ -L "$HOME/.claude/skills" ]
-  [ -f "$HOME/.claude/skills/code-review/SKILL.md" ]
+  [ -f "$HOME/.claude/skills/review/SKILL.md" ]
 }
 
 @test "skills directory symlink makes all skills accessible" {
-  mkdir -p "$DOTFILES/claude/skills/code-review"
+  mkdir -p "$DOTFILES/claude/skills/review"
   mkdir -p "$DOTFILES/claude/skills/create-spec"
-  echo "# Code Review" > "$DOTFILES/claude/skills/code-review/SKILL.md"
+  echo "# Review" > "$DOTFILES/claude/skills/review/SKILL.md"
   echo "# Create Spec" > "$DOTFILES/claude/skills/create-spec/SKILL.md"
   mkdir -p "$HOME/.claude"
 
   setup_link "claude/skills" ".claude/skills"
 
-  [ -f "$HOME/.claude/skills/code-review/SKILL.md" ]
+  [ -f "$HOME/.claude/skills/review/SKILL.md" ]
   [ -f "$HOME/.claude/skills/create-spec/SKILL.md" ]
 }
 
