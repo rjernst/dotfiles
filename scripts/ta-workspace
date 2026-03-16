@@ -78,6 +78,16 @@ _wait_for_shell() {
   "$TMUX_CMD" wait-for "${channel}"
 }
 
+# --- helper: wait for claude to be ready in a tmux pane ---
+# Starts claude with a signal prompt, blocks until claude executes it.
+_wait_for_claude() {
+  local session="$1" window="$2"
+  local channel="${session}-${window}-claude-ready"
+  "$TMUX_CMD" send-keys -t "${session}:${window}" \
+    "claude \"Run this bash command with no other output: tmux wait-for -S ${channel}\"" Enter
+  "$TMUX_CMD" wait-for "${channel}"
+}
+
 # --- create subcommand ---
 cmd_create() {
   local branch="" send_cmd="" layout=""
@@ -105,7 +115,7 @@ cmd_create() {
   done
 
   if [[ -z "$branch" ]]; then
-    echo "usage: ta workspace create <branch> [--cmd <command>] [--layout agent]" >&2
+    echo "usage: ta workspace create <branch> [--cmd <command>] [--layout agent[,<prompt>]]" >&2
     exit 2
   fi
 
@@ -114,8 +124,16 @@ cmd_create() {
     exit 2
   fi
 
-  if [[ -n "$layout" && "$layout" != "agent" ]]; then
-    echo "ta: unknown layout '$layout'" >&2
+  # Parse layout: "agent" or "agent,/some-prompt"
+  local layout_type="" layout_prompt=""
+  if [[ -n "$layout" ]]; then
+    layout_type="${layout%%,*}"
+    layout_prompt="${layout#*,}"
+    [[ "$layout_prompt" == "$layout" ]] && layout_prompt=""
+  fi
+
+  if [[ -n "$layout" && "$layout_type" != "agent" ]]; then
+    echo "ta: unknown layout '$layout_type'" >&2
     exit 2
   fi
 
@@ -144,12 +162,19 @@ cmd_create() {
     "$TMUX_CMD" rename-window -t "${session_name}:0" "review"
     _wait_for_shell "$session_name" "review"
     "$TMUX_CMD" send-keys -t "${session_name}:review" "$send_cmd" Enter
-  elif [[ "$layout" == "agent" ]]; then
-    # --layout agent: shell window + agent window running claude
+  elif [[ "$layout_type" == "agent" ]]; then
+    # --layout agent[,prompt]: shell window + agent window running claude
     "$TMUX_CMD" rename-window -t "${session_name}:0" "shell"
     "$TMUX_CMD" new-window -t "$session_name" -n "agent" -c "$wt_path"
     _wait_for_shell "$session_name" "agent"
-    "$TMUX_CMD" send-keys -t "${session_name}:agent" "claude" Enter
+    if [[ -n "$layout_prompt" ]]; then
+      # Start claude with signal prompt, wait for ready, clear history, then send the real prompt
+      _wait_for_claude "$session_name" "agent"
+      "$TMUX_CMD" send-keys -t "${session_name}:agent" "/clear" Enter
+      "$TMUX_CMD" send-keys -t "${session_name}:agent" "$layout_prompt" Enter
+    else
+      "$TMUX_CMD" send-keys -t "${session_name}:agent" "claude" Enter
+    fi
     "$TMUX_CMD" select-window -t "${session_name}:agent"
   else
     # Default: just a shell window
