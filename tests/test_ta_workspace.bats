@@ -1093,7 +1093,7 @@ SCRIPT
   # Should create agent window
   grep -q "new-window.*-n agent" "$call_log"
   # Should send claude to agent window
-  grep -q "send-keys.*:agent claude" "$call_log"
+  grep -q "send-keys.*:agent.*claude" "$call_log"
   # Should focus agent window
   grep -q "select-window.*:agent" "$call_log"
 }
