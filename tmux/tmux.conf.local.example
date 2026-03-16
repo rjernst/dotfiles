@@ -1,5 +1,2 @@
 # Local tmux config — not tracked by dotfiles.
 # Copy to ~/.tmux.conf.local and uncomment desired settings.
-
-# Set to "on" to create agent windows in workspace sessions
-# set-environment -g DOTFILES_AGENT_WINDOWS "on"

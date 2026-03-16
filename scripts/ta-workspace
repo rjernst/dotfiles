@@ -11,7 +11,7 @@ usage() {
   echo "Commands:"
   echo "  create    Create a tmux session for a worktree branch"
   echo "  list      List all wt-* tmux sessions"
-  echo "  attach    Attach to (or create) a workspace session"
+  echo "  attach    Attach to a workspace session"
   echo "  kill      Kill a workspace session"
   exit 2
 }
@@ -71,12 +71,14 @@ _worktree_path() {
 
 # --- create subcommand ---
 cmd_create() {
-  local branch="" send_cmd=""
+  local branch="" send_cmd="" layout=""
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --cmd) send_cmd="$2"; shift 2 ;;
       --cmd=*) send_cmd="${1#--cmd=}"; shift ;;
+      --layout) layout="$2"; shift 2 ;;
+      --layout=*) layout="${1#--layout=}"; shift ;;
       -*)
         echo "ta: unknown option '$1'" >&2
         exit 2
@@ -94,7 +96,17 @@ cmd_create() {
   done
 
   if [[ -z "$branch" ]]; then
-    echo "usage: ta workspace create <branch> [--cmd <command>]" >&2
+    echo "usage: ta workspace create <branch> [--cmd <command>] [--layout agent]" >&2
+    exit 2
+  fi
+
+  if [[ -n "$send_cmd" && -n "$layout" ]]; then
+    echo "ta: --cmd and --layout are mutually exclusive" >&2
+    exit 2
+  fi
+
+  if [[ -n "$layout" && "$layout" != "agent" ]]; then
+    echo "ta: unknown layout '$layout'" >&2
     exit 2
   fi
 
@@ -118,28 +130,19 @@ cmd_create() {
   # Create detached tmux session
   "$TMUX_CMD" new-session -d -s "$session_name" -c "$wt_path"
 
-  # Rename window 0 to "shell"
-  "$TMUX_CMD" rename-window -t "$session_name:0" "shell"
-
-  # Send command if provided (applies to window 0 / shell)
   if [[ -n "$send_cmd" ]]; then
-    "$TMUX_CMD" send-keys -t "$session_name:shell" "$send_cmd" Enter
-  fi
-
-  # Check if agent windows are enabled
-  local agent_windows=""
-  agent_windows="$("$TMUX_CMD" show-environment -g DOTFILES_AGENT_WINDOWS 2>/dev/null | cut -d= -f2)" || true
-  if [[ "$agent_windows" == "on" ]]; then
-    # Create agent window
+    # --cmd: rename window 0 to "review" and send command
+    "$TMUX_CMD" rename-window -t "${session_name}:0" "review"
+    "$TMUX_CMD" send-keys -t "${session_name}:review" "$send_cmd" Enter
+  elif [[ "$layout" == "agent" ]]; then
+    # --layout agent: shell window + agent window running claude
+    "$TMUX_CMD" rename-window -t "${session_name}:0" "shell"
     "$TMUX_CMD" new-window -t "$session_name" -n "agent" -c "$wt_path"
-    "$TMUX_CMD" send-keys -t "$session_name:agent" "claude" Enter
-
-    # Create agent-loop window
-    "$TMUX_CMD" new-window -t "$session_name" -n "agent-loop" -c "$wt_path"
-    "$TMUX_CMD" send-keys -t "$session_name:agent-loop" "ralph" Enter
-
-    # Select shell window so user lands there
-    "$TMUX_CMD" select-window -t "$session_name:0"
+    "$TMUX_CMD" send-keys -t "${session_name}:agent" "claude" Enter
+    "$TMUX_CMD" select-window -t "${session_name}:agent"
+  else
+    # Default: just a shell window
+    "$TMUX_CMD" rename-window -t "${session_name}:0" "shell"
   fi
 
   echo "ta: created session '$session_name' in $wt_path"
@@ -192,10 +195,12 @@ cmd_list() {
 
 # --- attach subcommand ---
 cmd_attach() {
-  local branch=""
+  local branch="" window=""
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
+      --window) window="$2"; shift 2 ;;
+      --window=*) window="${1#--window=}"; shift ;;
       -*)
         echo "ta: unknown option '$1'" >&2
         exit 2
@@ -213,16 +218,23 @@ cmd_attach() {
   done
 
   if [[ -z "$branch" ]]; then
-    echo "usage: ta workspace attach <branch>" >&2
+    echo "usage: ta workspace attach <branch> [--window <name>]" >&2
     exit 2
   fi
 
   local session_name
   session_name="$(_sanitize_branch "$branch")"
 
-  # Auto-create if session doesn't exist
+  # Session must exist (no auto-create)
   if ! _tmux_running || ! "$TMUX_CMD" has-session -t "$session_name" 2>/dev/null; then
-    cmd_create "$branch"
+    echo "ta: no workspace session for branch '$branch'" >&2
+    echo "ta: create one with: ta workspace create $branch" >&2
+    exit 1
+  fi
+
+  # Select window if requested
+  if [[ -n "$window" ]]; then
+    "$TMUX_CMD" select-window -t "${session_name}:${window}"
   fi
 
   # Attach or switch
@@ -280,6 +292,17 @@ cmd_kill() {
     if [[ "$reply" != [yY]* ]]; then
       echo "ta: aborted"
       return 0
+    fi
+  fi
+
+  # If we're inside the session being killed, switch away first
+  if [[ -n "${TMUX:-}" ]]; then
+    local current_session
+    current_session="$("$TMUX_CMD" display-message -p '#{session_name}')" || true
+    if [[ "$current_session" == "$session_name" ]]; then
+      "$TMUX_CMD" switch-client -l 2>/dev/null \
+        || "$TMUX_CMD" switch-client -n 2>/dev/null \
+        || true
     fi
   fi
 

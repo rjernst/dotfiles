@@ -379,6 +379,49 @@ setup() {
   [ -z "$output" ]
 }
 
+@test "wt remove calls workspace kill for session cleanup" {
+  cd "$PROJECT"
+  git checkout -b feat-rm-ws
+  git commit --allow-empty -m "feat rm ws"
+  git checkout main
+  git worktree add "$BATS_TEST_TMPDIR/wt-rm-ws" feat-rm-ws
+
+  # Create a mock ta-workspace that logs calls
+  local mock_dir="$BATS_TEST_TMPDIR/mock-scripts"
+  mkdir -p "$mock_dir"
+  cat > "$mock_dir/ta-workspace" << MOCK
+#!/usr/bin/env zsh
+echo "\$@" >> "$BATS_TEST_TMPDIR/workspace-calls.log"
+MOCK
+  chmod +x "$mock_dir/ta-workspace"
+
+  # Copy ta-wt to mock dir so it finds our mock ta-workspace via ${0:A:h}
+  cp "$TA_WT" "$mock_dir/ta-wt"
+
+  run zsh "$mock_dir/ta-wt" remove feat-rm-ws
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"removed"* ]]
+
+  # Verify workspace kill was called with the branch name
+  [ -f "$BATS_TEST_TMPDIR/workspace-calls.log" ]
+  run cat "$BATS_TEST_TMPDIR/workspace-calls.log"
+  [[ "$output" == *"kill feat-rm-ws"* ]]
+}
+
+@test "wt remove succeeds even when no tmux session exists" {
+  cd "$PROJECT"
+  git checkout -b feat-rm-notmux
+  git commit --allow-empty -m "feat rm notmux"
+  git checkout main
+  git worktree add "$BATS_TEST_TMPDIR/wt-rm-notmux" feat-rm-notmux
+
+  # No tmux session exists — workspace kill should fail silently
+  run zsh "$TA_WT" remove feat-rm-notmux
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"removed"* ]]
+  [ ! -d "$BATS_TEST_TMPDIR/wt-rm-notmux" ]
+}
+
 # --- ta wt prune tests ---
 
 @test "wt prune dry-run lists merged branch as candidate" {

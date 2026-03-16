@@ -158,10 +158,6 @@ case "\$1" in
   send-keys|rename-window|new-window|select-window)
     exit 0
     ;;
-  show-environment)
-    echo "DOTFILES_AGENT_WINDOWS: unknown variable" >&2
-    exit 1
-    ;;
   *) exit 0 ;;
 esac
 SCRIPT
@@ -186,9 +182,6 @@ case "$1" in
   send-keys)
     exit 0
     ;;
-  show-environment)
-    exit 1
-    ;;
   switch-client|attach-session)
     exit 0
     ;;
@@ -198,10 +191,9 @@ SCRIPT
   chmod +x "$TMUX_CMD"
 }
 
-# Mock tmux that logs all calls and supports agent window testing
+# Mock tmux that logs all calls
 create_mock_tmux_logging() {
   local call_log="$BATS_TEST_TMPDIR/tmux-call-log"
-  local agent_windows="${1:-off}"
   : > "$call_log"
 
   cat > "$TMUX_CMD" <<SCRIPT
@@ -218,14 +210,6 @@ case "\$1" in
     ;;
   new-session|new-window|rename-window|select-window|send-keys)
     exit 0
-    ;;
-  show-environment)
-    if [[ "$agent_windows" == "on" ]]; then
-      echo "DOTFILES_AGENT_WINDOWS=on"
-    else
-      echo "DOTFILES_AGENT_WINDOWS: unknown variable" >&2
-      exit 1
-    fi
     ;;
   switch-client|attach-session)
     exit 0
@@ -458,13 +442,14 @@ SCRIPT
   [[ "$output" == *"usage:"* ]]
 }
 
-@test "attach: auto-creates if session doesn't exist" {
+@test "attach: errors if session doesn't exist" {
   create_mock_tmux_empty
   create_mock_ta_wt
 
   run "$SHELL_CMD" "$TA_WORKSPACE" attach feature/fix-thing
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"created session"* ]]
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"no workspace session for branch"* ]]
+  [[ "$output" == *"ta workspace create"* ]]
 }
 
 @test "attach: attaches to existing session (outside tmux)" {
@@ -491,6 +476,7 @@ case "\$1" in
   list-sessions) printf "wt-feature-fix-thing\t2\t0\n" ;;
   has-session) exit 0 ;;
   switch-client) exit 0 ;;
+  select-window) exit 0 ;;
   *) exit 0 ;;
 esac
 SCRIPT
@@ -503,6 +489,50 @@ SCRIPT
   # Verify switch-client was called (not attach-session)
   grep -q "switch-client" "$call_log"
   ! grep -q "attach-session" "$call_log"
+}
+
+@test "attach: --window selects window before switching" {
+  create_mock_ta_wt
+  local call_log="$BATS_TEST_TMPDIR/tmux-calls"
+  : > "$call_log"
+
+  cat > "$TMUX_CMD" <<SCRIPT
+#!/usr/bin/env bash
+echo "\$@" >> "$call_log"
+case "\$1" in
+  list-sessions) printf "wt-feature-fix-thing\t2\t0\n" ;;
+  has-session) exit 0 ;;
+  switch-client) exit 0 ;;
+  select-window) exit 0 ;;
+  *) exit 0 ;;
+esac
+SCRIPT
+  chmod +x "$TMUX_CMD"
+
+  TMUX="/tmp/tmux-1000/default,12345,0" run "$SHELL_CMD" "$TA_WORKSPACE" attach feature/fix-thing --window agent
+  [ "$status" -eq 0 ]
+
+  # Verify select-window was called with the right target
+  grep -q "select-window -t wt-feature-fix-thing:agent" "$call_log"
+  # And switch-client was called after
+  grep -q "switch-client" "$call_log"
+}
+
+@test "attach: --window with nonexistent window propagates error" {
+  create_mock_ta_wt
+  cat > "$TMUX_CMD" <<'SCRIPT'
+#!/usr/bin/env bash
+case "$1" in
+  list-sessions) printf "wt-feature-fix-thing\t2\t0\n" ;;
+  has-session) exit 0 ;;
+  select-window) echo "can't find window" >&2; exit 1 ;;
+  *) exit 0 ;;
+esac
+SCRIPT
+  chmod +x "$TMUX_CMD"
+
+  TMUX="/tmp/tmux-1000/default,12345,0" run "$SHELL_CMD" "$TA_WORKSPACE" attach feature/fix-thing --window nonexistent
+  [ "$status" -ne 0 ]
 }
 
 # --- kill tests ---
@@ -530,6 +560,170 @@ SCRIPT
   [[ "$output" == *"wt-feature-fix-thing"* ]]
 }
 
+@test "kill: switches away from current session before killing" {
+  local call_log="$BATS_TEST_TMPDIR/tmux-calls"
+  : > "$call_log"
+
+  cat > "$TMUX_CMD" <<SCRIPT
+#!/usr/bin/env bash
+echo "\$@" >> "$call_log"
+case "\$1" in
+  list-sessions) printf "wt-feature-fix-thing\t2\t1\n" ;;
+  has-session) exit 0 ;;
+  display-message)
+    fmt=""
+    while [[ \$# -gt 0 ]]; do
+      case "\$1" in
+        -p) fmt="\$2"; shift 2 ;;
+        -t) shift 2 ;;
+        *) shift ;;
+      esac
+    done
+    if [[ "\$fmt" == *"session_name"* ]]; then
+      echo "wt-feature-fix-thing"
+    elif [[ "\$fmt" == *"session_attached"* ]]; then
+      echo "0"
+    fi
+    ;;
+  switch-client) exit 0 ;;
+  kill-session) exit 0 ;;
+  *) exit 0 ;;
+esac
+SCRIPT
+  chmod +x "$TMUX_CMD"
+
+  # Simulate being inside tmux in the target session
+  TMUX="/tmp/tmux-1000/default,12345,0" run "$SHELL_CMD" "$TA_WORKSPACE" kill feature/fix-thing
+  [ "$status" -eq 0 ]
+
+  # Verify switch-client -l was called before kill-session
+  grep -q "switch-client -l" "$call_log"
+  grep -q "kill-session" "$call_log"
+}
+
+@test "kill: does not switch-client when killing a different session" {
+  local call_log="$BATS_TEST_TMPDIR/tmux-calls"
+  : > "$call_log"
+
+  cat > "$TMUX_CMD" <<SCRIPT
+#!/usr/bin/env bash
+echo "\$@" >> "$call_log"
+case "\$1" in
+  list-sessions) printf "wt-feature-fix-thing\t2\t0\n" ;;
+  has-session) exit 0 ;;
+  display-message)
+    fmt=""
+    while [[ \$# -gt 0 ]]; do
+      case "\$1" in
+        -p) fmt="\$2"; shift 2 ;;
+        -t) shift 2 ;;
+        *) shift ;;
+      esac
+    done
+    if [[ "\$fmt" == *"session_name"* ]]; then
+      echo "other-session"
+    elif [[ "\$fmt" == *"session_attached"* ]]; then
+      echo "0"
+    fi
+    ;;
+  kill-session) exit 0 ;;
+  *) exit 0 ;;
+esac
+SCRIPT
+  chmod +x "$TMUX_CMD"
+
+  TMUX="/tmp/tmux-1000/default,12345,0" run "$SHELL_CMD" "$TA_WORKSPACE" kill feature/fix-thing
+  [ "$status" -eq 0 ]
+
+  # Should NOT call switch-client
+  ! grep -q "switch-client" "$call_log"
+  grep -q "kill-session" "$call_log"
+}
+
+@test "kill: does not switch-client when outside tmux" {
+  local call_log="$BATS_TEST_TMPDIR/tmux-calls"
+  : > "$call_log"
+
+  cat > "$TMUX_CMD" <<SCRIPT
+#!/usr/bin/env bash
+echo "\$@" >> "$call_log"
+case "\$1" in
+  list-sessions) printf "wt-feature-fix-thing\t2\t0\n" ;;
+  has-session) exit 0 ;;
+  display-message)
+    fmt=""
+    while [[ \$# -gt 0 ]]; do
+      case "\$1" in
+        -p) fmt="\$2"; shift 2 ;;
+        -t) shift 2 ;;
+        *) shift ;;
+      esac
+    done
+    if [[ "\$fmt" == *"session_attached"* ]]; then
+      echo "0"
+    fi
+    ;;
+  kill-session) exit 0 ;;
+  *) exit 0 ;;
+esac
+SCRIPT
+  chmod +x "$TMUX_CMD"
+
+  # TMUX is unset (outside tmux)
+  unset TMUX
+  run "$SHELL_CMD" "$TA_WORKSPACE" kill feature/fix-thing
+  [ "$status" -eq 0 ]
+
+  # Should NOT call switch-client
+  ! grep -q "switch-client" "$call_log"
+  grep -q "kill-session" "$call_log"
+}
+
+@test "kill: falls back to switch-client -n when -l fails" {
+  local call_log="$BATS_TEST_TMPDIR/tmux-calls"
+  : > "$call_log"
+
+  cat > "$TMUX_CMD" <<SCRIPT
+#!/usr/bin/env bash
+echo "\$@" >> "$call_log"
+case "\$1" in
+  list-sessions) printf "wt-feature-fix-thing\t2\t1\n" ;;
+  has-session) exit 0 ;;
+  display-message)
+    fmt=""
+    while [[ \$# -gt 0 ]]; do
+      case "\$1" in
+        -p) fmt="\$2"; shift 2 ;;
+        -t) shift 2 ;;
+        *) shift ;;
+      esac
+    done
+    if [[ "\$fmt" == *"session_name"* ]]; then
+      echo "wt-feature-fix-thing"
+    elif [[ "\$fmt" == *"session_attached"* ]]; then
+      echo "0"
+    fi
+    ;;
+  switch-client)
+    if [[ "\$2" == "-l" ]]; then
+      exit 1
+    fi
+    exit 0
+    ;;
+  kill-session) exit 0 ;;
+  *) exit 0 ;;
+esac
+SCRIPT
+  chmod +x "$TMUX_CMD"
+
+  TMUX="/tmp/tmux-1000/default,12345,0" run "$SHELL_CMD" "$TA_WORKSPACE" kill feature/fix-thing
+  [ "$status" -eq 0 ]
+
+  # Should have tried -l first, then -n
+  grep -q "switch-client -l" "$call_log"
+  grep -q "switch-client -n" "$call_log"
+}
+
 @test "kill: kills unattached session without prompt" {
   create_mock_tmux_with_sessions
 
@@ -552,49 +746,76 @@ SCRIPT
   grep -q "rename-window.*shell" "$call_log"
 }
 
-@test "create: without DOTFILES_AGENT_WINDOWS, session has no extra windows" {
-  create_mock_tmux_logging off
+@test "create: without flags, session has shell window and no extra windows" {
+  create_mock_tmux_logging
   create_mock_ta_wt
 
   run "$SHELL_CMD" "$TA_WORKSPACE" create feature/fix-thing
   [ "$status" -eq 0 ]
 
   local call_log="$BATS_TEST_TMPDIR/tmux-call-log"
+  # Should rename window 0 to shell
+  grep -q "rename-window.*shell" "$call_log"
   # Should not create additional windows
   ! grep -q "new-window" "$call_log"
 }
 
-@test "create: with DOTFILES_AGENT_WINDOWS=on, creates agent and agent-loop windows" {
-  create_mock_tmux_logging on
-  create_mock_ta_wt
-
-  run "$SHELL_CMD" "$TA_WORKSPACE" create feature/fix-thing
-  [ "$status" -eq 0 ]
-
-  local call_log="$BATS_TEST_TMPDIR/tmux-call-log"
-  # Should create agent window
-  grep -q "new-window.*-n agent " "$call_log" || grep -q "new-window.*-n agent$" "$call_log"
-  # Should create agent-loop window
-  grep -q "new-window.*-n agent-loop" "$call_log"
-  # Should send claude to agent window
-  grep -q "send-keys.*:agent claude" "$call_log"
-  # Should send ralph to agent-loop window
-  grep -q "send-keys.*:agent-loop ralph" "$call_log"
-  # Should select window 0
-  grep -q "select-window.*:0" "$call_log"
-}
-
-@test "create: --cmd flag applies to shell window only with agent windows" {
-  create_mock_tmux_logging on
+@test "create: --cmd renames window 0 to review and sends command" {
+  create_mock_tmux_logging
   create_mock_ta_wt
 
   run "$SHELL_CMD" "$TA_WORKSPACE" create feature/fix-thing --cmd "git status"
   [ "$status" -eq 0 ]
 
   local call_log="$BATS_TEST_TMPDIR/tmux-call-log"
-  # The --cmd sends to the shell window
-  grep -q "send-keys.*:shell git status" "$call_log"
-  # Agent windows still get their commands
+  # Window 0 should be named "review", not "shell"
+  grep -q "rename-window.*review" "$call_log"
+  ! grep -q "rename-window.*shell" "$call_log"
+  # Command sent to review window
+  grep -q "send-keys.*:review git status" "$call_log"
+}
+
+@test "create: --layout agent creates shell and agent windows" {
+  create_mock_tmux_logging
+  create_mock_ta_wt
+
+  run "$SHELL_CMD" "$TA_WORKSPACE" create feature/fix-thing --layout agent
+  [ "$status" -eq 0 ]
+
+  local call_log="$BATS_TEST_TMPDIR/tmux-call-log"
+  # Should rename window 0 to shell
+  grep -q "rename-window.*shell" "$call_log"
+  # Should create agent window
+  grep -q "new-window.*-n agent" "$call_log"
+  # Should send claude to agent window
   grep -q "send-keys.*:agent claude" "$call_log"
-  grep -q "send-keys.*:agent-loop ralph" "$call_log"
+  # Should focus agent window
+  grep -q "select-window.*:agent" "$call_log"
+}
+
+@test "create: --layout and --cmd are mutually exclusive" {
+  create_mock_tmux_logging
+  create_mock_ta_wt
+
+  run "$SHELL_CMD" "$TA_WORKSPACE" create feature/fix-thing --layout agent --cmd "echo hi"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"mutually exclusive"* ]]
+}
+
+@test "create: --layout unknown errors" {
+  create_mock_tmux_logging
+  create_mock_ta_wt
+
+  run "$SHELL_CMD" "$TA_WORKSPACE" create feature/fix-thing --layout fancy
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"unknown layout"* ]]
+}
+
+@test "create: existing session is idempotent regardless of flags" {
+  create_mock_tmux_with_sessions
+  create_mock_ta_wt
+
+  run "$SHELL_CMD" "$TA_WORKSPACE" create feature/fix-thing --layout agent
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"already exists"* ]]
 }

@@ -5,6 +5,9 @@
 
 set -eu
 
+# Capture script directory at top level ($0 is function name inside functions)
+_script_dir="${0:A:h}"
+
 usage() {
   echo "usage: ta wt <command> [args...]"
   echo ""
@@ -574,6 +577,9 @@ cmd_remove() {
   git branch -D "$branch" 2>/dev/null || true
 
   echo "ta: removed worktree '$branch' ($wt_dir)"
+
+  # Cleanup: kill workspace session (ignore errors)
+  "$_script_dir/ta-workspace" kill "$branch" 2>/dev/null || true
 }
 
 # --- merge subcommand ---
@@ -713,10 +719,6 @@ cmd_merge() {
   # Cleanup: remove worktree (force because branch content is now on main)
   local cleanup_ok=true
   cmd_remove --force "$branch" 2>&1 || { echo "ta: warning: failed to remove worktree" >&2; cleanup_ok=false; }
-
-  # Cleanup: kill workspace session (ignore errors)
-  local script_dir="${0:A:h}"
-  "$script_dir/ta-workspace" kill "$branch" 2>/dev/null || true
 
   echo "ta: merged '$branch' into $target ($commit_hash)"
   if [[ "$cleanup_ok" == true ]]; then
