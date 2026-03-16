@@ -11,7 +11,6 @@ if [[ $# -eq 0 ]]; then
   echo "Commands:"
   echo "  wt          Worktree manager"
   echo "  workspace   Tmux workspace session manager"
-  echo "  ff          Fork and focus"
   echo "  report      Session report generator"
   echo "  tmux        Tmux introspection"
   exit 2

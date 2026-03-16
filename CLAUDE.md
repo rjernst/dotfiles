@@ -90,7 +90,6 @@ scripts/                 # All files auto-symlinked to ~/bin by setup
   ta                   # Terminal Agent tool (subcommand dispatcher)
   ta-wt                # Worktree manager (list, create, remove, prune, status)
   ta-workspace         # Tmux workspace session manager (create, list, attach, kill)
-  ta-ff                # Fork-and-focus session creator
   ta-report            # Session report generator (markdown output)
   ta-tmux              # Tmux introspection (sessions, windows, panes, capture)
   gradlew.sh           # Find and run gradlew from any subdirectory
@@ -132,7 +131,6 @@ docker/
 - `ta workspace list` — List `wt-*` tmux sessions
 - `ta workspace attach <branch>` — Attach to (or create) a workspace session
 - `ta workspace kill <branch>` — Kill a workspace session
-- `ta ff <branch> [prompt]` — Fork a branch from main and focus in a tmux session
 - `ta report` — Generate a markdown status report of worktrees and sessions
 - `ta tmux sessions` — List all tmux sessions
 - `ta tmux windows` — List tmux windows

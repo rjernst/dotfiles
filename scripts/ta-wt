@@ -434,12 +434,13 @@ _status_json() {
 
 # --- create subcommand ---
 cmd_create() {
-  local branch="" wt_path="" remote=""
+  local branch="" wt_path="" remote="" from_base=""
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --remote) remote="$2"; shift 2 ;;
       --remote=*) remote="${1#--remote=}"; shift ;;
+      --from=*) from_base="${1#--from=}"; shift ;;
       -*)
         echo "ta: unknown option '$1'" >&2
         exit 2
@@ -459,21 +460,31 @@ cmd_create() {
   done
 
   if [[ -z "$branch" ]]; then
-    echo "usage: ta wt create <branch> [path] [--remote <remote>]" >&2
+    echo "usage: ta wt create <branch> [path] [--remote <remote>] [--from=<base>]" >&2
     exit 2
   fi
 
-  # Determine remote: explicit > upstream > origin
-  if [[ -z "$remote" ]]; then
-    if git remote | grep -qx upstream; then
-      remote="upstream"
-    elif git remote | grep -qx origin; then
-      remote="origin"
-    else
-      echo "ta: no remote found (tried upstream, origin)" >&2
-      exit 1
+  if [[ -n "$from_base" ]]; then
+    _create_from "$branch" "$wt_path" "$from_base"
+  else
+    # Determine remote: explicit > upstream > origin
+    if [[ -z "$remote" ]]; then
+      if git remote | grep -qx upstream; then
+        remote="upstream"
+      elif git remote | grep -qx origin; then
+        remote="origin"
+      else
+        echo "ta: no remote found (tried upstream, origin)" >&2
+        exit 1
+      fi
     fi
+    _create_tracking "$branch" "$wt_path" "$remote"
   fi
+}
+
+# --- create: track existing remote branch (original behavior) ---
+_create_tracking() {
+  local branch="$1" wt_path="$2" remote="$3"
 
   # Validate branch exists on remote
   if ! git ls-remote --exit-code --heads "$remote" "refs/heads/$branch" > /dev/null 2>&1; then
@@ -483,11 +494,7 @@ cmd_create() {
 
   # Generate default path if not provided
   if [[ -z "$wt_path" ]]; then
-    local repo_root repo_name sanitized_branch
-    repo_root="$(git rev-parse --show-toplevel)"
-    repo_name="${repo_root:t}"
-    sanitized_branch="${branch//\//-}"
-    wt_path="${repo_root:h}/${repo_name}-${sanitized_branch}"
+    wt_path="$(_default_wt_path "$branch")"
   fi
 
   # Validate target path doesn't exist
@@ -499,6 +506,47 @@ cmd_create() {
   # Create the worktree
   git worktree add --track -b "$branch" "$wt_path" "${remote}/${branch}"
   echo "$wt_path"
+}
+
+# --- create: new branch from base (--from) ---
+_create_from() {
+  local branch="$1" wt_path="$2" base="$3"
+
+  # Generate default path if not provided
+  if [[ -z "$wt_path" ]]; then
+    wt_path="$(_default_wt_path "$branch")"
+  fi
+
+  # Validate target path doesn't exist
+  if [[ -e "$wt_path" ]]; then
+    echo "ta: path already exists: $wt_path" >&2
+    exit 1
+  fi
+
+  # Check if branch already exists locally
+  if git show-ref --verify --quiet "refs/heads/$branch" 2>/dev/null; then
+    # Branch exists — verify it's a descendant of base
+    if ! git merge-base --is-ancestor "$base" "$branch"; then
+      echo "ta: branch '$branch' is not based on '$base'" >&2
+      exit 1
+    fi
+    # Create worktree for existing branch
+    git worktree add "$wt_path" "$branch"
+  else
+    # Create new branch from base
+    git worktree add -b "$branch" "$wt_path" "$base"
+  fi
+  echo "$wt_path"
+}
+
+# --- helper: generate default worktree path ---
+_default_wt_path() {
+  local branch="$1"
+  local repo_root repo_name sanitized_branch
+  repo_root="$(git rev-parse --show-toplevel)"
+  repo_name="${repo_root:t}"
+  sanitized_branch="${branch//\//-}"
+  echo "${repo_root:h}/${repo_name}-${sanitized_branch}"
 }
 
 # --- remove subcommand ---

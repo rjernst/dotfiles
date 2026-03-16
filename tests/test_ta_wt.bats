@@ -305,6 +305,99 @@ setup() {
   [[ "$output" == *"usage:"* ]]
 }
 
+# --- ta wt create --from=<base> tests ---
+
+@test "wt create --from=main creates new branch from main" {
+  cd "$PROJECT"
+  local wt_dir="$BATS_TEST_TMPDIR/wt-from-main"
+
+  run zsh "$TA_WT" create new-feat "$wt_dir" --from=main
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"$wt_dir"* ]]
+  [ -d "$wt_dir" ]
+
+  # Branch should exist
+  run git branch --list new-feat
+  [[ "$output" == *"new-feat"* ]]
+
+  # Branch should be based on main
+  run git merge-base --is-ancestor main new-feat
+  [ "$status" -eq 0 ]
+}
+
+@test "wt create --from=<base> creates from that base" {
+  cd "$PROJECT"
+
+  # Create an 8.x branch
+  git checkout -b 8.x
+  git commit --allow-empty -m "8.x base"
+  git checkout main
+
+  local wt_dir="$BATS_TEST_TMPDIR/wt-from-8x"
+  run zsh "$TA_WT" create feat-from-8x "$wt_dir" --from=8.x
+  [ "$status" -eq 0 ]
+  [ -d "$wt_dir" ]
+
+  # Branch should be based on 8.x
+  run git merge-base --is-ancestor 8.x feat-from-8x
+  [ "$status" -eq 0 ]
+}
+
+@test "wt create --from=main with existing compatible branch creates worktree" {
+  cd "$PROJECT"
+
+  # Create a branch that descends from main
+  git checkout -b existing-compat
+  git commit --allow-empty -m "existing compatible"
+  git checkout main
+
+  local wt_dir="$BATS_TEST_TMPDIR/wt-existing-compat"
+  run zsh "$TA_WT" create existing-compat "$wt_dir" --from=main
+  [ "$status" -eq 0 ]
+  [ -d "$wt_dir" ]
+}
+
+@test "wt create --from=<base> with existing incompatible branch errors" {
+  cd "$PROJECT"
+
+  # Create two divergent branches
+  git checkout -b base-branch
+  git commit --allow-empty -m "base branch commit"
+  git checkout main
+
+  git checkout -b divergent-feat
+  git commit --allow-empty -m "divergent commit"
+  git checkout main
+
+  run zsh "$TA_WT" create divergent-feat "$BATS_TEST_TMPDIR/wt-divergent" --from=base-branch
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"not based on"* ]]
+}
+
+@test "wt create without --from unchanged behavior" {
+  cd "$PROJECT"
+  local wt_dir="$BATS_TEST_TMPDIR/wt-no-from"
+
+  # Push a branch to upstream so it exists on the remote
+  git checkout -b feat-no-from
+  git commit --allow-empty -m "feat no from"
+  git push upstream feat-no-from
+  git checkout main
+  git branch -D feat-no-from
+
+  run zsh "$TA_WT" create feat-no-from "$wt_dir"
+  [ "$status" -eq 0 ]
+  [ -d "$wt_dir" ]
+}
+
+@test "wt create --from=main generates default path" {
+  cd "$PROJECT"
+
+  run zsh "$TA_WT" create new-feat-path --from=main
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"project-new-feat-path"* ]]
+}
+
 # --- ta wt remove tests ---
 
 @test "wt remove clean worktree" {
