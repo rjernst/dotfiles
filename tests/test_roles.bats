@@ -13,10 +13,6 @@ setup() {
   mkdir -p "$HOME/.zsh/plugins"
 }
 
-teardown() {
-  # Clean up test roles created in the real roles directory
-  rm -rf "$DOTFILES/roles/_test_missing_cmd"
-}
 
 @test "git role succeeds (install script skips when config exists)" {
   mkdir -p "$HOME/.git" "$HOME/.ssh"
@@ -100,15 +96,16 @@ SCRIPT
 }
 
 @test "role with missing required command is skipped with warning" {
-  # Create a temporary role that requires a non-existent command
-  local role_dir="$DOTFILES/roles/_test_missing_cmd"
-  mkdir -p "$role_dir"
-  echo "no_such_command_xyz" > "$role_dir/requires_cmds"
-  cat > "$role_dir/setup" <<'SCRIPT'
+  # Use a temp DOTFILES so test fixtures don't leak into the real repo
+  local tmp_dotfiles="$BATS_TEST_TMPDIR/dotfiles"
+  mkdir -p "$tmp_dotfiles/roles/_test_missing_cmd" "$tmp_dotfiles/zsh"
+  cp "$DOTFILES/zsh/tool_packages.zsh" "$tmp_dotfiles/zsh/"
+  echo "no_such_command_xyz" > "$tmp_dotfiles/roles/_test_missing_cmd/requires_cmds"
+  cat > "$tmp_dotfiles/roles/_test_missing_cmd/setup" <<'SCRIPT'
 echo "setup should not run"
 SCRIPT
 
-  run zsh "$HELPER" _test_missing_cmd
+  DOTFILES="$tmp_dotfiles" run zsh "$HELPER" _test_missing_cmd
   [ "$status" -ne 0 ]
   [[ "$output" == *"missing required commands"* ]]
   [[ "$output" != *"setup should not run"* ]]
