@@ -236,8 +236,14 @@ _classify_status() {
     return
   fi
 
-  # Merged into base
+  # Merged into base (true merge or squash-merge)
   if git merge-base --is-ancestor "$wt_branch" "$base" 2>/dev/null; then
+    echo "merged"
+    return
+  fi
+  # Squash-merge detection: if merging branch into base produces base's same tree,
+  # then all branch content is already incorporated
+  if [[ "$(git merge-tree --write-tree "$base" "$wt_branch" 2>/dev/null | head -1)" == "$(git rev-parse "${base}^{tree}" 2>/dev/null)" ]]; then
     echo "merged"
     return
   fi
@@ -323,14 +329,19 @@ cmd_prune() {
     # Skip current worktree
     [[ "$wt_dir" == "$current_wt" ]] && continue
 
-    # Check if merged into main
-    if ! git merge-base --is-ancestor "$wt_branch" main 2>/dev/null; then
+    # Check if merged into main (true merge or squash-merge)
+    local is_merged=false
+    if git merge-base --is-ancestor "$wt_branch" main 2>/dev/null; then
+      is_merged=true
+    elif [[ "$(git merge-tree --write-tree main "$wt_branch" 2>/dev/null | head -1)" == "$(git rev-parse 'main^{tree}' 2>/dev/null)" ]]; then
+      is_merged=true
+    fi
+    if [[ "$is_merged" == false ]]; then
       continue
     fi
 
     # Check for dirty working tree
-    local dirty
-    dirty="$(_dirty_status "$wt_dir")"
+    local dirty="$(_dirty_status "$wt_dir")"
     if [[ "$dirty" != "clean" ]]; then
       echo "ta: skipping '$wt_branch' (uncommitted changes: $dirty)"
       continue
