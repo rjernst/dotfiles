@@ -69,6 +69,15 @@ _worktree_path() {
   echo "$wt_path"
 }
 
+# --- helper: wait for shell to be ready in a tmux pane ---
+# Sends a wait-for signal command, then blocks until the shell executes it.
+_wait_for_shell() {
+  local session="$1" window="$2"
+  local channel="${session}-${window}-ready"
+  "$TMUX_CMD" send-keys -t "${session}:${window}" " tmux wait-for -S ${channel}" Enter
+  "$TMUX_CMD" wait-for "${channel}"
+}
+
 # --- create subcommand ---
 cmd_create() {
   local branch="" send_cmd="" layout=""
@@ -133,11 +142,13 @@ cmd_create() {
   if [[ -n "$send_cmd" ]]; then
     # --cmd: rename window 0 to "review" and send command
     "$TMUX_CMD" rename-window -t "${session_name}:0" "review"
+    _wait_for_shell "$session_name" "review"
     "$TMUX_CMD" send-keys -t "${session_name}:review" "$send_cmd" Enter
   elif [[ "$layout" == "agent" ]]; then
     # --layout agent: shell window + agent window running claude
     "$TMUX_CMD" rename-window -t "${session_name}:0" "shell"
     "$TMUX_CMD" new-window -t "$session_name" -n "agent" -c "$wt_path"
+    _wait_for_shell "$session_name" "agent"
     "$TMUX_CMD" send-keys -t "${session_name}:agent" "claude" Enter
     "$TMUX_CMD" select-window -t "${session_name}:agent"
   else
