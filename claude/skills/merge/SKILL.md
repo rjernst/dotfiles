@@ -26,20 +26,7 @@ Parse `git worktree list --porcelain` output. Each worktree block starts with `w
 #### Step 2A: Determine the base branch
 
 1. Get the current branch: `git branch --show-current`
-2. Check if `upstream` remote exists (look for `upstream` in `git remote` output).
-
-**If `upstream` exists (fork workflow):**
-- List upstream branches: `git ls-remote --heads upstream`
-- Extract just the branch names (strip `refs/heads/` prefix)
-- For each upstream branch, check if it is an ancestor of the current branch:
-  `git merge-base --is-ancestor <upstream-branch> <current-branch>`
-  (exit 0 = is an ancestor)
-- Among all ancestor branches, pick the one with the fewest commits between them:
-  `git rev-list --count <upstream-branch>..<current-branch>`
-  Smallest count = closest base branch
-
-**If only `origin` exists (personal project):**
-- Use `main` as the base branch (or `master` if `main` doesn't exist: check with `git show-ref --verify --quiet refs/remotes/origin/main`)
+2. Follow the [Base branch detection](#base-branch-detection) procedure.
 
 #### Step 3A: Craft commit message and merge
 
@@ -137,6 +124,27 @@ Report results for each merge. If a merge fails, show the error and ask whether 
 - **Merge fails due to conflicts**: Report the conflict and stop. Do not attempt to resolve it.
 - **Merge fails due to dirty state**: Report which worktree is dirty. Suggest the user clean it up and retry.
 - **Ambiguous base branch**: If multiple upstream branches are equally close ancestors, list them and ask the user to pick.
+
+---
+
+## Base branch detection
+
+Use this procedure to determine the base branch for the current branch:
+
+1. Check if `upstream` remote exists (look for `upstream` in `git remote` output).
+
+**If `upstream` exists (fork workflow):**
+- Fetch upstream refs: `git fetch upstream`
+- List upstream branches: `git branch -r --list 'upstream/*'` and strip the `upstream/` prefix to get branch names
+- For each upstream branch, check if it is an ancestor of the current branch using the remote-tracking ref:
+  `git merge-base --is-ancestor upstream/<branch> <current-branch>`
+  (exit 0 = is an ancestor)
+- Among all ancestor branches, pick the one with the fewest commits between them:
+  `git rev-list --count upstream/<branch>..<current-branch>`
+  Smallest count = closest base branch
+
+**If only `origin` exists (personal project):**
+- Use `main` as the base branch (or `master` if `main` doesn't exist: check with `git show-ref --verify --quiet refs/remotes/origin/main`)
 
 ---
 
