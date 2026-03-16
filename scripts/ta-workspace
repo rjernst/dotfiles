@@ -171,6 +171,7 @@ cmd_create() {
       # Start claude with signal prompt, wait for ready, clear history, then send the real prompt
       _wait_for_claude "$session_name" "agent"
       "$TMUX_CMD" send-keys -t "${session_name}:agent" "/clear" Enter
+      "$TMUX_CMD" clear-history -t "${session_name}:agent"
       "$TMUX_CMD" send-keys -t "${session_name}:agent" "$layout_prompt" Enter
     else
       "$TMUX_CMD" send-keys -t "${session_name}:agent" "claude" Enter
