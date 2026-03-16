@@ -13,6 +13,11 @@ setup() {
   mkdir -p "$HOME/.zsh/plugins"
 }
 
+teardown() {
+  # Clean up test roles created in the real roles directory
+  rm -rf "$DOTFILES/roles/_test_missing_cmd"
+}
+
 @test "git role succeeds (install script skips when config exists)" {
   mkdir -p "$HOME/.git" "$HOME/.ssh"
   touch "$HOME/.git/user.config" "$HOME/.ssh/allowed_signers"
@@ -107,7 +112,4 @@ SCRIPT
   [ "$status" -ne 0 ]
   [[ "$output" == *"missing required commands"* ]]
   [[ "$output" != *"setup should not run"* ]]
-
-  # Clean up the temporary role
-  rm -rf "$role_dir"
 }
