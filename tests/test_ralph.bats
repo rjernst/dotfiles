@@ -265,6 +265,83 @@ STUB
   [[ "$output" == *"cannot parse branch from issue title"* ]]
 }
 
+# --- parse_frontmatter tests ---
+
+@test "parse_frontmatter extracts branch from frontmatter" {
+  run zsh -c '
+    eval "$(sed -n "/^parse_frontmatter/,/^}/p" "'"$RALPH"'")"
+    body="---
+branch: fix-auth
+---
+# Spec"
+    parse_frontmatter "$body" "branch"
+  '
+  [ "$status" -eq 0 ]
+  [ "$output" = "fix-auth" ]
+}
+
+@test "parse_frontmatter extracts base from frontmatter" {
+  run zsh -c '
+    eval "$(sed -n "/^parse_frontmatter/,/^}/p" "'"$RALPH"'")"
+    body="---
+branch: fix-auth
+base: 8.x
+---
+# Spec"
+    parse_frontmatter "$body" "base"
+  '
+  [ "$status" -eq 0 ]
+  [ "$output" = "8.x" ]
+}
+
+@test "parse_frontmatter returns 1 when no frontmatter" {
+  run zsh -c '
+    eval "$(sed -n "/^parse_frontmatter/,/^}/p" "'"$RALPH"'")"
+    parse_frontmatter "no frontmatter here" "branch"
+  '
+  [ "$status" -eq 1 ]
+}
+
+@test "parse_frontmatter returns 1 when field missing" {
+  run zsh -c '
+    eval "$(sed -n "/^parse_frontmatter/,/^}/p" "'"$RALPH"'")"
+    body="---
+branch: fix-auth
+---
+# Spec"
+    parse_frontmatter "$body" "base"
+  '
+  [ "$status" -eq 1 ]
+}
+
+@test "parse_frontmatter ignores extra fields" {
+  run zsh -c '
+    eval "$(sed -n "/^parse_frontmatter/,/^}/p" "'"$RALPH"'")"
+    body="---
+branch: fix-auth
+base: 8.x
+extra: ignored
+---
+# Spec"
+    parse_frontmatter "$body" "branch"
+  '
+  [ "$status" -eq 0 ]
+  [ "$output" = "fix-auth" ]
+}
+
+@test "parse_frontmatter handles whitespace after colon" {
+  run zsh -c '
+    eval "$(sed -n "/^parse_frontmatter/,/^}/p" "'"$RALPH"'")"
+    body="---
+branch:   fix-auth
+---
+# Spec"
+    parse_frontmatter "$body" "branch"
+  '
+  [ "$status" -eq 0 ]
+  [ "$output" = "fix-auth" ]
+}
+
 # --- resolve_repo tests ---
 
 @test "resolve_repo extracts repo from git remote origin URL" {
@@ -555,6 +632,158 @@ STUB
   run zsh "$RALPH" --issue 1
   [ "$status" -eq 0 ]
   grep -Fq "$existing_path:/work" "$DOCKER_LOG"
+}
+
+# --- frontmatter integration tests ---
+
+@test "ralph --issue uses branch from frontmatter" {
+  cat > "$BATS_TEST_TMPDIR/bin/gh" <<'STUB'
+#!/bin/bash
+case "$1" in
+  issue)
+    case "$2" in
+      view)
+        if [[ " $* " == *" -q .title "* ]]; then
+          echo "Fix Auth Middleware"
+        elif [[ " $* " == *" -q .body "* ]]; then
+          printf '%s\n%s\n%s\n%s' '---' 'branch: fix-auth' '---' '# Spec'
+        fi
+        ;;
+      edit) ;;
+    esac
+    ;;
+esac
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/gh"
+
+  export GIT_TOPLEVEL="$PROJECT"
+  cd "$PROJECT"
+  run zsh "$RALPH" --issue 1
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"processing issue #1 on branch fix-auth"* ]]
+}
+
+@test "ralph --issue uses base branch from frontmatter" {
+  export GH_LOG="$BATS_TEST_TMPDIR/gh.log"
+  # Track what git worktree add receives
+  cat > "$BATS_TEST_TMPDIR/bin/git" <<'STUB'
+#!/bin/bash
+if [[ "$1" == "-C" ]]; then shift 2; fi
+case "$1" in
+  config) echo "stub" ;;
+  rev-parse)
+    if [[ "$2" == "--show-toplevel" ]]; then echo "${GIT_TOPLEVEL:-$(pwd)}"
+    elif [[ "$2" == "--git-common-dir" ]]; then echo "${GIT_TOPLEVEL:-$(pwd)}/.git"
+    elif [[ "$2" == "--verify" ]]; then exit 0
+    elif [[ "$2" == "HEAD" ]]; then echo "abc1234567890"
+    fi ;;
+  worktree)
+    case "$2" in
+      list) echo "${GIT_WORKTREE_LIST:-}" ;;
+      add)
+        echo "WORKTREE_ADD: $@" >> "$GH_LOG"
+        shift 2
+        while [[ $# -gt 0 ]]; do
+          case "$1" in
+            --track|--force|--detach) shift ;;
+            -b|-B) shift 2 ;;
+            *) mkdir -p "$1"; break ;;
+          esac
+        done ;;
+    esac ;;
+  remote)
+    if [[ "$2" == "get-url" ]]; then echo "git@github.com:${GIT_REPO:-owner/repo}.git"
+    else echo "${GIT_REMOTE:-origin}"
+    fi ;;
+  ls-remote) exit 2 ;;
+  symbolic-ref)
+    if [[ "$2" == "--short" ]]; then echo "main"
+    else echo "refs/remotes/origin/main"
+    fi ;;
+  *) command git "$@" ;;
+esac
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/git"
+
+  cat > "$BATS_TEST_TMPDIR/bin/gh" <<'STUB'
+#!/bin/bash
+case "$1" in
+  issue)
+    case "$2" in
+      view)
+        if [[ " $* " == *" -q .title "* ]]; then
+          echo "Fix Auth Middleware"
+        elif [[ " $* " == *" -q .body "* ]]; then
+          printf '%s\n%s\n%s\n%s' '---' 'branch: fix-auth' 'base: 8.x' '---'
+        fi
+        ;;
+      edit) ;;
+    esac
+    ;;
+esac
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/gh"
+
+  export GIT_TOPLEVEL="$PROJECT"
+  cd "$PROJECT"
+  run zsh "$RALPH" --issue 1
+  [ "$status" -eq 0 ]
+  # Verify worktree add used the base branch (8.x)
+  grep -q 'WORKTREE_ADD.*8.x' "$GH_LOG"
+}
+
+@test "ralph --issue falls back to title branch when no frontmatter" {
+  cat > "$BATS_TEST_TMPDIR/bin/gh" <<'STUB'
+#!/bin/bash
+case "$1" in
+  issue)
+    case "$2" in
+      view)
+        if [[ " $* " == *" -q .title "* ]]; then
+          echo "[fallback-branch] Old Style Title"
+        elif [[ " $* " == *" -q .body "* ]]; then
+          echo "No frontmatter body"
+        fi
+        ;;
+      edit) ;;
+    esac
+    ;;
+esac
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/gh"
+
+  export GIT_TOPLEVEL="$PROJECT"
+  cd "$PROJECT"
+  run zsh "$RALPH" --issue 1
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"processing issue #1 on branch fallback-branch"* ]]
+}
+
+@test "ralph --issue errors when no branch in frontmatter or title" {
+  cat > "$BATS_TEST_TMPDIR/bin/gh" <<'STUB'
+#!/bin/bash
+case "$1" in
+  issue)
+    case "$2" in
+      view)
+        if [[ " $* " == *" -q .title "* ]]; then
+          echo "No Branch Anywhere"
+        elif [[ " $* " == *" -q .body "* ]]; then
+          echo "No frontmatter either"
+        fi
+        ;;
+      edit) ;;
+    esac
+    ;;
+esac
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/gh"
+
+  export GIT_TOPLEVEL="$PROJECT"
+  cd "$PROJECT"
+  run zsh "$RALPH" --issue 1
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"cannot parse branch"* ]]
 }
 
 # --- --issue flag tests ---

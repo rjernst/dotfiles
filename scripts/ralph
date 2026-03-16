@@ -159,6 +159,25 @@ parse_issue_branch() {
   fi
 }
 
+# --- parse a field from YAML frontmatter in the issue body ---
+# Usage: parse_frontmatter "$body" "branch"
+parse_frontmatter() {
+  local body=$1 field=$2
+  # Extract frontmatter block (between first two --- lines)
+  local fm
+  fm=$(echo "$body" | sed -n '/^---$/,/^---$/p' | sed '1d;$d')
+  if [[ -z $fm ]]; then
+    return 1
+  fi
+  # Extract field value (simple key: value parsing)
+  local value
+  value=$(echo "$fm" | awk -F':[[:space:]]*' -v key="$field" '$1 == key { print $2; exit }')
+  if [[ -z $value ]]; then
+    return 1
+  fi
+  echo "$value"
+}
+
 # --- process a single GitHub Issue ---
 process_issue() {
   local issue_number=$1
@@ -179,10 +198,15 @@ process_issue() {
     return 1
   }
 
-  branch=$(parse_issue_branch "$title") || return 1
+  local base
+  branch=$(parse_frontmatter "$body" "branch") || {
+    echo "ralph: no branch in frontmatter, falling back to title" >&2
+    branch=$(parse_issue_branch "$title") || return 1
+  }
+  base=$(parse_frontmatter "$body" "base") || true  # optional
 
   local work_dir
-  work_dir=$(ensure_worktree "$branch")
+  work_dir=$(ensure_worktree "$branch" "$base")
   echo "ralph: processing issue #$issue_number on branch $branch"
   echo "ralph: using worktree at $work_dir"
 
@@ -257,6 +281,7 @@ process_issue() {
 # --- ensure worktree exists for branch ---
 ensure_worktree() {
   local branch=$1
+  local base_branch=${2:-}  # optional, defaults to remote HEAD
   local repo_root sanitized_branch wt_path remote
   repo_root=$(git rev-parse --show-toplevel)
   sanitized_branch=${branch//\//-}
@@ -294,6 +319,11 @@ ensure_worktree() {
   fi
   if [[ -z $default_branch ]] || ! git rev-parse --verify "$default_branch" &>/dev/null; then
     default_branch=$(git symbolic-ref --short HEAD 2>/dev/null) || default_branch=HEAD
+  fi
+
+  # Override default branch with explicit base if provided
+  if [[ -n $base_branch ]]; then
+    default_branch=$base_branch
   fi
 
   # Create worktree: track remote branch if it exists, else branch from default

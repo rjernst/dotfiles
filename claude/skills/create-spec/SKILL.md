@@ -42,33 +42,47 @@ Potential topics (ask in this order, skipping any that are clearly implied):
 1) **Problem statement + why now**: Ask only if not already obvious from the goal.
 2) **In-scope vs out-of-scope**: Ask for boundaries; propose a minimal scope default.
 3) **User-facing behavior** (CLI flags, config, outputs): Ask for concrete examples (sample commands/outputs) if relevant.
-4) **Constraints** (perf, compatibility, deps, security): Confirm "no breaking changes" by default; ask if any special constraints apply.
-5) **Acceptance criteria**: Convert the user's intent into checkable commands/expected results. Propose a default set of checks based on repo conventions.
-6) **Rough task breakdown**: If the user doesn't have tasks, draft them yourself and keep them small/checkable.
+4) **Base branch**: If the project has version branches (e.g., `8.x`, `7.17`) or the work should branch from something other than the default branch, ask which base branch to use. Default is the repo's default branch (usually `main`) — only include `base` in frontmatter if it differs from the default.
+5) **Constraints** (perf, compatibility, deps, security): Confirm "no breaking changes" by default; ask if any special constraints apply.
+6) **Acceptance criteria**: Convert the user's intent into checkable commands/expected results. Propose a default set of checks based on repo conventions.
+7) **Rough task breakdown**: If the user doesn't have tasks, draft them yourself and keep them small/checkable.
 
 ### Stopping rule
 You're done interviewing when you can fill every required field in the spec template with concrete, self-contained information (defaults are allowed if clearly stated).
 
 ### Then: create the GitHub Issue immediately (no draft review step)
 Once you have enough info:
-- Draft the spec body in the exact template format (see below)
+- Draft the spec body in the exact template format (see below), including frontmatter
 - Create a GitHub Issue using `gh issue create` with:
-  - **Title:** `[<branch-name>] Feature Name`
+  - **Title:** `Feature Name` (clean title, no branch prefix)
   - **Labels:** `spec,status:ready`
-  - **Body:** The spec content (see template below)
+  - **Body:** The spec content with frontmatter (see template below)
 - Display the issue URL so the user can review
 
 If anything is ambiguous, ask the minimum follow-up questions, then create the issue.
 
-## Issue Title Format
-The title must follow this pattern: `[<branch-name>] Feature Name`
+### After issue creation: offer to start an agent loop
+After creating the issue, check if an agent loop is already running for the current repo:
+```zsh
+ta agent-loop list
+```
+- If a loop for this repo is already running → do nothing (the loop will pick up the new spec automatically)
+- If no loop is running → ask: "Want me to start an agent loop for this project? (`ta agent-loop start`)"
+- If the user says yes, run `ta agent-loop start` in the current directory
 
-The branch name is extracted by Ralph from the first bracketed segment. Use lowercase with hyphens (e.g., `[add-dry-run-flag] Add Dry Run Flag`).
+## Issue Title Format
+The title is just the feature name — clean, with no branch prefix (e.g., `Add Dry Run Flag`).
+
+The branch name is specified in the frontmatter of the spec body (see template below). Use lowercase with hyphens for branch names (e.g., `add-dry-run-flag`).
 
 ## Spec Template (Issue Body)
-The issue body should follow this structure. Note: no `branch:` frontmatter — the branch name goes in the issue title instead.
+The issue body starts with YAML-style frontmatter containing the `branch` name (required) and optionally a `base` branch.
 
 ```markdown
+---
+branch: <branch-name>
+base: <base-branch>          # optional — omit if branching from default (main)
+---
 # Spec: <Feature Name>
 
 ## Overview
@@ -152,18 +166,37 @@ Use this command to create the issue (replace placeholders):
 
 ```zsh
 gh issue create \
-  --title "[<branch-name>] <Feature Name>" \
+  --title "<Feature Name>" \
   --label "spec,status:ready" \
-  --body "<spec body>"
+  --body "<spec body with frontmatter>"
 ```
 
 For long spec bodies, write the body to a temp file and use `--body-file`:
 
 ```zsh
 gh issue create \
-  --title "[<branch-name>] <Feature Name>" \
+  --title "<Feature Name>" \
   --label "spec,status:ready" \
   --body-file /tmp/spec-body.md
+```
+
+The spec body must start with frontmatter containing at least the `branch` field:
+```markdown
+---
+branch: my-feature-branch
+---
+# Spec: My Feature
+...
+```
+
+Include `base` only when branching from a non-default branch:
+```markdown
+---
+branch: my-feature-branch
+base: 8.x
+---
+# Spec: My Feature
+...
 ```
 
 ## Repo-Specific Context

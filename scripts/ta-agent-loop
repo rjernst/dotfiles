@@ -1,0 +1,196 @@
+#!/usr/bin/env zsh
+
+# ta-agent-loop — Manage Ralph polling loops in a shared tmux session
+# Subcommands: start, stop, list
+
+set -eu
+
+SESSION_NAME="agent-loops"
+
+usage() {
+  echo "usage: ta agent-loop <command> [args...]"
+  echo ""
+  echo "Commands:"
+  echo "  start     Start a ralph polling loop for a project"
+  echo "  stop      Stop a ralph polling loop"
+  echo "  list      List running agent loops"
+  exit 2
+}
+
+if [[ $# -eq 0 ]]; then
+  usage
+fi
+
+# Allow overriding tmux binary for testing
+: ${TMUX_CMD:=tmux}
+
+# Allow overriding ralph command for testing
+: ${RALPH_CMD:=ralph}
+
+# --- helper: check if tmux server is running ---
+_tmux_running() {
+  "$TMUX_CMD" list-sessions > /dev/null 2>&1
+}
+
+# --- helper: get repo name from git remote ---
+_repo_name() {
+  local dir="$1"
+  local url
+  url="$(git -C "$dir" remote get-url origin 2>/dev/null)" || {
+    echo "ta: not a git repo or no 'origin' remote" >&2
+    return 1
+  }
+  echo "$url" | sed -E 's#.*github\.com[:/]##; s#\.git$##' | cut -d/ -f2
+}
+
+# --- start subcommand ---
+cmd_start() {
+  local dir=""
+  local -a ralph_flags=()
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --dir) dir="$2"; shift 2 ;;
+      --dir=*) dir="${1#--dir=}"; shift ;;
+      --)
+        shift
+        ralph_flags=("$@")
+        break
+        ;;
+      -*)
+        echo "ta: unknown option '$1'" >&2
+        exit 2
+        ;;
+      *)
+        echo "ta: unexpected argument '$1'" >&2
+        exit 2
+        ;;
+    esac
+  done
+
+  # Default to current directory
+  if [[ -z "$dir" ]]; then
+    dir="$(pwd)"
+  fi
+
+  # Resolve to absolute path
+  dir="$(cd "$dir" && pwd)" || {
+    echo "ta: directory not found: $dir" >&2
+    exit 1
+  }
+
+  # Validate it's a git repo
+  if ! git -C "$dir" rev-parse --git-dir > /dev/null 2>&1; then
+    echo "ta: not a git repository: $dir" >&2
+    exit 1
+  fi
+
+  # Get repo name
+  local repo_name
+  repo_name="$(_repo_name "$dir")" || exit 1
+
+  # Create session if needed
+  if ! _tmux_running || ! "$TMUX_CMD" has-session -t "$SESSION_NAME" 2>/dev/null; then
+    "$TMUX_CMD" new-session -d -s "$SESSION_NAME" -c "$dir" -n "$repo_name"
+    "$TMUX_CMD" send-keys -t "${SESSION_NAME}:${repo_name}" "$RALPH_CMD --poll${ralph_flags:+ ${ralph_flags[*]}}" Enter
+    echo "ta: started agent loop for '$repo_name' in $dir"
+    return 0
+  fi
+
+  # Check if window already exists
+  if "$TMUX_CMD" list-windows -t "$SESSION_NAME" -F '#{window_name}' 2>/dev/null | grep -qFx "$repo_name"; then
+    echo "ta: agent loop for '$repo_name' is already running"
+    return 0
+  fi
+
+  # Create new window and start ralph
+  "$TMUX_CMD" new-window -t "$SESSION_NAME" -n "$repo_name" -c "$dir"
+  "$TMUX_CMD" send-keys -t "${SESSION_NAME}:${repo_name}" "$RALPH_CMD --poll${ralph_flags:+ ${ralph_flags[*]}}" Enter
+  echo "ta: started agent loop for '$repo_name' in $dir"
+}
+
+# --- stop subcommand ---
+cmd_stop() {
+  local repo=""
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -*)
+        echo "ta: unknown option '$1'" >&2
+        exit 2
+        ;;
+      *)
+        if [[ -z "$repo" ]]; then
+          repo="$1"
+        else
+          echo "ta: unexpected argument '$1'" >&2
+          exit 2
+        fi
+        shift
+        ;;
+    esac
+  done
+
+  if [[ -z "$repo" ]]; then
+    echo "usage: ta agent-loop stop <repo>" >&2
+    exit 2
+  fi
+
+  # Check session exists
+  if ! _tmux_running || ! "$TMUX_CMD" has-session -t "$SESSION_NAME" 2>/dev/null; then
+    echo "ta: no agent loops running" >&2
+    exit 1
+  fi
+
+  # Check window exists
+  if ! "$TMUX_CMD" list-windows -t "$SESSION_NAME" -F '#{window_name}' | grep -qFx "$repo"; then
+    echo "ta: no agent loop for '$repo'" >&2
+    exit 1
+  fi
+
+  # Kill the window
+  "$TMUX_CMD" kill-window -t "${SESSION_NAME}:${repo}"
+  echo "ta: stopped agent loop for '$repo'"
+
+  # If no windows remain, kill the session
+  if ! "$TMUX_CMD" has-session -t "$SESSION_NAME" 2>/dev/null; then
+    echo "ta: removed empty agent-loops session"
+  fi
+}
+
+# --- list subcommand ---
+cmd_list() {
+  if ! _tmux_running || ! "$TMUX_CMD" has-session -t "$SESSION_NAME" 2>/dev/null; then
+    echo "no agent loops running"
+    return 0
+  fi
+
+  local windows
+  windows="$("$TMUX_CMD" list-windows -t "$SESSION_NAME" -F '#{window_name}'$'\t''#{pane_current_path}' 2>/dev/null)" || {
+    echo "no agent loops running"
+    return 0
+  }
+
+  printf "%-24s %s\n" "REPO" "DIRECTORY"
+  local line
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    local name="${line%%$'\t'*}"
+    local cwd="${line#*$'\t'}"
+    printf "%-24s %s\n" "$name" "$cwd"
+  done <<< "$windows"
+}
+
+# --- dispatch ---
+subcmd="$1"
+shift
+
+case "$subcmd" in
+  start) cmd_start "$@" ;;
+  stop)  cmd_stop "$@" ;;
+  list)  cmd_list "$@" ;;
+  *)
+    echo "ta: unknown agent-loop command '$subcmd'" >&2
+    exit 2
+    ;;
+esac

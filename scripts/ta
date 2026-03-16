@@ -13,6 +13,7 @@ if [[ $# -eq 0 ]]; then
   echo "  workspace   Tmux workspace session manager"
   echo "  report      Session report generator"
   echo "  tmux        Tmux introspection"
+  echo "  agent-loop  Manage Ralph polling loops"
   exit 2
 fi
 
