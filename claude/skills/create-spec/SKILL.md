@@ -10,11 +10,76 @@ You are an AI planning agent. Your job is to collaboratively create a new featur
   - A task to run all tests, checks, and formatting commands—fix any issues found
   - A final task to create a commit with all changes
 
+## Repo Resolution
+
+**All spec issues must be created in the user's fork (origin), never upstream.**
+
+Determine the target repo and upstream repo at the start of every invocation:
+
+1. **Origin (target for spec creation):**
+   ```
+   git remote get-url origin | sed -E 's#.*github\.com[:/]##; s#\.git$##'
+   ```
+   This gives the user's fork (e.g., `rjernst/elasticsearch`).
+
+2. **Upstream (fallback for issue search):**
+   ```
+   git remote get-url upstream | sed -E 's#.*github\.com[:/]##; s#\.git$##'
+   ```
+   This gives the parent repo (e.g., `elastic/elasticsearch`). If no `upstream` remote exists, skip upstream fallback.
+
+If origin cannot be resolved to a GitHub `owner/repo`, inform the user and stop.
+
+All `gh issue create` calls **must** use `--repo <origin-repo>`.
+
+## Input Detection
+
+The skill receives `$ARGUMENTS`. Detect the input type:
+
+| Input | Detection | Action |
+|-------|-----------|--------|
+| (none) | Empty or blank `$ARGUMENTS` | Analyze current conversation context, then run interview. If no conversation context exists, proceed directly to the blank interview (Step 0). |
+| `1234` | Purely numeric | Issue lookup (fork first, then upstream) |
+| `https://github.com/.../issues/1234` | URL pattern | Fetch directly via `gh issue view <url>` |
+| Anything else | Natural language | Issue search (fork first, then upstream) |
+
+## Issue Lookup and Search
+
+### Numeric input
+1. Try fork first: `gh issue view <number> --repo <origin-repo> --json title,body,labels,url 2>/dev/null`
+2. If not found, try upstream: `gh issue view <number> --repo <upstream-repo> --json title,body,labels,url 2>/dev/null`
+3. If neither exists, inform the user and fall back to blank interview.
+
+### URL input
+1. Fetch directly: `gh issue view <url> --json title,body,labels,url`
+2. If not found, inform the user and fall back to blank interview.
+
+### Natural language search
+1. Search fork: `gh issue list --search "<query>" --repo <origin-repo> --json number,title,url --limit 10` (shell-escape the query to handle metacharacters)
+2. If no results in fork, search upstream: `gh issue list --search "<query>" --repo <upstream-repo> --json number,title,url --limit 10`
+3. Evaluate the results semantically against the user's query.
+4. If one strong match: confirm with user — "I found issue #1234: '<title>' — is that the one?"
+5. If multiple plausible matches: present options, ask user to pick.
+6. If no matches: inform user, fall back to blank interview.
+
+When an issue is found, fetch the full issue content:
+```
+gh issue view <number> --repo <repo> --json title,body,labels,url
+```
+
+### No input (conversation context)
+1. Analyze the current conversation to understand what problem/feature is being discussed.
+2. Summarize the key points as pre-filled context for the interview.
+3. Explicitly state what you gathered from the conversation and ask the user to confirm before proceeding.
+4. Run the interview with this context already established — skip questions that are already answered.
+
 ## GitHub Issues Workflow
-1. User invokes `/create-spec`
-2. Agent interviews user and drafts spec (following protocol below)
-3. Agent creates a GitHub Issue via `gh issue create` with the spec as the body
-4. User runs `ralph --issue <number>` or `ralph --poll` to execute
+1. User invokes `/create-spec [input]`
+2. Agent resolves origin and upstream repos
+3. Agent processes input (issue lookup, search, conversation analysis, or blank)
+4. Agent interviews user and drafts spec (following protocol below)
+5. Agent creates a GitHub Issue via `gh issue create --repo <origin-repo>` with the spec as the body
+6. User runs `ralph --issue <number>` or `ralph --poll` to execute
 
 ## Interview Protocol (conversational, one topic at a time)
 Do NOT dump all questions at once. Run a short, dynamic interview that asks only what's needed, one topic per message, until you have enough to produce the spec in the exact template below.
@@ -26,15 +91,32 @@ Do NOT dump all questions at once. Run a short, dynamic interview that asks only
 - Use Claude Code's `AskUserQuestion` tool when there are concrete choices (e.g., yes/no, pick one of 3 scopes, choose a rollout strategy). Use normal conversation for open-ended details.
 - Stop interviewing as soon as you have enough information to draft a self-contained spec (don't over-interview).
 
-### Step 0 (always): feature name + one-sentence goal
+### When a source issue is provided (shorter interview)
+When a source issue was found via lookup or search:
+1. Display the issue title and a brief summary of its content.
+2. Ask for confirmation: "I'll create a spec based on this issue. Does this capture the goal?"
+3. **Skip** the "feature name / one-sentence goal" question — derive both from the issue title and body.
+4. Still ask about (only if not clear from the issue):
+   - Scope (in-scope vs out-of-scope boundaries)
+   - Base branch (if relevant)
+   - Constraints
+   - Task breakdown (the main value-add of the spec)
+5. The source issue will be referenced in the spec body.
+
+### When conversation context is available (no-input case)
+1. Present the context you gathered from the conversation.
+2. Ask the user to confirm or adjust it.
+3. Use the confirmed context as the basis for the interview, skipping questions already answered.
+
+### Step 0 (blank interview only): feature name + one-sentence goal
 Ask for:
 - **Feature name**
 - **One-sentence goal**
 
-Provide a default suggestion for both (inferred from context). If the user is unsure, offer 2–3 candidate names via `AskUserQuestion`.
+Provide a default suggestion for both (inferred from context). If the user is unsure, offer 2-3 candidate names via `AskUserQuestion`.
 
 ### Adaptive follow-ups (ask only what you need)
-After Step 0, decide which topics to cover next based on complexity. Examples:
+After Step 0 (or after source issue confirmation), decide which topics to cover next based on complexity. Examples:
 - **Simple** (docs-only, refactor, small flag, tiny behavior tweak): you may only need brief scope + acceptance checks + tasks.
 - **Complex** (new workflows, new CLI surface, migrations, external integrations, risky changes): go deeper on user-facing behavior, constraints, and acceptance checks.
 
@@ -53,7 +135,8 @@ You're done interviewing when you can fill every required field in the spec temp
 ### Then: create the GitHub Issue immediately (no draft review step)
 Once you have enough info:
 - Draft the spec body in the exact template format (see below), including frontmatter
-- Create a GitHub Issue using `gh issue create` with:
+- If created from a source issue, include the source reference in the spec body
+- Create a GitHub Issue using `gh issue create --repo <origin-repo>` with:
   - **Title:** `Feature Name` (clean title, no branch prefix)
   - **Labels:** `spec,status:ready`
   - **Body:** The spec content with frontmatter (see template below)
@@ -84,6 +167,8 @@ branch: <branch-name>
 base: <base-branch>          # optional — omit if branching from default (main)
 ---
 # Spec: <Feature Name>
+
+Source issue: #<number> (or <repo>#<number> if cross-repo)  ← only include if created from an existing issue
 
 ## Overview
 <Brief description of the feature and its purpose. Self-contained — an autonomous agent must understand the full context from this section alone.>
@@ -166,6 +251,7 @@ Use this command to create the issue (replace placeholders):
 
 ```zsh
 gh issue create \
+  --repo "<origin-repo>" \
   --title "<Feature Name>" \
   --label "spec,status:ready" \
   --body "<spec body with frontmatter>"
@@ -175,6 +261,7 @@ For long spec bodies, write the body to a temp file and use `--body-file`:
 
 ```zsh
 gh issue create \
+  --repo "<origin-repo>" \
   --title "<Feature Name>" \
   --label "spec,status:ready" \
   --body-file /tmp/spec-body.md
