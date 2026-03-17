@@ -106,6 +106,11 @@ if ! command -v gh &>/dev/null; then
   exit 1
 fi
 
+if ! command -v jq &>/dev/null; then
+  echo "ralph: jq is not installed (install: brew install jq)" >&2
+  exit 1
+fi
+
 # --- build image ---
 RALPH_DIR=${0:A:h}/../docker/ralph
 HOST_UID=$(id -u)
@@ -139,12 +144,114 @@ KEYCHAIN_JSON=$(security find-generic-password -s "Claude Code-credentials" -w 2
   echo "ralph: no Claude credentials in Keychain — run 'claude' to log in first" >&2
   exit 1
 }
-OAUTH_TOKEN=$(echo "$KEYCHAIN_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin)['claudeAiOauth']['accessToken'])")
+OAUTH_TOKEN=$(printf '%s' "$KEYCHAIN_JSON" | jq -r '.claudeAiOauth.accessToken')
 
 # --- resolve repo from origin remote ---
 resolve_repo() {
   git remote get-url origin 2>/dev/null \
     | sed -E 's#.*github\.com[:/]##; s#\.git$##'
+}
+
+# --- parse frontmatter from spec body ---
+# Extracts a value from YAML frontmatter (between --- delimiters).
+# Usage: parse_frontmatter "field" "body"
+# For list values like [11, 17], outputs space-separated: "11 17"
+# For scalar values like "my-branch", outputs the value as-is.
+parse_frontmatter() {
+  local field=$1 body=$2
+  local in_frontmatter=0 line value
+
+  while IFS= read -r line; do
+    if [[ $line == "---" ]]; then
+      if (( in_frontmatter )); then
+        break
+      else
+        in_frontmatter=1
+        continue
+      fi
+    fi
+    if (( in_frontmatter )) && [[ $line == ${field}:* ]]; then
+      value=${line#${field}:}
+      # Trim leading/trailing whitespace
+      value=${value#"${value%%[! ]*}"}
+      value=${value%"${value##*[! ]}"}
+      # Check for bracket list: [val1, val2, ...]
+      if [[ $value == \[*\] ]]; then
+        value=${value#\[}
+        value=${value%\]}
+        # Split on commas, trim whitespace
+        local items=()
+        local item
+        while IFS= read -r item; do
+          item=${item#"${item%%[! ]*}"}
+          item=${item%"${item##*[! ]}"}
+          [[ -n $item ]] && items+=("$item")
+        done <<< "${value//,/$'\n'}"
+        echo "${items[*]}"
+      else
+        echo "$value"
+      fi
+      return 0
+    fi
+  done <<< "$body"
+}
+
+# --- check if all dependency issues have status:done ---
+# Usage: check_dependencies "11 17" "owner/repo"
+# Returns 0 if all deps have status:done, 1 otherwise.
+# Prints unmet dep numbers to stdout (one per line).
+check_dependencies() {
+  local deps=$1 repo=$2
+  local num labels unmet=()
+
+  for num in ${=deps}; do
+    labels=$(gh issue view "$num" --repo "$repo" --json labels -q '[.labels[].name] | join(",")' 2>/dev/null) || {
+      echo "ralph: warning: could not fetch issue #$num" >&2
+      unmet+=("$num")
+      continue
+    }
+    if [[ $labels != *"status:done"* ]]; then
+      unmet+=("$num")
+    fi
+  done
+
+  if (( ${#unmet} > 0 )); then
+    printf '%s\n' "${unmet[@]}"
+    return 1
+  fi
+  return 0
+}
+
+# --- scan blocked specs and unblock those with satisfied deps ---
+# Usage: unblock_ready_specs "owner/repo"
+unblock_ready_specs() {
+  local repo=$1
+  local numbers number body depends
+
+  numbers=$(gh issue list --label "status:blocked" --label "spec" --repo "$repo" --json number -q '.[].number' 2>/dev/null) || {
+    echo "ralph: warning: failed to fetch blocked issues" >&2
+    return 0
+  }
+
+  [[ -z $numbers ]] && return 0
+
+  while IFS= read -r number; do
+    body=$(gh issue view "$number" --json body -q .body --repo "$repo" 2>/dev/null) || continue
+
+    depends=$(parse_frontmatter depends "$body")
+
+    if [[ -z $depends ]]; then
+      # No depends field — shouldn't be blocked, fix it
+      echo "ralph: unblocked issue #$number — no dependencies declared"
+      gh issue edit "$number" --remove-label "status:blocked" --add-label "status:ready" --repo "$repo" 2>/dev/null || true
+      continue
+    fi
+
+    if check_dependencies "$depends" "$repo" >/dev/null; then
+      echo "ralph: unblocked issue #$number — all dependencies met"
+      gh issue edit "$number" --remove-label "status:blocked" --add-label "status:ready" --repo "$repo" 2>/dev/null || true
+    fi
+  done <<< "$numbers"
 }
 
 # --- parse branch from issue title [branch] prefix ---
@@ -205,6 +312,19 @@ process_issue() {
   }
   base=$(parse_frontmatter "$body" "base") || true  # optional
 
+  # Safety check: if spec has unmet dependencies, block it and skip
+  local depends
+  depends=$(parse_frontmatter depends "$body")
+  if [[ -n $depends ]]; then
+    local unmet
+    if ! unmet=$(check_dependencies "$depends" "$repo"); then
+      echo "ralph: issue #$issue_number has unmet dependencies: $(echo "$unmet" | tr '\n' ' '| sed 's/ $//')"
+      echo "ralph: transitioning issue #$issue_number to status:blocked"
+      gh issue edit "$issue_number" --remove-label "status:ready" --add-label "status:blocked" --repo "$repo" 2>/dev/null || true
+      return 0
+    fi
+  fi
+
   local work_dir
   work_dir=$(ensure_worktree "$branch" "$base")
   echo "ralph: processing issue #$issue_number on branch $branch"
@@ -262,6 +382,8 @@ process_issue() {
       # No commit — all tasks complete
       echo "ralph: no commit made, marking issue #$issue_number done"
       gh issue edit "$issue_number" --remove-label "status:in-progress" --add-label "status:done" --repo "$repo" 2>/dev/null || true
+      # Unblock any specs whose dependencies are now met
+      unblock_ready_specs "$repo"
       rm -f "$spec_tmpfile"
       break
     fi
@@ -372,22 +494,17 @@ if (( POLL )); then
       break
     fi
 
+    # Unblock any specs whose dependencies are now met
+    unblock_ready_specs "$REPO"
+
     # Fetch ready issues
-    issues_json=$(gh issue list --label "spec,status:ready" --author "@me" --repo "$REPO" --json number,title 2>/dev/null) || {
+    issue_numbers=$(gh issue list --label "spec,status:ready" --author "@me" --repo "$REPO" --json number -q '.[].number' 2>/dev/null) || {
       (( last_was_idle )) && printf "\n"
       echo "ralph: failed to list issues from $REPO" >&2
       last_was_idle=0
       sleep "$INTERVAL"
       continue
     }
-
-    # Parse issue numbers
-    issue_numbers=$(echo "$issues_json" | python3 -c "
-import sys, json
-issues = json.load(sys.stdin)
-for i in issues:
-    print(i['number'])
-" 2>/dev/null) || true
 
     if [[ -n $issue_numbers ]]; then
       (( last_was_idle )) && printf "\n"

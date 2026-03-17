@@ -126,8 +126,9 @@ Potential topics (ask in this order, skipping any that are clearly implied):
 3) **User-facing behavior** (CLI flags, config, outputs): Ask for concrete examples (sample commands/outputs) if relevant.
 4) **Base branch**: If the project has version branches (e.g., `8.x`, `7.17`) or the work should branch from something other than the default branch, ask which base branch to use. Default is the repo's default branch (usually `main`) — only include `base` in frontmatter if it differs from the default.
 5) **Constraints** (perf, compatibility, deps, security): Confirm "no breaking changes" by default; ask if any special constraints apply.
-6) **Acceptance criteria**: Convert the user's intent into checkable commands/expected results. Propose a default set of checks based on repo conventions.
-7) **Rough task breakdown**: If the user doesn't have tasks, draft them yourself and keep them small/checkable.
+6) **Dependencies**: If this spec logically depends on other specs/issues being completed first, ask for the issue numbers. Only ask when relevant (e.g., the feature builds on another planned change). Skip for standalone features.
+7) **Acceptance criteria**: Convert the user's intent into checkable commands/expected results. Propose a default set of checks based on repo conventions.
+8) **Rough task breakdown**: If the user doesn't have tasks, draft them yourself and keep them small/checkable.
 
 ### Stopping rule
 You're done interviewing when you can fill every required field in the spec template with concrete, self-contained information (defaults are allowed if clearly stated).
@@ -136,11 +137,18 @@ You're done interviewing when you can fill every required field in the spec temp
 Once you have enough info:
 - Draft the spec body in the exact template format (see below), including frontmatter
 - If created from a source issue, include the source reference in the spec body
+- Determine the initial status label:
+  - If the spec has **no dependencies** → use `status:ready`
+  - If the spec has dependencies, check each dep issue for a `status:done` label:
+    - **All deps done** → use `status:ready` (no point blocking)
+    - **Any dep not done** → use `status:blocked`
+  - Check dep labels with: `gh issue view <number> --json labels --jq '.labels[].name'`
 - Create a GitHub Issue using `gh issue create --repo <origin-repo>` with:
   - **Title:** `Feature Name` (clean title, no branch prefix)
-  - **Labels:** `spec,status:ready`
+  - **Labels:** `spec,status:ready` or `spec,status:blocked` (based on dependency check above)
   - **Body:** The spec content with frontmatter (see template below)
 - Display the issue URL so the user can review
+- If created with `status:blocked`, report: "Created with status:blocked — waiting on #X, #Y" (listing the unmet dependency issue numbers)
 
 If anything is ambiguous, ask the minimum follow-up questions, then create the issue.
 
@@ -163,10 +171,13 @@ The issue body starts with YAML-style frontmatter containing the `branch` name (
 
 **Source issue line:** Only include the `Source issue:` line if the spec was created from an existing GitHub issue. Use `#<number>` for same-repo issues or `<owner/repo>#<number>` for cross-repo references.
 
+If the spec has dependencies, add a `depends` frontmatter block at the top of the body (before the heading). Omit the frontmatter entirely if there are no dependencies.
+
 ```markdown
 ---
 branch: <branch-name>
 base: <base-branch>          # optional — omit if branching from default (main)
+depends: [11, 17]            # optional — omit if no dependencies
 ---
 # Spec: <Feature Name>
 
@@ -249,7 +260,11 @@ Each step follows this structure:
 ```
 
 ## Creating the Issue
-Use this command to create the issue (replace placeholders):
+Use this command to create the issue (replace placeholders).
+
+The `--label` value depends on dependency status:
+- No dependencies, or all dependencies already `status:done` → `spec,status:ready`
+- Any dependency not yet `status:done` → `spec,status:blocked`
 
 ```zsh
 gh issue create \

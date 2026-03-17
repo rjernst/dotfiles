@@ -121,6 +121,290 @@ STUB
   chmod +x "$BATS_TEST_TMPDIR/bin/git"
 }
 
+# --- parse_frontmatter tests ---
+
+@test "parse_frontmatter: bracket list with multiple values" {
+  run zsh -c '
+    eval "$(sed -n "/^parse_frontmatter/,/^}/p" "'"$RALPH"'")"
+    body="---
+depends: [11, 17]
+branch: my-branch
+---
+Some content"
+    parse_frontmatter depends "$body"
+  '
+  [ "$status" -eq 0 ]
+  [ "$output" = "11 17" ]
+}
+
+@test "parse_frontmatter: bracket list with single value" {
+  run zsh -c '
+    eval "$(sed -n "/^parse_frontmatter/,/^}/p" "'"$RALPH"'")"
+    body="---
+depends: [11]
+---
+Some content"
+    parse_frontmatter depends "$body"
+  '
+  [ "$status" -eq 0 ]
+  [ "$output" = "11" ]
+}
+
+@test "parse_frontmatter: scalar value" {
+  run zsh -c '
+    eval "$(sed -n "/^parse_frontmatter/,/^}/p" "'"$RALPH"'")"
+    body="---
+depends: 11
+---
+Some content"
+    parse_frontmatter depends "$body"
+  '
+  [ "$status" -eq 0 ]
+  [ "$output" = "11" ]
+}
+
+@test "parse_frontmatter: bracket list with three values" {
+  run zsh -c '
+    eval "$(sed -n "/^parse_frontmatter/,/^}/p" "'"$RALPH"'")"
+    body="---
+depends: [11, 17, 18]
+---
+Some content"
+    parse_frontmatter depends "$body"
+  '
+  [ "$status" -eq 0 ]
+  [ "$output" = "11 17 18" ]
+}
+
+@test "parse_frontmatter: missing field returns empty" {
+  run zsh -c '
+    eval "$(sed -n "/^parse_frontmatter/,/^}/p" "'"$RALPH"'")"
+    body="---
+branch: my-branch
+---
+Some content"
+    parse_frontmatter depends "$body"
+  '
+  [ "$status" -eq 0 ]
+  [ "$output" = "" ]
+}
+
+@test "parse_frontmatter: no frontmatter returns empty" {
+  run zsh -c '
+    eval "$(sed -n "/^parse_frontmatter/,/^}/p" "'"$RALPH"'")"
+    body="Some content without frontmatter"
+    parse_frontmatter depends "$body"
+  '
+  [ "$status" -eq 0 ]
+  [ "$output" = "" ]
+}
+
+@test "parse_frontmatter: extracts branch field" {
+  run zsh -c '
+    eval "$(sed -n "/^parse_frontmatter/,/^}/p" "'"$RALPH"'")"
+    body="---
+branch: workon-skill
+depends: [11, 17]
+---
+Some content"
+    parse_frontmatter branch "$body"
+  '
+  [ "$status" -eq 0 ]
+  [ "$output" = "workon-skill" ]
+}
+
+@test "parse_frontmatter: strips whitespace in list values" {
+  run zsh -c '
+    eval "$(sed -n "/^parse_frontmatter/,/^}/p" "'"$RALPH"'")"
+    body="---
+depends: [ 11 , 17 ]
+---
+Some content"
+    parse_frontmatter depends "$body"
+  '
+  [ "$status" -eq 0 ]
+  [ "$output" = "11 17" ]
+}
+
+# --- check_dependencies tests ---
+
+# Helper: extract check_dependencies (needs parse_frontmatter too for unblock tests)
+# We source check_dependencies and stub gh in each test.
+
+@test "check_dependencies: all deps done returns 0" {
+  cat > "$BATS_TEST_TMPDIR/bin/gh" <<'STUB'
+#!/bin/bash
+if [[ "$1" == "issue" && "$2" == "view" ]]; then
+  # Simulates: gh issue view N --json labels -q '[.labels[].name] | join(",")'
+  echo "spec,status:done"
+  exit 0
+fi
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/gh"
+
+  run zsh -c '
+    export PATH="'"$BATS_TEST_TMPDIR/bin"':$PATH"
+    eval "$(sed -n "/^check_dependencies/,/^}/p" "'"$RALPH"'")"
+    check_dependencies "11 17" "owner/repo"
+  '
+  [ "$status" -eq 0 ]
+  [ "$output" = "" ]
+}
+
+@test "check_dependencies: some deps not done returns 1 with unmet list" {
+  cat > "$BATS_TEST_TMPDIR/bin/gh" <<'STUB'
+#!/bin/bash
+if [[ "$1" == "issue" && "$2" == "view" ]]; then
+  num="$3"
+  if [ "$num" = "11" ]; then
+    echo "spec,status:done"
+  else
+    echo "spec,status:in-progress"
+  fi
+  exit 0
+fi
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/gh"
+
+  run zsh -c '
+    export PATH="'"$BATS_TEST_TMPDIR/bin"':$PATH"
+    eval "$(sed -n "/^check_dependencies/,/^}/p" "'"$RALPH"'")"
+    check_dependencies "11 17" "owner/repo"
+  '
+  [ "$status" -eq 1 ]
+  [ "$output" = "17" ]
+}
+
+@test "check_dependencies: gh failure treats dep as unmet" {
+  cat > "$BATS_TEST_TMPDIR/bin/gh" <<'STUB'
+#!/bin/bash
+exit 1
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/gh"
+
+  run zsh -c '
+    export PATH="'"$BATS_TEST_TMPDIR/bin"':$PATH"
+    eval "$(sed -n "/^check_dependencies/,/^}/p" "'"$RALPH"'")"
+    check_dependencies "11" "owner/repo"
+  '
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"11"* ]]
+}
+
+# --- unblock_ready_specs tests ---
+
+@test "unblock_ready_specs: transitions blocked to ready when deps met" {
+  export GH_LOG="$BATS_TEST_TMPDIR/gh.log"
+  cat > "$BATS_TEST_TMPDIR/bin/gh" <<'STUB'
+#!/bin/bash
+echo "$@" >> "$GH_LOG"
+case "$1" in
+  issue)
+    case "$2" in
+      list)
+        echo "5"
+        ;;
+      view)
+        if [[ " $* " == *" -q .body "* ]]; then
+          printf -- '---\ndepends: [11]\n---\nSome spec'
+        else
+          # check_dependencies: issue 11 is done
+          echo "spec,status:done"
+        fi
+        ;;
+      edit) ;;
+    esac
+    ;;
+esac
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/gh"
+
+  run zsh -c '
+    export PATH="'"$BATS_TEST_TMPDIR/bin"':$PATH"
+    eval "$(sed -n "/^parse_frontmatter/,/^}/p" "'"$RALPH"'")"
+    eval "$(sed -n "/^check_dependencies/,/^}/p" "'"$RALPH"'")"
+    eval "$(sed -n "/^unblock_ready_specs/,/^}/p" "'"$RALPH"'")"
+    unblock_ready_specs "owner/repo"
+  '
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"unblocked issue #5"* ]]
+  grep -q "issue edit 5 --remove-label status:blocked --add-label status:ready" "$GH_LOG"
+}
+
+@test "unblock_ready_specs: leaves blocked when deps unmet" {
+  export GH_LOG="$BATS_TEST_TMPDIR/gh.log"
+  cat > "$BATS_TEST_TMPDIR/bin/gh" <<'STUB'
+#!/bin/bash
+echo "$@" >> "$GH_LOG"
+case "$1" in
+  issue)
+    case "$2" in
+      list)
+        echo "5"
+        ;;
+      view)
+        if [[ " $* " == *" -q .body "* ]]; then
+          printf -- '---\ndepends: [11]\n---\nSome spec'
+        else
+          # check_dependencies: issue 11 is NOT done
+          echo "spec,status:in-progress"
+        fi
+        ;;
+      edit) ;;
+    esac
+    ;;
+esac
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/gh"
+
+  run zsh -c '
+    export PATH="'"$BATS_TEST_TMPDIR/bin"':$PATH"
+    eval "$(sed -n "/^parse_frontmatter/,/^}/p" "'"$RALPH"'")"
+    eval "$(sed -n "/^check_dependencies/,/^}/p" "'"$RALPH"'")"
+    eval "$(sed -n "/^unblock_ready_specs/,/^}/p" "'"$RALPH"'")"
+    unblock_ready_specs "owner/repo"
+  '
+  [ "$status" -eq 0 ]
+  # Should NOT have edited the issue to unblock
+  ! grep -q "issue edit 5" "$GH_LOG"
+}
+
+@test "unblock_ready_specs: unblocks spec with no depends field" {
+  export GH_LOG="$BATS_TEST_TMPDIR/gh.log"
+  cat > "$BATS_TEST_TMPDIR/bin/gh" <<'STUB'
+#!/bin/bash
+echo "$@" >> "$GH_LOG"
+case "$1" in
+  issue)
+    case "$2" in
+      list)
+        echo "8"
+        ;;
+      view)
+        if [[ " $* " == *" -q .body "* ]]; then
+          printf -- '---\nbranch: my-branch\n---\nSome spec with no depends'
+        fi
+        ;;
+      edit) ;;
+    esac
+    ;;
+esac
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/gh"
+
+  run zsh -c '
+    export PATH="'"$BATS_TEST_TMPDIR/bin"':$PATH"
+    eval "$(sed -n "/^parse_frontmatter/,/^}/p" "'"$RALPH"'")"
+    eval "$(sed -n "/^check_dependencies/,/^}/p" "'"$RALPH"'")"
+    eval "$(sed -n "/^unblock_ready_specs/,/^}/p" "'"$RALPH"'")"
+    unblock_ready_specs "owner/repo"
+  '
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"unblocked issue #8"* ]]
+  [[ "$output" == *"no dependencies declared"* ]]
+  grep -q "issue edit 8 --remove-label status:blocked --add-label status:ready" "$GH_LOG"
+}
+
 # --- help / usage tests ---
 
 @test "ralph --help shows usage" {
@@ -978,7 +1262,7 @@ echo "$@" >> "$GH_LOG"
 case "$1" in
   issue)
     case "$2" in
-      list) echo "[]" ;;  # No ready issues
+      list) echo "" ;;  # No issues
     esac
     ;;
 esac
@@ -991,7 +1275,7 @@ STUB
   run zsh "$RALPH" --poll --interval 1s --timeout 1s
   [ "$status" -eq 0 ]
   # Should have called gh issue list with correct flags
-  grep -q 'issue list --label spec,status:ready --author @me --repo owner/repo --json number,title' "$GH_LOG"
+  grep -q 'issue list --label spec,status:ready --author @me --repo owner/repo --json number -q' "$GH_LOG"
 }
 
 @test "ralph --poll --interval 10s uses custom interval" {
@@ -1002,7 +1286,7 @@ echo "$@" >> "$GH_LOG"
 case "$1" in
   issue)
     case "$2" in
-      list) echo "[]" ;;
+      list) echo "" ;;
     esac
     ;;
 esac
@@ -1023,7 +1307,7 @@ STUB
 case "$1" in
   issue)
     case "$2" in
-      list) echo "[]" ;;
+      list) echo "" ;;
     esac
     ;;
 esac
@@ -1039,7 +1323,6 @@ STUB
 
 @test "ralph --poll processes multiple ready issues sequentially" {
   export GH_LOG="$BATS_TEST_TMPDIR/gh.log"
-  POLL_ITERATION=0
   cat > "$BATS_TEST_TMPDIR/bin/gh" <<'STUB'
 #!/bin/bash
 echo "$@" >> "$GH_LOG"
@@ -1047,12 +1330,15 @@ case "$1" in
   issue)
     case "$2" in
       list)
-        # Return two issues on first call, empty on subsequent
-        if [ ! -f "$BATS_TEST_TMPDIR/poll_done" ]; then
+        if [[ " $* " == *"status:blocked"* ]]; then
+          # unblock_ready_specs: no blocked issues
+          echo ""
+        elif [ ! -f "$BATS_TEST_TMPDIR/poll_done" ]; then
+          # First ready-issue query: return two issue numbers
           touch "$BATS_TEST_TMPDIR/poll_done"
-          echo '[{"number":10,"title":"[branch-a] First"},{"number":20,"title":"[branch-b] Second"}]'
+          printf '10\n20\n'
         else
-          echo "[]"
+          echo ""
         fi
         ;;
       view)
@@ -1066,9 +1352,9 @@ case "$1" in
           fi
         elif [[ " $* " == *" -q .body "* ]]; then
           if [ "$num" = "10" ]; then
-            printf '## Tasks\n- [ ] Do A'
+            echo "## Tasks"
           else
-            printf '## Tasks\n- [ ] Do B'
+            echo "## Tasks"
           fi
         fi
         ;;
@@ -1088,6 +1374,145 @@ STUB
   [[ "$output" == *"found ready issue #20"* ]]
   [[ "$output" == *"processing issue #10"* ]]
   [[ "$output" == *"processing issue #20"* ]]
+}
+
+@test "ralph --poll calls unblock_ready_specs at start of each cycle" {
+  export GH_LOG="$BATS_TEST_TMPDIR/gh.log"
+  cat > "$BATS_TEST_TMPDIR/bin/gh" <<'STUB'
+#!/bin/bash
+echo "$@" >> "$GH_LOG"
+case "$1" in
+  issue)
+    case "$2" in
+      list)
+        # Return empty for both blocked and ready queries
+        echo ""
+        ;;
+    esac
+    ;;
+esac
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/gh"
+
+  export GIT_TOPLEVEL="$PROJECT"
+  cd "$PROJECT"
+  run zsh "$RALPH" --poll --interval 1s --timeout 1s
+  [ "$status" -eq 0 ]
+  # Should have called gh issue list for blocked issues (unblock_ready_specs)
+  grep -q 'issue list --label status:blocked --label spec --repo owner/repo --json number -q' "$GH_LOG"
+}
+
+@test "ralph --issue calls unblock_ready_specs after marking done" {
+  export GH_LOG="$BATS_TEST_TMPDIR/gh.log"
+  cat > "$BATS_TEST_TMPDIR/bin/gh" <<'STUB'
+#!/bin/bash
+echo "$@" >> "$GH_LOG"
+case "$1" in
+  issue)
+    case "$2" in
+      list)
+        # For unblock_ready_specs call — return empty
+        echo ""
+        ;;
+      view)
+        if [[ " $* " == *" -q .title "* ]]; then
+          echo "[done-unblock-test] Test"
+        elif [[ " $* " == *" -q .body "* ]]; then
+          echo "body"
+        fi
+        ;;
+      edit) ;;
+    esac
+    ;;
+esac
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/gh"
+
+  export GIT_TOPLEVEL="$PROJECT"
+  cd "$PROJECT"
+  # GIT_HEAD stays constant so HEAD before == after → marks done
+  run zsh "$RALPH" --issue 5
+  [ "$status" -eq 0 ]
+  # Should have set done
+  grep -q "issue edit 5 --remove-label status:in-progress --add-label status:done" "$GH_LOG"
+  # Should have called unblock_ready_specs after done (scans blocked issues)
+  grep -q 'issue list --label status:blocked --label spec --repo owner/repo --json number -q' "$GH_LOG"
+}
+
+@test "ralph --issue blocks spec with unmet dependencies" {
+  export GH_LOG="$BATS_TEST_TMPDIR/gh.log"
+  cat > "$BATS_TEST_TMPDIR/bin/gh" <<'STUB'
+#!/bin/bash
+echo "$@" >> "$GH_LOG"
+case "$1" in
+  issue)
+    case "$2" in
+      view)
+        if [[ " $* " == *" -q .title "* ]]; then
+          echo "[deps-test] Test with deps"
+        elif [[ " $* " == *" -q .body "* ]]; then
+          printf -- '---\nbranch: deps-test\ndepends: [11]\n---\nSome spec'
+        elif [[ " $* " == *"--json labels"* ]]; then
+          # Issue 11 is NOT done
+          echo "spec,status:in-progress"
+        fi
+        ;;
+      edit) ;;
+    esac
+    ;;
+esac
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/gh"
+
+  export GIT_TOPLEVEL="$PROJECT"
+  cd "$PROJECT"
+  run zsh "$RALPH" --issue 42
+  [ "$status" -eq 0 ]
+  # Should have transitioned to blocked
+  grep -q "issue edit 42 --remove-label status:ready --add-label status:blocked" "$GH_LOG"
+  # Should report unmet dependencies
+  [[ "$output" == *"unmet dependencies"* ]]
+  [[ "$output" == *"status:blocked"* ]]
+  # Should NOT have run docker (no container started)
+  [ ! -f "$DOCKER_LOG" ] || ! grep -q "run" "$DOCKER_LOG"
+}
+
+@test "ralph --issue proceeds when all dependencies are met" {
+  export GH_LOG="$BATS_TEST_TMPDIR/gh.log"
+  cat > "$BATS_TEST_TMPDIR/bin/gh" <<'STUB'
+#!/bin/bash
+echo "$@" >> "$GH_LOG"
+case "$1" in
+  issue)
+    case "$2" in
+      list)
+        echo ""
+        ;;
+      view)
+        if [[ " $* " == *" -q .title "* ]]; then
+          echo "[deps-ok-test] Test with met deps"
+        elif [[ " $* " == *" -q .body "* ]]; then
+          printf -- '---\nbranch: deps-ok-test\ndepends: [11]\n---\nSome spec'
+        elif [[ " $* " == *"--json labels"* ]]; then
+          # Issue 11 IS done
+          echo "spec,status:done"
+        fi
+        ;;
+      edit) ;;
+    esac
+    ;;
+esac
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/gh"
+
+  export GIT_TOPLEVEL="$PROJECT"
+  cd "$PROJECT"
+  run zsh "$RALPH" --issue 42
+  [ "$status" -eq 0 ]
+  # Should NOT have transitioned to blocked
+  ! grep -q "status:blocked" "$GH_LOG"
+  # Should have proceeded to process (docker run)
+  [[ "$output" == *"processing issue #42"* ]]
 }
 
 @test "ralph --interval without --poll errors" {
