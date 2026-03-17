@@ -36,6 +36,8 @@ done <<< "$staged"
 
 if (( ${#zsh_files[@]} > 0 )) && command -v zsh &>/dev/null; then
   for f in "${zsh_files[@]}"; do
+    # Skip non-zsh scripts (e.g. Python)
+    head -1 "$f" 2>/dev/null | grep -q 'python' && continue
     if ! zsh -n "$f" 2>/dev/null; then
       echo "FAIL: zsh -n $f"
       errors=$((errors + 1))

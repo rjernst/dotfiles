@@ -1,818 +1,740 @@
-#!/usr/bin/env zsh
-
-# ta-wt — Worktree manager
-# Subcommands: list, create, remove, prune, status, merge
-
-set -eu
-
-# Capture script directory at top level ($0 is function name inside functions)
-_script_dir="${0:A:h}"
-
-usage() {
-  echo "usage: ta wt <command> [args...]"
-  echo ""
-  echo "Commands:"
-  echo "  list      List all worktrees with enriched status"
-  echo "  create    Create a worktree tracking a remote branch"
-  echo "  remove    Remove a worktree by branch name"
-  echo "  prune     Remove worktrees merged into main"
-  echo "  merge     Squash-merge a branch into main with cleanup"
-  echo "  status    Quick one-line status of each worktree"
-  exit 2
-}
-
-if [[ $# -eq 0 ]]; then
-  usage
-fi
-
-# --- shared state populated by cmd_list's parser ---
-typeset -a wt_paths wt_branches
-typeset current_wt
-
-# --- list subcommand ---
-cmd_list() {
-  local json=false
-  local full=false
-
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      --json) json=true; shift ;;
-      --full) full=true; shift ;;
-      *) echo "ta: unknown option '$1'" >&2; exit 2 ;;
-    esac
-  done
-
-  _parse_worktrees
-
-  if [[ "$json" == true ]]; then
-    _list_json "$full"
-  else
-    _list_text "$full"
-  fi
-}
-
-_dirty_status() {
-  local wt_dir="$1"
-  local staged=0 modified=0 untracked=0
-  local porcelain_status
-  porcelain_status="$(git -C "$wt_dir" status --porcelain 2>/dev/null || true)"
-
-  local sline
-  while IFS= read -r sline; do
-    [[ -z "$sline" ]] && continue
-    local xy="${sline:0:2}"
-    if [[ "${xy:0:1}" == "?" ]]; then
-      untracked=$(( untracked + 1 ))
-    else
-      if [[ "${xy:0:1}" != " " && "${xy:0:1}" != "?" ]]; then
-        staged=$(( staged + 1 ))
-      fi
-      if [[ "${xy:1:1}" != " " && "${xy:1:1}" != "?" ]]; then
-        modified=$(( modified + 1 ))
-      fi
-    fi
-  done <<< "$porcelain_status"
-
-  local total=$(( staged + modified + untracked ))
-  if (( total == 0 )); then
-    echo "clean"
-  else
-    local parts=()
-    if (( staged > 0 )); then parts+=("${staged}S"); fi
-    if (( modified > 0 )); then parts+=("${modified}M"); fi
-    if (( untracked > 0 )); then parts+=("${untracked}U"); fi
-    echo "dirty(${(j:,:)parts})"
-  fi
-}
-
-_ahead_behind() {
-  local ab_branch="$1" base="${2:-main}"
-  if [[ "$ab_branch" == "(detached)" ]]; then
-    echo "0 0"
-    return
-  fi
-  local ab_result
-  ab_result="$(git rev-list --left-right --count "${ab_branch}...${base}" 2>/dev/null)" || { echo "0 0"; return; }
-  # Output is tab-separated; normalize to space
-  echo "${ab_result//$'\t'/ }"
-}
-
-_list_text() {
-  local full="$1"
-
-  if [[ "$full" == true ]]; then
-    printf "%-24s %-14s %-6s %-7s %-30s %s\n" "BRANCH" "STATUS" "AHEAD" "BEHIND" "LAST COMMIT" "PATH"
-  else
-    printf "%-24s %-14s %-6s %-7s %s\n" "BRANCH" "STATUS" "AHEAD" "BEHIND" "PATH"
-  fi
-
-  local i wt_dir wt_branch wt_status ab ahead behind commit_msg
-  for (( i=1; i<=${#wt_paths[@]}; i++ )); do
-    wt_dir="${wt_paths[$i]}"
-    wt_branch="${wt_branches[$i]}"
-
-    if [[ "$wt_dir" == "$current_wt" ]]; then
-      wt_status="current"
-    else
-      wt_status="$(_dirty_status "$wt_dir")"
-    fi
-
-    ab="$(_ahead_behind "$wt_branch")"
-    ahead="${ab%% *}"
-    behind="${ab##* }"
-
-    if [[ "$full" == true ]]; then
-      commit_msg="$(git -C "$wt_dir" log -1 --format='%s (%cr)' 2>/dev/null || echo "—")"
-      # Truncate commit message if too long
-      if (( ${#commit_msg} > 28 )); then
-        commit_msg="${commit_msg:0:25}..."
-      fi
-      printf "%-24s %-14s %-6s %-7s %-30s %s\n" "$wt_branch" "$wt_status" "$ahead" "$behind" "$commit_msg" "$wt_dir"
-    else
-      printf "%-24s %-14s %-6s %-7s %s\n" "$wt_branch" "$wt_status" "$ahead" "$behind" "$wt_dir"
-    fi
-  done
-}
-
-_list_json() {
-  local full="$1"
-  local json_arr="["
-  local first=true
-
-  local i wt_dir wt_branch wt_status ab ahead behind commit_msg commit_date
-  for (( i=1; i<=${#wt_paths[@]}; i++ )); do
-    wt_dir="${wt_paths[$i]}"
-    wt_branch="${wt_branches[$i]}"
-
-    if [[ "$wt_dir" == "$current_wt" ]]; then
-      wt_status="current"
-    else
-      wt_status="$(_dirty_status "$wt_dir")"
-    fi
-
-    ab="$(_ahead_behind "$wt_branch")"
-    ahead="${ab%% *}"
-    behind="${ab##* }"
-
-    [[ "$first" == true ]] && first=false || json_arr+=","
-
-    if [[ "$full" == true ]]; then
-      commit_msg="$(git -C "$wt_dir" log -1 --format='%s' 2>/dev/null || echo "")"
-      commit_date="$(git -C "$wt_dir" log -1 --format='%aI' 2>/dev/null || echo "")"
-      json_arr+="$(jq -n \
-        --arg branch "$wt_branch" \
-        --arg status "$wt_status" \
-        --argjson ahead "$ahead" \
-        --argjson behind "$behind" \
-        --arg path "$wt_dir" \
-        --arg commit_msg "$commit_msg" \
-        --arg commit_date "$commit_date" \
-        '{branch: $branch, status: $status, ahead: $ahead, behind: $behind, path: $path, commit_message: $commit_msg, commit_date: $commit_date}')"
-    else
-      json_arr+="$(jq -n \
-        --arg branch "$wt_branch" \
-        --arg status "$wt_status" \
-        --argjson ahead "$ahead" \
-        --argjson behind "$behind" \
-        --arg path "$wt_dir" \
-        '{branch: $branch, status: $status, ahead: $ahead, behind: $behind, path: $path}')"
-    fi
-  done
-
-  json_arr+="]"
-  echo "$json_arr" | jq .
-}
-
-# --- helper: parse worktrees into shared arrays ---
-# Populates wt_paths and wt_branches arrays, and sets current_wt.
-# Call this before using the arrays. cmd_list calls this internally.
-_parse_worktrees() {
-  wt_paths=()
-  wt_branches=()
-  current_wt="$(pwd -P)"
-
-  local wt_dir="" wt_branch="" wt_bare=false wt_detached=false
-
-  local porcelain
-  porcelain="$(git worktree list --porcelain)"
-  porcelain+=$'\n'
-
-  local line
-  while IFS= read -r line; do
-    if [[ "$line" == "worktree "* ]]; then
-      wt_dir="${line#worktree }"
-    elif [[ "$line" == "branch "* ]]; then
-      wt_branch="${line#branch refs/heads/}"
-    elif [[ "$line" == "HEAD "* ]]; then
-      : # skip HEAD hash
-    elif [[ "$line" == "bare" ]]; then
-      wt_bare=true
-    elif [[ "$line" == "detached" ]]; then
-      wt_detached=true
-    elif [[ -z "$line" ]]; then
-      [[ -z "$wt_dir" ]] && continue
-      if [[ "$wt_bare" == true ]]; then
-        wt_dir="" wt_branch="" wt_bare=false wt_detached=false
-        continue
-      fi
-      if [[ "$wt_detached" == true ]]; then
-        wt_branch="(detached)"
-      fi
-      wt_paths+=("$wt_dir")
-      wt_branches+=("$wt_branch")
-      wt_dir="" wt_branch="" wt_bare=false wt_detached=false
-    fi
-  done <<< "$porcelain"
-}
-
-# --- helper: classify worktree status ---
-# Returns: current, merged, wip, conflict, almost, ready
-_classify_status() {
-  local wt_dir="$1" wt_branch="$2" base="${3:-main}"
-
-  # Current worktree
-  if [[ "$wt_dir" == "$current_wt" ]]; then
-    echo "current"
-    return
-  fi
-
-  # Merged into base (true merge or squash-merge)
-  if git merge-base --is-ancestor "$wt_branch" "$base" 2>/dev/null; then
-    echo "merged"
-    return
-  fi
-  # Squash-merge detection: if merging branch into base produces base's same tree,
-  # then all branch content is already incorporated
-  if [[ "$(git merge-tree --write-tree "$base" "$wt_branch" 2>/dev/null | head -1)" == "$(git rev-parse "${base}^{tree}" 2>/dev/null)" ]]; then
-    echo "merged"
-    return
-  fi
-  # Squash-merge fallback: check if a merged PR exists for this branch
-  if command -v gh > /dev/null 2>&1; then
-    local pr_result
-    pr_result="$(gh pr list --head "$wt_branch" --state merged --json number --limit 1 2>/dev/null)" || true
-    if [[ -n "$pr_result" && "$pr_result" != "[]" ]]; then
-      echo "merged"
-      return
-    fi
-  fi
-
-  # Dirty working tree
-  local dirty
-  dirty="$(_dirty_status "$wt_dir")"
-  if [[ "$dirty" != "clean" ]]; then
-    echo "wip"
-    return
-  fi
-
-  # Conflict detection: use git merge-tree (three-way) to check
-  local merge_base
-  merge_base="$(git merge-base "$base" "$wt_branch" 2>/dev/null)" || true
-  if [[ -n "$merge_base" ]]; then
-    local merge_result
-    merge_result="$(git merge-tree "$merge_base" "$base" "$wt_branch" 2>/dev/null)" || true
-    if [[ "$merge_result" == *"<<<"* ]] || [[ "$merge_result" == *"changed in both"* ]]; then
-      echo "conflict"
-      return
-    fi
-  fi
-
-  # Check if ahead of base
-  local ab
-  ab="$(_ahead_behind "$wt_branch" "$base")"
-  local ahead="${ab%% *}"
-
-  if (( ahead > 0 )); then
-    # Check if branch has unpushed commits (no upstream or ahead of upstream)
-    local upstream_count
-    upstream_count="$(git rev-list --count "${wt_branch}@{upstream}..${wt_branch}" 2>/dev/null)" || upstream_count=""
-    if [[ -z "$upstream_count" ]] || (( upstream_count > 0 )); then
-      echo "almost"
-      return
-    fi
-    echo "ready"
-    return
-  fi
-
-  echo "ready"
-}
-
-# --- helper: check for active git operations in a worktree ---
-_has_active_operation() {
-  local wt_dir="$1"
-  local git_dir
-  git_dir="$(git -C "$wt_dir" rev-parse --git-dir 2>/dev/null)" || return 1
-
-  # Make absolute if relative
-  if [[ "$git_dir" != /* ]]; then
-    git_dir="$wt_dir/$git_dir"
-  fi
-
-  [[ -d "$git_dir/rebase-merge" ]] || [[ -d "$git_dir/rebase-apply" ]] || \
-  [[ -f "$git_dir/MERGE_HEAD" ]] || [[ -f "$git_dir/CHERRY_PICK_HEAD" ]]
-}
-
-# --- prune subcommand ---
-cmd_prune() {
-  local apply=false
-
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      --apply) apply=true; shift ;;
-      *) echo "ta: unknown option '$1'" >&2; exit 2 ;;
-    esac
-  done
-
-  _parse_worktrees
-
-  local found=false
-  local i wt_dir wt_branch
-  for (( i=1; i<=${#wt_paths[@]}; i++ )); do
-    wt_dir="${wt_paths[$i]}"
-    wt_branch="${wt_branches[$i]}"
-
-    # Skip main branch
-    [[ "$wt_branch" == "main" ]] && continue
-    # Skip detached
-    [[ "$wt_branch" == "(detached)" ]] && continue
-    # Skip current worktree
-    [[ "$wt_dir" == "$current_wt" ]] && continue
-
-    # Check if merged into main (true merge, squash-merge, or merged PR)
-    local is_merged=false
-    if git merge-base --is-ancestor "$wt_branch" main 2>/dev/null; then
-      is_merged=true
-    elif [[ "$(git merge-tree --write-tree main "$wt_branch" 2>/dev/null | head -1)" == "$(git rev-parse 'main^{tree}' 2>/dev/null)" ]]; then
-      is_merged=true
-    elif command -v gh > /dev/null 2>&1; then
-      local pr_result
-      pr_result="$(gh pr list --head "$wt_branch" --state merged --json number --limit 1 2>/dev/null)" || true
-      if [[ -n "$pr_result" && "$pr_result" != "[]" ]]; then
-        is_merged=true
-      fi
-    fi
-    if [[ "$is_merged" == false ]]; then
-      continue
-    fi
-
-    # Check for dirty working tree
-    local dirty="$(_dirty_status "$wt_dir")"
-    if [[ "$dirty" != "clean" ]]; then
-      echo "ta: skipping '$wt_branch' (uncommitted changes: $dirty)"
-      continue
-    fi
-
-    # Check for active operations
-    if _has_active_operation "$wt_dir"; then
-      echo "ta: skipping '$wt_branch' (active git operation in progress)"
-      continue
-    fi
-
-    found=true
-    if [[ "$apply" == true ]]; then
-      cmd_remove "$wt_branch"
-    else
-      echo "ta: would remove '$wt_branch' ($wt_dir) [merged]"
-    fi
-  done
-
-  if [[ "$found" == false ]]; then
-    echo "ta: no worktrees to prune"
-  fi
-}
-
-# --- status subcommand ---
-cmd_status() {
-  local json=false
-
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      --json) json=true; shift ;;
-      *) echo "ta: unknown option '$1'" >&2; exit 2 ;;
-    esac
-  done
-
-  _parse_worktrees
-
-  if [[ "$json" == true ]]; then
-    _status_json
-  else
-    _status_text
-  fi
-}
-
-_status_text() {
-  local i wt_dir wt_branch classification ab ahead dirty_detail
-  for (( i=1; i<=${#wt_paths[@]}; i++ )); do
-    wt_dir="${wt_paths[$i]}"
-    wt_branch="${wt_branches[$i]}"
-
-    # Skip main
-    [[ "$wt_branch" == "main" ]] && continue
-
-    classification="$(_classify_status "$wt_dir" "$wt_branch")"
-
-    ab="$(_ahead_behind "$wt_branch")"
-    ahead="${ab%% *}"
-
-    dirty_detail="$(_dirty_status "$wt_dir")"
-    if [[ "$dirty_detail" == "clean" ]]; then
-      dirty_detail="clean"
-    fi
-
-    printf "%-24s %-10s %s ahead, %s\n" "$wt_branch" "$classification" "$ahead" "$dirty_detail"
-  done
-}
-
-_status_json() {
-  local json_arr="["
-  local first=true
-
-  local i wt_dir wt_branch classification ab ahead behind dirty_detail
-  for (( i=1; i<=${#wt_paths[@]}; i++ )); do
-    wt_dir="${wt_paths[$i]}"
-    wt_branch="${wt_branches[$i]}"
-
-    # Skip main
-    [[ "$wt_branch" == "main" ]] && continue
-
-    classification="$(_classify_status "$wt_dir" "$wt_branch")"
-    ab="$(_ahead_behind "$wt_branch")"
-    ahead="${ab%% *}"
-    behind="${ab##* }"
-    dirty_detail="$(_dirty_status "$wt_dir")"
-
-    [[ "$first" == true ]] && first=false || json_arr+=","
-
-    json_arr+="$(jq -n \
-      --arg branch "$wt_branch" \
-      --arg status "$classification" \
-      --argjson ahead "$ahead" \
-      --argjson behind "$behind" \
-      --arg dirty "$dirty_detail" \
-      --arg path "$wt_dir" \
-      '{branch: $branch, status: $status, ahead: $ahead, behind: $behind, dirty: $dirty, path: $path}')"
-  done
-
-  json_arr+="]"
-  echo "$json_arr" | jq .
-}
-
-# --- create subcommand ---
-cmd_create() {
-  local branch="" wt_path="" remote="" from_base=""
-
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      --remote) remote="$2"; shift 2 ;;
-      --remote=*) remote="${1#--remote=}"; shift ;;
-      --from=*) from_base="${1#--from=}"; shift ;;
-      -*)
-        echo "ta: unknown option '$1'" >&2
-        exit 2
-        ;;
-      *)
-        if [[ -z "$branch" ]]; then
-          branch="$1"
-        elif [[ -z "$wt_path" ]]; then
-          wt_path="$1"
-        else
-          echo "ta: unexpected argument '$1'" >&2
-          exit 2
-        fi
-        shift
-        ;;
-    esac
-  done
-
-  if [[ -z "$branch" ]]; then
-    echo "usage: ta wt create <branch> [path] [--remote <remote>] [--from=<base>]" >&2
-    exit 2
-  fi
-
-  if [[ -n "$from_base" ]]; then
-    _create_from "$branch" "$wt_path" "$from_base"
-  else
-    # Determine remote: explicit > upstream > origin
-    if [[ -z "$remote" ]]; then
-      if git remote | grep -qx upstream; then
-        remote="upstream"
-      elif git remote | grep -qx origin; then
-        remote="origin"
-      else
-        echo "ta: no remote found (tried upstream, origin)" >&2
-        exit 1
-      fi
-    fi
-    _create_tracking "$branch" "$wt_path" "$remote"
-  fi
-}
-
-# --- create: track existing remote branch (original behavior) ---
-_create_tracking() {
-  local branch="$1" wt_path="$2" remote="$3"
-
-  # Validate branch exists on remote
-  if ! git ls-remote --exit-code --heads "$remote" "refs/heads/$branch" > /dev/null 2>&1; then
-    echo "ta: branch '$branch' not found on remote '$remote'" >&2
-    exit 1
-  fi
-
-  # Generate default path if not provided
-  if [[ -z "$wt_path" ]]; then
-    wt_path="$(_default_wt_path "$branch")"
-  fi
-
-  # Validate target path doesn't exist
-  if [[ -e "$wt_path" ]]; then
-    echo "ta: path already exists: $wt_path" >&2
-    exit 1
-  fi
-
-  # Create the worktree
-  git worktree add --track -b "$branch" "$wt_path" "${remote}/${branch}"
-  echo "$wt_path"
-}
-
-# --- create: new branch from base (--from) ---
-_create_from() {
-  local branch="$1" wt_path="$2" base="$3"
-
-  # Generate default path if not provided
-  if [[ -z "$wt_path" ]]; then
-    wt_path="$(_default_wt_path "$branch")"
-  fi
-
-  # Validate target path doesn't exist
-  if [[ -e "$wt_path" ]]; then
-    echo "ta: path already exists: $wt_path" >&2
-    exit 1
-  fi
-
-  # Check if branch already exists locally
-  if git show-ref --verify --quiet "refs/heads/$branch" 2>/dev/null; then
-    # Branch exists — verify it's a descendant of base
-    if ! git merge-base --is-ancestor "$base" "$branch"; then
-      echo "ta: branch '$branch' is not based on '$base'" >&2
-      exit 1
-    fi
-    # Create worktree for existing branch
-    git worktree add "$wt_path" "$branch"
-  else
-    # Create new branch from base
-    git worktree add -b "$branch" "$wt_path" "$base"
-  fi
-  echo "$wt_path"
-}
-
-# --- helper: generate default worktree path ---
-_default_wt_path() {
-  local branch="$1"
-  local repo_root repo_name sanitized_branch
-  repo_root="$(git rev-parse --show-toplevel)"
-  repo_name="${repo_root:t}"
-  sanitized_branch="${branch//\//-}"
-  echo "${repo_root:h}/${repo_name}-${sanitized_branch}"
-}
-
-# --- remove subcommand ---
-cmd_remove() {
-  local branch="" force=false
-
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      --force) force=true; shift ;;
-      -*)
-        echo "ta: unknown option '$1'" >&2
-        exit 2
-        ;;
-      *)
-        if [[ -z "$branch" ]]; then
-          branch="$1"
-        else
-          echo "ta: unexpected argument '$1'" >&2
-          exit 2
-        fi
-        shift
-        ;;
-    esac
-  done
-
-  if [[ -z "$branch" ]]; then
-    echo "usage: ta wt remove <branch> [--force]" >&2
-    exit 2
-  fi
-
-  # Find worktree path for this branch
-  local wt_dir=""
-  local porcelain parse_dir="" parse_branch=""
-  porcelain="$(git worktree list --porcelain)"
-  porcelain+=$'\n'
-
-  local line
-  while IFS= read -r line; do
-    if [[ "$line" == "worktree "* ]]; then
-      parse_dir="${line#worktree }"
-    elif [[ "$line" == "branch "* ]]; then
-      parse_branch="${line#branch refs/heads/}"
-    elif [[ -z "$line" ]]; then
-      if [[ "$parse_branch" == "$branch" ]]; then
-        wt_dir="$parse_dir"
-        break
-      fi
-      parse_dir="" parse_branch=""
-    fi
-  done <<< "$porcelain"
-
-  if [[ -z "$wt_dir" ]]; then
-    echo "ta: no worktree found for branch '$branch'" >&2
-    exit 1
-  fi
-
-  # Check for dirty working tree (unless --force)
-  if [[ "$force" != true ]]; then
-    local dirty
-    dirty="$(_dirty_status "$wt_dir")"
-    if [[ "$dirty" != "clean" ]]; then
-      echo "ta: worktree '$branch' has uncommitted changes ($dirty)" >&2
-      echo "ta: use --force to remove anyway" >&2
-      exit 1
-    fi
-  fi
-
-  # Remove the worktree
-  if [[ "$force" == true ]]; then
-    git worktree remove --force "$wt_dir"
-  else
-    git worktree remove "$wt_dir"
-  fi
-
-  # Delete the local branch (-D always since worktree removal implies intent)
-  git branch -D "$branch" 2>/dev/null || true
-
-  echo "ta: removed worktree '$branch' ($wt_dir)"
-
-  # Cleanup: kill workspace session (ignore errors)
-  "$_script_dir/ta-workspace" kill "$branch" 2>/dev/null || true
-}
-
-# --- merge subcommand ---
-cmd_merge() {
-  local branch="" target="main" msg="" msg_file=""
-
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      --target) target="$2"; shift 2 ;;
-      --target=*) target="${1#--target=}"; shift ;;
-      --message) msg="$2"; shift 2 ;;
-      --message=*) msg="${1#--message=}"; shift ;;
-      --message-file) msg_file="$2"; shift 2 ;;
-      --message-file=*) msg_file="${1#--message-file=}"; shift ;;
-      -*)
-        echo "ta: unknown option '$1'" >&2
-        exit 2
-        ;;
-      *)
-        if [[ -z "$branch" ]]; then
-          branch="$1"
-        else
-          echo "ta: unexpected argument '$1'" >&2
-          exit 2
-        fi
-        shift
-        ;;
-    esac
-  done
-
-  if [[ -z "$branch" ]]; then
-    echo "usage: ta wt merge <branch> [--target <branch>] [--message <msg> | --message-file <path>]" >&2
-    exit 2
-  fi
-
-  # Validate --message and --message-file are mutually exclusive
-  if [[ -n "$msg" && -n "$msg_file" ]]; then
-    echo "ta: cannot use both --message and --message-file" >&2
-    exit 2
-  fi
-
-  # Validate --message-file exists and is readable
-  if [[ -n "$msg_file" && ! -r "$msg_file" ]]; then
-    echo "ta: message file not found: $msg_file" >&2
-    exit 2
-  fi
-
-  # Resolve target worktree path
-  local main_wt=""
-  local porcelain parse_dir="" parse_branch=""
-  porcelain="$(git worktree list --porcelain)"
-  porcelain+=$'\n'
-
-  local line
-  while IFS= read -r line; do
-    if [[ "$line" == "worktree "* ]]; then
-      parse_dir="${line#worktree }"
-    elif [[ "$line" == "branch "* ]]; then
-      parse_branch="${line#branch refs/heads/}"
-    elif [[ -z "$line" ]]; then
-      if [[ "$parse_branch" == "$target" ]]; then
-        main_wt="$parse_dir"
-      fi
-      parse_dir="" parse_branch=""
-    fi
-  done <<< "$porcelain"
-
-  if [[ -z "$main_wt" ]]; then
-    echo "ta: cannot find worktree for target branch '$target'" >&2
-    exit 1
-  fi
-
-  # Validate branch has a worktree
-  local branch_wt=""
-  parse_dir="" parse_branch=""
-
-  while IFS= read -r line; do
-    if [[ "$line" == "worktree "* ]]; then
-      parse_dir="${line#worktree }"
-    elif [[ "$line" == "branch "* ]]; then
-      parse_branch="${line#branch refs/heads/}"
-    elif [[ -z "$line" ]]; then
-      if [[ "$parse_branch" == "$branch" ]]; then
-        branch_wt="$parse_dir"
-      fi
-      parse_dir="" parse_branch=""
-    fi
-  done <<< "$porcelain"
-
-  if [[ -z "$branch_wt" ]]; then
-    echo "ta: no worktree found for branch '$branch'" >&2
-    exit 2
-  fi
-
-  # Validate branch worktree is clean
-  local dirty
-  dirty="$(_dirty_status "$branch_wt")"
-  if [[ "$dirty" != "clean" ]]; then
-    echo "ta: branch '$branch' has uncommitted changes ($dirty)" >&2
-    exit 1
-  fi
-
-  # Validate target worktree is clean
-  dirty="$(_dirty_status "$main_wt")"
-  if [[ "$dirty" != "clean" ]]; then
-    echo "ta: target worktree '$target' has uncommitted changes ($dirty)" >&2
-    exit 1
-  fi
-
-  # Squash merge
-  if ! git -C "$main_wt" merge --squash "$branch" 2>&1; then
-    echo "ta: merge conflicts detected, aborting merge" >&2
-    git -C "$main_wt" merge --abort 2>/dev/null || true
-    # Clean up any staged changes from the failed squash
-    git -C "$main_wt" reset --hard HEAD 2>/dev/null || true
-    exit 1
-  fi
-
-  # Commit with custom or default message
-  local commit_cmd=(git -C "$main_wt" commit)
-  if [[ -n "$msg_file" ]]; then
-    commit_cmd+=(--file "$msg_file")
-  elif [[ -n "$msg" ]]; then
-    commit_cmd+=(-m "$msg")
-  else
-    commit_cmd+=(-m "Squashed '$branch' into $target")
-  fi
-  if ! "${commit_cmd[@]}" 2>&1; then
-    echo "ta: commit failed" >&2
-    git -C "$main_wt" reset --hard HEAD 2>/dev/null || true
-    exit 1
-  fi
-
-  local commit_hash
-  commit_hash="$(git -C "$main_wt" rev-parse --short HEAD)"
-
-  # Cleanup: remove worktree (force because branch content is now on main)
-  local cleanup_ok=true
-  cmd_remove --force "$branch" 2>&1 || { echo "ta: warning: failed to remove worktree" >&2; cleanup_ok=false; }
-
-  echo "ta: merged '$branch' into $target ($commit_hash)"
-  if [[ "$cleanup_ok" == true ]]; then
-    echo "ta: worktree and branch removed"
-  fi
-}
-
-# --- dispatch ---
-subcmd="$1"
-shift
-
-case "$subcmd" in
-  list)   cmd_list "$@" ;;
-  create) cmd_create "$@" ;;
-  remove) cmd_remove "$@" ;;
-  merge)  cmd_merge "$@" ;;
-  prune)  cmd_prune "$@" ;;
-  status) cmd_status "$@" ;;
-  *)
-    echo "ta: unknown wt command '$subcmd'" >&2
-    exit 2
-    ;;
-esac
+#!/usr/bin/env python3
+"""ta-wt — Worktree manager
+Subcommands: list, create, remove, prune, status, merge
+"""
+
+import argparse
+import json
+import os
+import subprocess
+import sys
+from dataclasses import dataclass
+from typing import List, Tuple
+
+
+# ---------------------------------------------------------------------------
+# Git helper
+# ---------------------------------------------------------------------------
+
+class Git:
+    def __init__(self, cwd=None):
+        self.cwd = cwd
+
+    def run(self, *args, check=True, cwd=None):
+        """Run git command. cwd overrides instance default."""
+        effective_cwd = cwd if cwd is not None else self.cwd
+        return subprocess.run(
+            ["git"] + list(args),
+            cwd=effective_cwd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=check,
+        )
+
+    def output(self, *args, cwd=None):
+        """Run and return stripped stdout. Returns '' on error."""
+        try:
+            result = self.run(*args, check=True, cwd=cwd)
+            return result.stdout.strip()
+        except subprocess.CalledProcessError:
+            return ""
+
+
+# ---------------------------------------------------------------------------
+# Data model
+# ---------------------------------------------------------------------------
+
+@dataclass
+class Worktree:
+    path: str
+    branch: str
+
+
+# ---------------------------------------------------------------------------
+# Core functions
+# ---------------------------------------------------------------------------
+
+def parse_worktrees(git: Git) -> List[Worktree]:
+    """Parse `git worktree list --porcelain`. Skip bare worktrees.
+    Handle detached HEAD as '(detached)'.
+    """
+    try:
+        result = git.run("worktree", "list", "--porcelain")
+    except subprocess.CalledProcessError:
+        return []
+
+    lines = result.stdout.splitlines()
+    # Ensure trailing blank line to flush the last entry
+    if lines and lines[-1] != "":
+        lines.append("")
+
+    worktrees = []
+    wt_path = ""
+    wt_branch = ""
+    wt_bare = False
+    wt_detached = False
+
+    for line in lines:
+        if line.startswith("worktree "):
+            wt_path = line[len("worktree "):]
+        elif line.startswith("branch "):
+            ref = line[len("branch "):]
+            if ref.startswith("refs/heads/"):
+                wt_branch = ref[len("refs/heads/"):]
+            else:
+                wt_branch = ref
+        elif line.startswith("HEAD "):
+            pass  # skip HEAD hash
+        elif line == "bare":
+            wt_bare = True
+        elif line == "detached":
+            wt_detached = True
+        elif line == "":
+            if not wt_path:
+                continue
+            if wt_bare:
+                wt_path = wt_branch = ""
+                wt_bare = wt_detached = False
+                continue
+            if wt_detached:
+                wt_branch = "(detached)"
+            worktrees.append(Worktree(
+                path=os.path.realpath(wt_path),
+                branch=wt_branch,
+            ))
+            wt_path = wt_branch = ""
+            wt_bare = wt_detached = False
+
+    return worktrees
+
+
+def dirty_status(git: Git, wt_dir: str) -> str:
+    """Parse `git status --porcelain`. Return 'clean' or 'dirty(2S,1M,3U)'."""
+    try:
+        result = git.run("status", "--porcelain", cwd=wt_dir)
+    except subprocess.CalledProcessError:
+        return "clean"
+
+    staged = modified = untracked = 0
+    for line in result.stdout.splitlines():
+        if not line:
+            continue
+        xy = line[:2] if len(line) >= 2 else "  "
+        if xy[0] == "?":
+            untracked += 1
+        else:
+            if xy[0] not in (" ", "?"):
+                staged += 1
+            if xy[1] not in (" ", "?"):
+                modified += 1
+
+    total = staged + modified + untracked
+    if total == 0:
+        return "clean"
+
+    parts = []
+    if staged > 0:
+        parts.append(f"{staged}S")
+    if modified > 0:
+        parts.append(f"{modified}M")
+    if untracked > 0:
+        parts.append(f"{untracked}U")
+    return "dirty(" + ",".join(parts) + ")"
+
+
+def ahead_behind(git: Git, branch: str, base: str = "main") -> Tuple[int, int]:
+    """Run `git rev-list --left-right --count`. Return (ahead, behind) as ints."""
+    if branch == "(detached)":
+        return (0, 0)
+    try:
+        result = git.run("rev-list", "--left-right", "--count", f"{branch}...{base}")
+        parts = result.stdout.strip().split()
+        if len(parts) == 2:
+            return (int(parts[0]), int(parts[1]))
+    except (subprocess.CalledProcessError, ValueError):
+        pass
+    return (0, 0)
+
+
+def has_active_operation(git: Git, wt_dir: str) -> bool:
+    """Check for active git operations (rebase, merge, cherry-pick)."""
+    try:
+        git_dir = git.output("rev-parse", "--git-dir", cwd=wt_dir)
+    except subprocess.CalledProcessError:
+        return False
+    if not git_dir:
+        return False
+    if not os.path.isabs(git_dir):
+        git_dir = os.path.join(wt_dir, git_dir)
+    return (
+        os.path.isdir(os.path.join(git_dir, "rebase-merge"))
+        or os.path.isdir(os.path.join(git_dir, "rebase-apply"))
+        or os.path.isfile(os.path.join(git_dir, "MERGE_HEAD"))
+        or os.path.isfile(os.path.join(git_dir, "CHERRY_PICK_HEAD"))
+    )
+
+
+def default_wt_path(git: Git, branch: str) -> str:
+    """Generate default worktree path: {parent}/{repo_name}-{sanitized_branch}."""
+    repo_root = git.output("rev-parse", "--show-toplevel")
+    repo_name = os.path.basename(repo_root)
+    sanitized = branch.replace("/", "-")
+    return os.path.join(os.path.dirname(repo_root), f"{repo_name}-{sanitized}")
+
+
+def classify_status(git: Git, wt_dir: str, branch: str, current_wt: str,
+                    base: str = "main") -> str:
+    """Multi-stage classification. First match wins:
+    current → merged → wip → conflict → almost → ready
+    """
+    import shutil
+
+    # 1. Current worktree
+    if wt_dir == current_wt:
+        return "current"
+
+    # 2. Merged (true merge)
+    try:
+        git.run("merge-base", "--is-ancestor", branch, base)
+        return "merged"
+    except subprocess.CalledProcessError:
+        pass
+
+    # 2b. Squash-merge detection via merge-tree --write-tree
+    # Only meaningful if branch has actual file changes vs base
+    try:
+        branch_tree = git.output("rev-parse", f"{branch}^{{tree}}")
+        base_tree = git.output("rev-parse", f"{base}^{{tree}}")
+        if branch_tree and base_tree and branch_tree != base_tree:
+            mt_result = git.run("merge-tree", "--write-tree", base, branch, check=False)
+            if mt_result.returncode == 0:
+                mt_first_line = mt_result.stdout.splitlines()[0] if mt_result.stdout else ""
+                if mt_first_line and mt_first_line == base_tree:
+                    return "merged"
+    except Exception:
+        pass
+
+    # 2c. Squash-merge fallback via gh pr list
+    if shutil.which("gh"):
+        try:
+            pr_result = subprocess.run(
+                ["gh", "pr", "list", "--head", branch, "--state", "merged",
+                 "--json", "number", "--limit", "1"],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                check=False,
+            )
+            if pr_result.returncode == 0:
+                pr_data = pr_result.stdout.strip()
+                if pr_data and pr_data != "[]":
+                    return "merged"
+        except Exception:
+            pass
+
+    # 3. Dirty working tree → wip
+    ds = dirty_status(git, wt_dir)
+    if ds != "clean":
+        return "wip"
+
+    # 4. Conflict detection via git merge-tree (three-way)
+    try:
+        merge_base = git.output("merge-base", base, branch)
+        if merge_base:
+            merge_result = git.output("merge-tree", merge_base, base, branch)
+            if "<<<" in merge_result or "changed in both" in merge_result:
+                return "conflict"
+    except Exception:
+        pass
+
+    # 5. Ahead check → almost or ready
+    ahead_val, _ = ahead_behind(git, branch, base)
+    if ahead_val > 0:
+        try:
+            upstream_count = git.output(
+                "rev-list", "--count", f"{branch}@{{upstream}}..{branch}"
+            )
+            if not upstream_count or int(upstream_count) > 0:
+                return "almost"
+            return "ready"
+        except (subprocess.CalledProcessError, ValueError):
+            return "almost"
+
+    return "ready"
+
+
+# ---------------------------------------------------------------------------
+# Subcommand: list
+# ---------------------------------------------------------------------------
+
+def cmd_list(git: Git, as_json: bool = False, full: bool = False):
+    """List worktrees with status."""
+    current_wt = os.path.realpath(os.getcwd())
+    worktrees = parse_worktrees(git)
+
+    if as_json:
+        items = []
+        for wt in worktrees:
+            status = "current" if wt.path == current_wt else dirty_status(git, wt.path)
+            ahead_val, behind_val = ahead_behind(git, wt.branch)
+            item = {
+                "branch": wt.branch,
+                "status": status,
+                "ahead": ahead_val,
+                "behind": behind_val,
+                "path": wt.path,
+            }
+            if full:
+                item["commit_message"] = git.output("log", "-1", "--format=%s", cwd=wt.path)
+                item["commit_date"] = git.output("log", "-1", "--format=%aI", cwd=wt.path)
+            items.append(item)
+        print(json.dumps(items))
+        return
+
+    # Text output
+    if full:
+        print(f"{'BRANCH':<24} {'STATUS':<14} {'AHEAD':<6} {'BEHIND':<7} {'LAST COMMIT':<30} PATH")
+    else:
+        print(f"{'BRANCH':<24} {'STATUS':<14} {'AHEAD':<6} {'BEHIND':<7} PATH")
+
+    for wt in worktrees:
+        status = "current" if wt.path == current_wt else dirty_status(git, wt.path)
+        ahead_val, behind_val = ahead_behind(git, wt.branch)
+        if full:
+            commit_msg = git.output("log", "-1", "--format=%s (%cr)", cwd=wt.path) or "\u2014"
+            if len(commit_msg) > 28:
+                commit_msg = commit_msg[:25] + "..."
+            print(f"{wt.branch:<24} {status:<14} {ahead_val:<6} {behind_val:<7} {commit_msg:<30} {wt.path}")
+        else:
+            print(f"{wt.branch:<24} {status:<14} {ahead_val:<6} {behind_val:<7} {wt.path}")
+
+
+# ---------------------------------------------------------------------------
+# Subcommand: create
+# ---------------------------------------------------------------------------
+
+def cmd_create(git: Git, branch: str, path: str = "", remote: str = "",
+               from_base: str = ""):
+    """Create a worktree tracking a remote branch or from a base branch."""
+    if from_base:
+        _create_from(git, branch, path, from_base)
+    else:
+        # Determine remote: explicit > upstream > origin
+        if not remote:
+            remotes_raw = git.output("remote")
+            remotes = remotes_raw.splitlines() if remotes_raw else []
+            if "upstream" in remotes:
+                remote = "upstream"
+            elif "origin" in remotes:
+                remote = "origin"
+            else:
+                print("ta: no remote found (tried upstream, origin)", file=sys.stderr)
+                sys.exit(1)
+        _create_tracking(git, branch, path, remote)
+
+
+def _create_tracking(git: Git, branch: str, wt_path: str, remote: str):
+    """Track an existing remote branch."""
+    result = git.run(
+        "ls-remote", "--exit-code", "--heads", remote, f"refs/heads/{branch}",
+        check=False,
+    )
+    if result.returncode != 0:
+        print(f"ta: branch '{branch}' not found on remote '{remote}'", file=sys.stderr)
+        sys.exit(1)
+
+    if not wt_path:
+        wt_path = default_wt_path(git, branch)
+
+    if os.path.exists(wt_path):
+        print(f"ta: path already exists: {wt_path}", file=sys.stderr)
+        sys.exit(1)
+
+    git.run("worktree", "add", "--track", "-b", branch, wt_path, f"{remote}/{branch}")
+    print(wt_path)
+
+
+def _create_from(git: Git, branch: str, wt_path: str, base: str):
+    """Create a new branch from base, or checkout existing branch."""
+    if not wt_path:
+        wt_path = default_wt_path(git, branch)
+
+    if os.path.exists(wt_path):
+        print(f"ta: path already exists: {wt_path}", file=sys.stderr)
+        sys.exit(1)
+
+    # Check if branch already exists locally
+    result = git.run(
+        "show-ref", "--verify", "--quiet", f"refs/heads/{branch}", check=False
+    )
+    if result.returncode == 0:
+        # Branch exists — verify it's a descendant of base
+        try:
+            git.run("merge-base", "--is-ancestor", base, branch)
+        except subprocess.CalledProcessError:
+            print(f"ta: branch '{branch}' is not based on '{base}'", file=sys.stderr)
+            sys.exit(1)
+        git.run("worktree", "add", wt_path, branch)
+    else:
+        git.run("worktree", "add", "-b", branch, wt_path, base)
+
+    print(wt_path)
+
+
+# ---------------------------------------------------------------------------
+# Subcommand: remove
+# ---------------------------------------------------------------------------
+
+def _find_wt_by_branch(git: Git, branch: str):
+    """Return the worktree path for the given branch, or None."""
+    for wt in parse_worktrees(git):
+        if wt.branch == branch:
+            return wt.path
+    return None
+
+
+def cmd_remove(branch: str, git: Git, force: bool = False):
+    """Remove a worktree by branch name."""
+    wt_dir = _find_wt_by_branch(git, branch)
+    if wt_dir is None:
+        print(f"ta: no worktree found for branch '{branch}'", file=sys.stderr)
+        sys.exit(1)
+
+    if not force:
+        ds = dirty_status(git, wt_dir)
+        if ds != "clean":
+            print(f"ta: worktree '{branch}' has uncommitted changes ({ds})", file=sys.stderr)
+            print("ta: use --force to remove anyway", file=sys.stderr)
+            sys.exit(1)
+
+    if force:
+        git.run("worktree", "remove", "--force", wt_dir)
+    else:
+        git.run("worktree", "remove", wt_dir)
+
+    git.run("branch", "-D", branch, check=False)
+    print(f"ta: removed worktree '{branch}' ({wt_dir})")
+
+    # Cleanup: kill workspace session (suppress errors)
+    script_dir = os.path.dirname(os.path.realpath(__file__))
+    workspace_script = os.path.join(script_dir, "ta-workspace")
+    try:
+        subprocess.run(
+            [workspace_script, "kill", branch],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+    except Exception:
+        pass
+
+
+# ---------------------------------------------------------------------------
+# Subcommand: prune
+# ---------------------------------------------------------------------------
+
+def _is_merged(git: Git, branch: str, base: str = "main") -> bool:
+    """Return True if branch is merged into base (true merge, squash, or merged PR)."""
+    import shutil
+
+    # True merge
+    try:
+        git.run("merge-base", "--is-ancestor", branch, base)
+        return True
+    except subprocess.CalledProcessError:
+        pass
+
+    # Squash-merge via merge-tree --write-tree
+    # Only meaningful if branch has actual file changes vs base
+    try:
+        branch_tree = git.output("rev-parse", f"{branch}^{{tree}}")
+        base_tree = git.output("rev-parse", f"{base}^{{tree}}")
+        if branch_tree and base_tree and branch_tree != base_tree:
+            mt_result = git.run("merge-tree", "--write-tree", base, branch, check=False)
+            if mt_result.returncode == 0:
+                mt_first_line = mt_result.stdout.splitlines()[0] if mt_result.stdout else ""
+                if mt_first_line and mt_first_line == base_tree:
+                    return True
+    except Exception:
+        pass
+
+    # gh pr fallback
+    if shutil.which("gh"):
+        try:
+            pr_result = subprocess.run(
+                ["gh", "pr", "list", "--head", branch, "--state", "merged",
+                 "--json", "number", "--limit", "1"],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False,
+            )
+            if pr_result.returncode == 0:
+                pr_data = pr_result.stdout.strip()
+                if pr_data and pr_data != "[]":
+                    return True
+        except Exception:
+            pass
+
+    return False
+
+
+def cmd_prune(git: Git, apply: bool = False):
+    """Prune merged worktrees. Dry-run by default; --apply to execute."""
+    current_wt = os.path.realpath(os.getcwd())
+    worktrees = parse_worktrees(git)
+
+    found = False
+    for wt in worktrees:
+        if wt.branch == "main":
+            continue
+        if wt.branch == "(detached)":
+            continue
+        if wt.path == current_wt:
+            continue
+
+        if not _is_merged(git, wt.branch):
+            continue
+
+        found = True
+
+        ds = dirty_status(git, wt.path)
+        if ds != "clean":
+            print(f"ta: skipping '{wt.branch}' (uncommitted changes: {ds})")
+            continue
+
+        if has_active_operation(git, wt.path):
+            print(f"ta: skipping '{wt.branch}' (active git operation in progress)")
+            continue
+
+        if apply:
+            cmd_remove(wt.branch, git, force=True)
+        else:
+            print(f"ta: would remove '{wt.branch}' ({wt.path}) [merged]")
+
+    if not found:
+        print("ta: no worktrees to prune")
+
+
+# ---------------------------------------------------------------------------
+# Subcommand: status
+# ---------------------------------------------------------------------------
+
+def cmd_status(git: Git, as_json: bool = False):
+    """Quick one-line status of each non-main worktree."""
+    current_wt = os.path.realpath(os.getcwd())
+    worktrees = parse_worktrees(git)
+
+    if as_json:
+        items = []
+        for wt in worktrees:
+            if wt.branch == "main":
+                continue
+            classification = classify_status(git, wt.path, wt.branch, current_wt)
+            ahead_val, behind_val = ahead_behind(git, wt.branch)
+            ds = dirty_status(git, wt.path)
+            items.append({
+                "branch": wt.branch,
+                "status": classification,
+                "ahead": ahead_val,
+                "behind": behind_val,
+                "dirty": ds,
+                "path": wt.path,
+            })
+        print(json.dumps(items))
+        return
+
+    for wt in worktrees:
+        if wt.branch == "main":
+            continue
+        classification = classify_status(git, wt.path, wt.branch, current_wt)
+        ahead_val, _ = ahead_behind(git, wt.branch)
+        ds = dirty_status(git, wt.path)
+        print(f"{wt.branch:<24} {classification:<10} {ahead_val} ahead, {ds}")
+
+
+# ---------------------------------------------------------------------------
+# Subcommand: merge
+# ---------------------------------------------------------------------------
+
+def cmd_merge(git: Git, branch: str, target: str = "main", message: str = "",
+              message_file: str = ""):
+    """Squash-merge branch into target with cleanup."""
+    msg = message
+    msg_file = message_file
+
+    if msg and msg_file:
+        print("ta: cannot use both --message and --message-file", file=sys.stderr)
+        sys.exit(2)
+
+    if msg_file and not os.path.isfile(msg_file):
+        print(f"ta: message file not found: {msg_file}", file=sys.stderr)
+        sys.exit(2)
+
+    # Find target worktree
+    main_wt = _find_wt_by_branch(git, target)
+    if main_wt is None:
+        print(f"ta: cannot find worktree for target branch '{target}'", file=sys.stderr)
+        sys.exit(1)
+
+    # Find branch worktree
+    branch_wt = _find_wt_by_branch(git, branch)
+    if branch_wt is None:
+        print(f"ta: no worktree found for branch '{branch}'", file=sys.stderr)
+        sys.exit(2)
+
+    # Validate both worktrees are clean
+    ds = dirty_status(git, branch_wt)
+    if ds != "clean":
+        print(f"ta: branch '{branch}' has uncommitted changes ({ds})", file=sys.stderr)
+        sys.exit(1)
+
+    ds = dirty_status(git, main_wt)
+    if ds != "clean":
+        print(f"ta: target worktree '{target}' has uncommitted changes ({ds})", file=sys.stderr)
+        sys.exit(1)
+
+    # Squash merge
+    result = git.run("merge", "--squash", branch, cwd=main_wt, check=False)
+    if result.returncode != 0:
+        print("ta: merge conflicts detected, aborting merge", file=sys.stderr)
+        git.run("reset", "--hard", "HEAD", cwd=main_wt, check=False)
+        sys.exit(1)
+
+    # Build commit command
+    commit_cmd = ["git", "commit"]
+    if msg_file:
+        commit_cmd += ["--file", msg_file]
+    elif msg:
+        commit_cmd += ["-m", msg]
+    else:
+        commit_cmd += ["-m", f"Squashed '{branch}' into {target}"]
+
+    commit_result = subprocess.run(
+        commit_cmd, cwd=main_wt,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False,
+    )
+    if commit_result.returncode != 0:
+        print("ta: commit failed", file=sys.stderr)
+        git.run("reset", "--hard", "HEAD", cwd=main_wt, check=False)
+        sys.exit(1)
+
+    commit_hash = git.output("rev-parse", "--short", "HEAD", cwd=main_wt)
+
+    # Cleanup: remove worktree (force)
+    cleanup_ok = True
+    try:
+        cmd_remove(branch, git, force=True)
+    except SystemExit:
+        print("ta: warning: failed to remove worktree", file=sys.stderr)
+        cleanup_ok = False
+
+    print(f"ta: merged '{branch}' into {target} ({commit_hash})")
+    if cleanup_ok:
+        print("ta: worktree and branch removed")
+
+
+# ---------------------------------------------------------------------------
+# Argument parser
+# ---------------------------------------------------------------------------
+
+USAGE = """\
+usage: ta wt <command> [args...]
+
+Commands:
+  list      List all worktrees with enriched status
+  create    Create a worktree tracking a remote branch
+  remove    Remove a worktree by branch name
+  prune     Remove worktrees merged into main
+  merge     Squash-merge a branch into main with cleanup
+  status    Quick one-line status of each worktree
+"""
+
+KNOWN_SUBCOMMANDS = {"list", "create", "remove", "prune", "status", "merge"}
+
+
+def build_parser():
+    parser = argparse.ArgumentParser(
+        prog="ta wt",
+        description="Worktree manager",
+        add_help=True,
+    )
+    subparsers = parser.add_subparsers(dest="subcommand")
+
+    # list
+    lp = subparsers.add_parser("list", help="List all worktrees with enriched status")
+    lp.add_argument("--json", action="store_true", help="Output as JSON")
+    lp.add_argument("--full", action="store_true", help="Include last commit info")
+
+    # create
+    cp = subparsers.add_parser("create", help="Create a worktree")
+    cp.add_argument("branch", help="Branch name")
+    cp.add_argument("path", nargs="?", default="", help="Worktree path (optional)")
+    cp.add_argument("--remote", default="", help="Remote name")
+    cp.add_argument("--from", dest="from_base", default="", metavar="BASE",
+                    help="Create new branch from base")
+
+    # remove
+    rp = subparsers.add_parser("remove", help="Remove a worktree by branch name")
+    rp.add_argument("branch", help="Branch name")
+    rp.add_argument("--force", action="store_true", help="Remove even if dirty")
+
+    # prune
+    pp = subparsers.add_parser("prune", help="Remove worktrees merged into main")
+    pp.add_argument("--apply", action="store_true", help="Actually remove (default: dry-run)")
+
+    # status
+    sp = subparsers.add_parser("status", help="Quick one-line status of each worktree")
+    sp.add_argument("--json", action="store_true", help="Output as JSON")
+
+    # merge
+    mp = subparsers.add_parser("merge", help="Squash-merge a branch into main")
+    mp.add_argument("branch", help="Branch to merge")
+    mp.add_argument("--target", default="main", help="Target branch (default: main)")
+    mp.add_argument("--message", default="", help="Commit message")
+    mp.add_argument("--message-file", dest="message_file", default="",
+                    help="Read commit message from file")
+
+    return parser
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+def main():
+    if len(sys.argv) < 2:
+        sys.stderr.write(USAGE)
+        sys.exit(2)
+
+    subcommand = sys.argv[1]
+    if not subcommand.startswith("-") and subcommand not in KNOWN_SUBCOMMANDS:
+        print(f"ta: unknown wt command '{subcommand}'", file=sys.stderr)
+        sys.exit(2)
+
+    parser = build_parser()
+    args, remaining = parser.parse_known_args()
+
+    if remaining:
+        print(f"ta: unknown option '{remaining[0]}'", file=sys.stderr)
+        sys.exit(2)
+
+    git = Git()
+
+    if args.subcommand == "list":
+        cmd_list(git, as_json=args.json, full=args.full)
+    elif args.subcommand == "create":
+        cmd_create(git, args.branch, path=args.path, remote=args.remote,
+                   from_base=args.from_base)
+    elif args.subcommand == "remove":
+        cmd_remove(args.branch, git, force=args.force)
+    elif args.subcommand == "prune":
+        cmd_prune(git, apply=args.apply)
+    elif args.subcommand == "status":
+        cmd_status(git, as_json=args.json)
+    elif args.subcommand == "merge":
+        cmd_merge(git, args.branch, target=args.target, message=args.message,
+                  message_file=args.message_file)
+    else:
+        sys.stderr.write(USAGE)
+        sys.exit(2)
+
+
+if __name__ == "__main__":
+    main()

@@ -35,18 +35,21 @@ setup() {
 # --- ta dispatcher tests ---
 
 @test "ta with no args shows usage" {
+  command -v zsh >/dev/null 2>&1 || skip "requires zsh"
   run zsh "$TA"
   [ "$status" -eq 2 ]
   [[ "$output" == *"usage:"* ]]
 }
 
 @test "ta unknown command fails" {
+  command -v zsh >/dev/null 2>&1 || skip "requires zsh"
   run zsh "$TA" bogus
   [ "$status" -eq 2 ]
   [[ "$output" == *"unknown command"* ]]
 }
 
 @test "ta wt dispatches to ta-wt" {
+  command -v zsh >/dev/null 2>&1 || skip "requires zsh"
   run zsh "$TA" wt
   [ "$status" -eq 2 ]
   [[ "$output" == *"usage: ta wt"* ]]
@@ -56,7 +59,7 @@ setup() {
 
 @test "wt list with no worktrees shows only main" {
   cd "$PROJECT"
-  run zsh "$TA_WT" list
+  run "$TA_WT" list
   [ "$status" -eq 0 ]
   [[ "$output" == *"main"* ]]
   [[ "$output" == *"BRANCH"* ]]
@@ -64,7 +67,7 @@ setup() {
 
 @test "wt list shows current for active worktree" {
   cd "$PROJECT"
-  run zsh "$TA_WT" list
+  run "$TA_WT" list
   [ "$status" -eq 0 ]
   [[ "$output" == *"current"* ]]
 }
@@ -79,7 +82,7 @@ setup() {
   # Create worktree for it
   git worktree add "$BATS_TEST_TMPDIR/wt-feature-a" feature-a
 
-  run zsh "$TA_WT" list
+  run "$TA_WT" list
   [ "$status" -eq 0 ]
   [[ "$output" == *"main"* ]]
   [[ "$output" == *"feature-a"* ]]
@@ -95,14 +98,14 @@ setup() {
   # Make it dirty
   echo "modified" > "$BATS_TEST_TMPDIR/wt-dirty/newfile.txt"
 
-  run zsh "$TA_WT" list
+  run "$TA_WT" list
   [ "$status" -eq 0 ]
   [[ "$output" == *"dirty"* ]]
 }
 
 @test "wt list --json returns valid JSON" {
   cd "$PROJECT"
-  run zsh "$TA_WT" list --json
+  run "$TA_WT" list --json
   [ "$status" -eq 0 ]
 
   # Validate JSON and check structure
@@ -122,7 +125,7 @@ setup() {
   git checkout main
   git worktree add "$BATS_TEST_TMPDIR/wt-json" json-branch
 
-  run zsh "$TA_WT" list --json
+  run "$TA_WT" list --json
   [ "$status" -eq 0 ]
 
   local count
@@ -132,7 +135,7 @@ setup() {
 
 @test "wt list --full shows commit message" {
   cd "$PROJECT"
-  run zsh "$TA_WT" list --full
+  run "$TA_WT" list --full
   [ "$status" -eq 0 ]
   [[ "$output" == *"LAST COMMIT"* ]]
   [[ "$output" == *"initial commit"* ]]
@@ -140,7 +143,7 @@ setup() {
 
 @test "wt list --json --full includes commit fields" {
   cd "$PROJECT"
-  run zsh "$TA_WT" list --json --full
+  run "$TA_WT" list --json --full
   [ "$status" -eq 0 ]
 
   echo "$output" | jq -e '.[0] | has("commit_message", "commit_date")'
@@ -154,7 +157,7 @@ setup() {
   git checkout main
   git worktree add "$BATS_TEST_TMPDIR/wt-ahead" ahead-branch
 
-  run zsh "$TA_WT" list --json
+  run "$TA_WT" list --json
   [ "$status" -eq 0 ]
 
   # The ahead-branch should be 2 ahead of main
@@ -165,7 +168,7 @@ setup() {
 
 @test "wt list unknown option fails" {
   cd "$PROJECT"
-  run zsh "$TA_WT" list --bogus
+  run "$TA_WT" list --bogus
   [ "$status" -eq 2 ]
   [[ "$output" == *"unknown option"* ]]
 }
@@ -183,7 +186,7 @@ setup() {
   git checkout main
   git branch -D feat-create
 
-  run zsh "$TA_WT" create feat-create "$wt_dir"
+  run "$TA_WT" create feat-create "$wt_dir"
   [ "$status" -eq 0 ]
   [[ "$output" == *"$wt_dir"* ]]
   [ -d "$wt_dir" ]
@@ -199,7 +202,7 @@ setup() {
   git checkout main
   git branch -D feat-default
 
-  run zsh "$TA_WT" create feat-default
+  run "$TA_WT" create feat-default
   [ "$status" -eq 0 ]
 
   # Default path should be ../<repo-name>-<branch>
@@ -215,7 +218,7 @@ setup() {
   git checkout main
   git branch -D feature/slash-test
 
-  run zsh "$TA_WT" create feature/slash-test
+  run "$TA_WT" create feature/slash-test
   [ "$status" -eq 0 ]
   [[ "$output" == *"project-feature-slash-test"* ]]
 }
@@ -223,7 +226,7 @@ setup() {
 @test "wt create nonexistent branch fails" {
   cd "$PROJECT"
 
-  run zsh "$TA_WT" create nonexistent-branch
+  run "$TA_WT" create nonexistent-branch
   [ "$status" -eq 1 ]
   [[ "$output" == *"not found on remote"* ]]
 }
@@ -240,7 +243,7 @@ setup() {
   git branch -D feat-origin
 
   local wt_dir="$BATS_TEST_TMPDIR/wt-origin"
-  run zsh "$TA_WT" create feat-origin "$wt_dir" --remote origin
+  run "$TA_WT" create feat-origin "$wt_dir" --remote origin
   [ "$status" -eq 0 ]
   [ -d "$wt_dir" ]
 }
@@ -256,7 +259,7 @@ setup() {
   git branch -D feat-fallback
 
   local wt_dir="$BATS_TEST_TMPDIR/wt-fallback"
-  run zsh "$TA_WT" create feat-fallback "$wt_dir"
+  run "$TA_WT" create feat-fallback "$wt_dir"
   [ "$status" -eq 0 ]
   [ -d "$wt_dir" ]
 }
@@ -278,7 +281,7 @@ setup() {
 
   cd "$proj2"
   local wt_dir="$BATS_TEST_TMPDIR/wt-origin-only"
-  run zsh "$TA_WT" create feat-origin-only "$wt_dir"
+  run "$TA_WT" create feat-origin-only "$wt_dir"
   [ "$status" -eq 0 ]
   [ -d "$wt_dir" ]
 }
@@ -293,14 +296,14 @@ setup() {
   git branch -D feat-exists
 
   mkdir -p "$BATS_TEST_TMPDIR/wt-exists"
-  run zsh "$TA_WT" create feat-exists "$BATS_TEST_TMPDIR/wt-exists"
+  run "$TA_WT" create feat-exists "$BATS_TEST_TMPDIR/wt-exists"
   [ "$status" -eq 1 ]
   [[ "$output" == *"path already exists"* ]]
 }
 
 @test "wt create no args shows usage" {
   cd "$PROJECT"
-  run zsh "$TA_WT" create
+  run "$TA_WT" create
   [ "$status" -eq 2 ]
   [[ "$output" == *"usage:"* ]]
 }
@@ -311,7 +314,7 @@ setup() {
   cd "$PROJECT"
   local wt_dir="$BATS_TEST_TMPDIR/wt-from-main"
 
-  run zsh "$TA_WT" create new-feat "$wt_dir" --from=main
+  run "$TA_WT" create new-feat "$wt_dir" --from=main
   [ "$status" -eq 0 ]
   [[ "$output" == *"$wt_dir"* ]]
   [ -d "$wt_dir" ]
@@ -334,7 +337,7 @@ setup() {
   git checkout main
 
   local wt_dir="$BATS_TEST_TMPDIR/wt-from-8x"
-  run zsh "$TA_WT" create feat-from-8x "$wt_dir" --from=8.x
+  run "$TA_WT" create feat-from-8x "$wt_dir" --from=8.x
   [ "$status" -eq 0 ]
   [ -d "$wt_dir" ]
 
@@ -352,7 +355,7 @@ setup() {
   git checkout main
 
   local wt_dir="$BATS_TEST_TMPDIR/wt-existing-compat"
-  run zsh "$TA_WT" create existing-compat "$wt_dir" --from=main
+  run "$TA_WT" create existing-compat "$wt_dir" --from=main
   [ "$status" -eq 0 ]
   [ -d "$wt_dir" ]
 }
@@ -369,7 +372,7 @@ setup() {
   git commit --allow-empty -m "divergent commit"
   git checkout main
 
-  run zsh "$TA_WT" create divergent-feat "$BATS_TEST_TMPDIR/wt-divergent" --from=base-branch
+  run "$TA_WT" create divergent-feat "$BATS_TEST_TMPDIR/wt-divergent" --from=base-branch
   [ "$status" -eq 1 ]
   [[ "$output" == *"not based on"* ]]
 }
@@ -385,7 +388,7 @@ setup() {
   git checkout main
   git branch -D feat-no-from
 
-  run zsh "$TA_WT" create feat-no-from "$wt_dir"
+  run "$TA_WT" create feat-no-from "$wt_dir"
   [ "$status" -eq 0 ]
   [ -d "$wt_dir" ]
 }
@@ -393,7 +396,7 @@ setup() {
 @test "wt create --from=main generates default path" {
   cd "$PROJECT"
 
-  run zsh "$TA_WT" create new-feat-path --from=main
+  run "$TA_WT" create new-feat-path --from=main
   [ "$status" -eq 0 ]
   [[ "$output" == *"project-new-feat-path"* ]]
 }
@@ -407,7 +410,7 @@ setup() {
   git checkout main
   git worktree add "$BATS_TEST_TMPDIR/wt-rm" feat-rm
 
-  run zsh "$TA_WT" remove feat-rm
+  run "$TA_WT" remove feat-rm
   [ "$status" -eq 0 ]
   [[ "$output" == *"removed"* ]]
   [ ! -d "$BATS_TEST_TMPDIR/wt-rm" ]
@@ -422,7 +425,7 @@ setup() {
 
   echo "dirty" > "$BATS_TEST_TMPDIR/wt-rm-dirty/dirty.txt"
 
-  run zsh "$TA_WT" remove feat-rm-dirty
+  run "$TA_WT" remove feat-rm-dirty
   [ "$status" -eq 1 ]
   [[ "$output" == *"uncommitted changes"* ]]
   [ -d "$BATS_TEST_TMPDIR/wt-rm-dirty" ]
@@ -437,7 +440,7 @@ setup() {
 
   echo "dirty" > "$BATS_TEST_TMPDIR/wt-rm-force/dirty.txt"
 
-  run zsh "$TA_WT" remove feat-rm-force --force
+  run "$TA_WT" remove feat-rm-force --force
   [ "$status" -eq 0 ]
   [[ "$output" == *"removed"* ]]
   [ ! -d "$BATS_TEST_TMPDIR/wt-rm-force" ]
@@ -445,14 +448,14 @@ setup() {
 
 @test "wt remove nonexistent branch fails" {
   cd "$PROJECT"
-  run zsh "$TA_WT" remove no-such-branch
+  run "$TA_WT" remove no-such-branch
   [ "$status" -eq 1 ]
   [[ "$output" == *"no worktree found"* ]]
 }
 
 @test "wt remove no args shows usage" {
   cd "$PROJECT"
-  run zsh "$TA_WT" remove
+  run "$TA_WT" remove
   [ "$status" -eq 2 ]
   [[ "$output" == *"usage:"* ]]
 }
@@ -464,7 +467,7 @@ setup() {
   git checkout main
   git worktree add "$BATS_TEST_TMPDIR/wt-rm-branch" feat-rm-branch
 
-  run zsh "$TA_WT" remove feat-rm-branch
+  run "$TA_WT" remove feat-rm-branch
   [ "$status" -eq 0 ]
 
   # Branch should be gone
@@ -483,7 +486,7 @@ setup() {
   local mock_dir="$BATS_TEST_TMPDIR/mock-scripts"
   mkdir -p "$mock_dir"
   cat > "$mock_dir/ta-workspace" << MOCK
-#!/usr/bin/env zsh
+#!/bin/sh
 echo "\$@" >> "$BATS_TEST_TMPDIR/workspace-calls.log"
 MOCK
   chmod +x "$mock_dir/ta-workspace"
@@ -491,7 +494,7 @@ MOCK
   # Copy ta-wt to mock dir so it finds our mock ta-workspace via ${0:A:h}
   cp "$TA_WT" "$mock_dir/ta-wt"
 
-  run zsh "$mock_dir/ta-wt" remove feat-rm-ws
+  run "$mock_dir/ta-wt" remove feat-rm-ws
   [ "$status" -eq 0 ]
   [[ "$output" == *"removed"* ]]
 
@@ -509,7 +512,7 @@ MOCK
   git worktree add "$BATS_TEST_TMPDIR/wt-rm-notmux" feat-rm-notmux
 
   # No tmux session exists — workspace kill should fail silently
-  run zsh "$TA_WT" remove feat-rm-notmux
+  run "$TA_WT" remove feat-rm-notmux
   [ "$status" -eq 0 ]
   [[ "$output" == *"removed"* ]]
   [ ! -d "$BATS_TEST_TMPDIR/wt-rm-notmux" ]
@@ -525,7 +528,7 @@ MOCK
   git merge feat-merged
   git worktree add "$BATS_TEST_TMPDIR/wt-merged" feat-merged
 
-  run zsh "$TA_WT" prune
+  run "$TA_WT" prune
   [ "$status" -eq 0 ]
   [[ "$output" == *"would remove"* ]]
   [[ "$output" == *"feat-merged"* ]]
@@ -543,7 +546,7 @@ MOCK
 
   echo "dirty" > "$BATS_TEST_TMPDIR/wt-prune-dirty/dirty.txt"
 
-  run zsh "$TA_WT" prune
+  run "$TA_WT" prune
   [ "$status" -eq 0 ]
   [[ "$output" == *"skipping"* ]]
   [[ "$output" == *"feat-prune-dirty"* ]]
@@ -561,7 +564,7 @@ MOCK
 
   # Run prune from the worktree itself
   cd "$BATS_TEST_TMPDIR/wt-prune-current"
-  run zsh "$TA_WT" prune
+  run "$TA_WT" prune
   [ "$status" -eq 0 ]
   [[ "$output" == *"no worktrees to prune"* ]]
 }
@@ -569,7 +572,7 @@ MOCK
 @test "wt prune skips main branch" {
   cd "$PROJECT"
   # Only main exists — nothing to prune
-  run zsh "$TA_WT" prune
+  run "$TA_WT" prune
   [ "$status" -eq 0 ]
   [[ "$output" == *"no worktrees to prune"* ]]
 }
@@ -581,7 +584,7 @@ MOCK
   git checkout main
   git worktree add "$BATS_TEST_TMPDIR/wt-unmerged" feat-unmerged
 
-  run zsh "$TA_WT" prune
+  run "$TA_WT" prune
   [ "$status" -eq 0 ]
   [[ "$output" == *"no worktrees to prune"* ]]
   [ -d "$BATS_TEST_TMPDIR/wt-unmerged" ]
@@ -595,7 +598,7 @@ MOCK
   git merge feat-prune-apply
   git worktree add "$BATS_TEST_TMPDIR/wt-prune-apply" feat-prune-apply
 
-  run zsh "$TA_WT" prune --apply
+  run "$TA_WT" prune --apply
   [ "$status" -eq 0 ]
   [[ "$output" == *"removed"* ]]
   [ ! -d "$BATS_TEST_TMPDIR/wt-prune-apply" ]
@@ -616,7 +619,7 @@ MOCK
 
   echo "dirty" > "$BATS_TEST_TMPDIR/wt-status-wip/dirty.txt"
 
-  run zsh "$TA_WT" status
+  run "$TA_WT" status
   [ "$status" -eq 0 ]
   [[ "$output" == *"feat-status-wip"* ]]
   [[ "$output" == *"wip"* ]]
@@ -630,7 +633,7 @@ MOCK
   git merge feat-status-merged
   git worktree add "$BATS_TEST_TMPDIR/wt-status-merged" feat-status-merged
 
-  run zsh "$TA_WT" status
+  run "$TA_WT" status
   [ "$status" -eq 0 ]
   [[ "$output" == *"feat-status-merged"* ]]
   [[ "$output" == *"merged"* ]]
@@ -644,7 +647,7 @@ MOCK
   git worktree add "$BATS_TEST_TMPDIR/wt-status-almost" feat-status-almost
 
   # Branch has no upstream, so it's "almost" (unpushed)
-  run zsh "$TA_WT" status
+  run "$TA_WT" status
   [ "$status" -eq 0 ]
   [[ "$output" == *"feat-status-almost"* ]]
   [[ "$output" == *"almost"* ]]
@@ -661,7 +664,7 @@ MOCK
   # Set upstream tracking
   git -C "$BATS_TEST_TMPDIR/wt-status-ready" branch --set-upstream-to=upstream/feat-status-ready
 
-  run zsh "$TA_WT" status
+  run "$TA_WT" status
   [ "$status" -eq 0 ]
   [[ "$output" == *"feat-status-ready"* ]]
   [[ "$output" == *"ready"* ]]
@@ -676,7 +679,7 @@ MOCK
 
   # Run from the worktree
   cd "$BATS_TEST_TMPDIR/wt-status-current"
-  run zsh "$TA_WT" status
+  run "$TA_WT" status
   [ "$status" -eq 0 ]
   [[ "$output" == *"feat-status-current"* ]]
   [[ "$output" == *"current"* ]]
@@ -685,7 +688,7 @@ MOCK
 @test "wt status skips main branch" {
   cd "$PROJECT"
   # Only main — status should produce no output
-  run zsh "$TA_WT" status
+  run "$TA_WT" status
   [ "$status" -eq 0 ]
   [[ "$output" != *"main"* ]]
 }
@@ -697,7 +700,7 @@ MOCK
   git checkout main
   git worktree add "$BATS_TEST_TMPDIR/wt-status-json" feat-status-json
 
-  run zsh "$TA_WT" status --json
+  run "$TA_WT" status --json
   [ "$status" -eq 0 ]
 
   # Validate JSON
@@ -707,7 +710,7 @@ MOCK
 
 @test "wt status --json with no non-main worktrees returns empty array" {
   cd "$PROJECT"
-  run zsh "$TA_WT" status --json
+  run "$TA_WT" status --json
   [ "$status" -eq 0 ]
   local count
   count="$(echo "$output" | jq length)"
@@ -725,7 +728,7 @@ MOCK
   git checkout main
   git worktree add "$BATS_TEST_TMPDIR/wt-merge" feat-merge
 
-  run zsh "$TA_WT" merge feat-merge
+  run "$TA_WT" merge feat-merge
   [ "$status" -eq 0 ]
   [[ "$output" == *"merged 'feat-merge' into main"* ]]
   [[ "$output" == *"worktree and branch removed"* ]]
@@ -750,7 +753,7 @@ MOCK
 
   echo "dirty" > "$BATS_TEST_TMPDIR/wt-merge-dirty/dirty.txt"
 
-  run zsh "$TA_WT" merge feat-merge-dirty
+  run "$TA_WT" merge feat-merge-dirty
   [ "$status" -eq 1 ]
   [[ "$output" == *"uncommitted changes"* ]]
 }
@@ -765,21 +768,21 @@ MOCK
   # Dirty the main worktree
   echo "dirty" > "$PROJECT/dirty-main.txt"
 
-  run zsh "$TA_WT" merge feat-merge-dm
+  run "$TA_WT" merge feat-merge-dm
   [ "$status" -eq 1 ]
   [[ "$output" == *"target worktree 'main' has uncommitted changes"* ]]
 }
 
 @test "wt merge nonexistent branch fails with exit 2" {
   cd "$PROJECT"
-  run zsh "$TA_WT" merge no-such-branch
+  run "$TA_WT" merge no-such-branch
   [ "$status" -eq 2 ]
   [[ "$output" == *"no worktree found"* ]]
 }
 
 @test "wt merge no args shows usage with exit 2" {
   cd "$PROJECT"
-  run zsh "$TA_WT" merge
+  run "$TA_WT" merge
   [ "$status" -eq 2 ]
   [[ "$output" == *"usage:"* ]]
 }
@@ -806,7 +809,7 @@ MOCK
 
   git worktree add "$BATS_TEST_TMPDIR/wt-merge-conflict" feat-merge-conflict
 
-  run zsh "$TA_WT" merge feat-merge-conflict
+  run "$TA_WT" merge feat-merge-conflict
   [ "$status" -eq 1 ]
 
   # Main should be clean after abort
@@ -827,7 +830,7 @@ MOCK
   git worktree add "$BATS_TEST_TMPDIR/wt-merge-nows" feat-merge-nows
 
   # No tmux session exists — workspace kill should fail silently
-  run zsh "$TA_WT" merge feat-merge-nows
+  run "$TA_WT" merge feat-merge-nows
   [ "$status" -eq 0 ]
   [[ "$output" == *"merged"* ]]
 }
@@ -841,7 +844,7 @@ MOCK
   git checkout main
   git worktree add "$BATS_TEST_TMPDIR/wt-merge-msg" feat-merge-msg
 
-  run zsh "$TA_WT" merge feat-merge-msg
+  run "$TA_WT" merge feat-merge-msg
   [ "$status" -eq 0 ]
 
   # Check that the commit message on main references the branch
@@ -866,7 +869,7 @@ MOCK
   git worktree add "$BATS_TEST_TMPDIR/wt-8x" 8.x
   git worktree add "$BATS_TEST_TMPDIR/wt-feature-8x" feature-8x
 
-  run zsh "$TA_WT" merge --target 8.x feature-8x
+  run "$TA_WT" merge --target 8.x feature-8x
   [ "$status" -eq 0 ]
   [[ "$output" == *"merged 'feature-8x' into 8.x"* ]]
   [[ "$output" == *"worktree and branch removed"* ]]
@@ -890,7 +893,7 @@ MOCK
   git checkout main
   git worktree add "$BATS_TEST_TMPDIR/wt-no-target" feat-no-target
 
-  run zsh "$TA_WT" merge --target no-such-target feat-no-target
+  run "$TA_WT" merge --target no-such-target feat-no-target
   [ "$status" -eq 1 ]
   [[ "$output" == *"cannot find worktree for target branch 'no-such-target'"* ]]
 }
@@ -913,7 +916,7 @@ MOCK
   # Make the target (base-dirty-target) worktree dirty
   echo "dirty" > "$BATS_TEST_TMPDIR/wt-base-dirty/dirty.txt"
 
-  run zsh "$TA_WT" merge --target base-dirty-target feat-for-dirty-target
+  run "$TA_WT" merge --target base-dirty-target feat-for-dirty-target
   [ "$status" -eq 1 ]
   [[ "$output" == *"target worktree 'base-dirty-target' has uncommitted changes"* ]]
 }
@@ -927,7 +930,7 @@ MOCK
   git checkout main
   git worktree add "$BATS_TEST_TMPDIR/wt-merge-custom-msg" feat-merge-custom-msg
 
-  run zsh "$TA_WT" merge --message "My custom squash message" feat-merge-custom-msg
+  run "$TA_WT" merge --message "My custom squash message" feat-merge-custom-msg
   [ "$status" -eq 0 ]
   [[ "$output" == *"merged"* ]]
 
@@ -947,7 +950,7 @@ MOCK
 
   echo "Message from file" > "$BATS_TEST_TMPDIR/commit-msg.txt"
 
-  run zsh "$TA_WT" merge --message-file "$BATS_TEST_TMPDIR/commit-msg.txt" feat-merge-file-msg
+  run "$TA_WT" merge --message-file "$BATS_TEST_TMPDIR/commit-msg.txt" feat-merge-file-msg
   [ "$status" -eq 0 ]
   [[ "$output" == *"merged"* ]]
 
@@ -965,7 +968,7 @@ MOCK
 
   echo "msg" > "$BATS_TEST_TMPDIR/both-msg.txt"
 
-  run zsh "$TA_WT" merge --message "inline" --message-file "$BATS_TEST_TMPDIR/both-msg.txt" feat-merge-both
+  run "$TA_WT" merge --message "inline" --message-file "$BATS_TEST_TMPDIR/both-msg.txt" feat-merge-both
   [ "$status" -eq 2 ]
   [[ "$output" == *"cannot use both --message and --message-file"* ]]
 }
@@ -977,7 +980,7 @@ MOCK
   git checkout main
   git worktree add "$BATS_TEST_TMPDIR/wt-merge-nofile" feat-merge-nofile
 
-  run zsh "$TA_WT" merge --message-file "/tmp/nonexistent-file-12345.txt" feat-merge-nofile
+  run "$TA_WT" merge --message-file "/tmp/nonexistent-file-12345.txt" feat-merge-nofile
   [ "$status" -eq 2 ]
   [[ "$output" == *"message file not found"* ]]
 }
@@ -991,7 +994,7 @@ MOCK
   git checkout main
   git worktree add "$BATS_TEST_TMPDIR/wt-explicit-main" feat-explicit-main
 
-  run zsh "$TA_WT" merge --target main feat-explicit-main
+  run "$TA_WT" merge --target main feat-explicit-main
   [ "$status" -eq 0 ]
   [[ "$output" == *"merged 'feat-explicit-main' into main"* ]]
 
