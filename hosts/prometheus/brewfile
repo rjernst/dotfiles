@@ -27,6 +27,7 @@ brew 'pinentry-mac'
 brew 'p7zip'
 brew 'pyenv'
 brew 'jless'
+brew 'fzf'
 
 # automation
 tap 'hashicorp/tap'

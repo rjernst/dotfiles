@@ -152,50 +152,6 @@ resolve_repo() {
     | sed -E 's#.*github\.com[:/]##; s#\.git$##'
 }
 
-# --- parse frontmatter from spec body ---
-# Extracts a value from YAML frontmatter (between --- delimiters).
-# Usage: parse_frontmatter "field" "body"
-# For list values like [11, 17], outputs space-separated: "11 17"
-# For scalar values like "my-branch", outputs the value as-is.
-parse_frontmatter() {
-  local field=$1 body=$2
-  local in_frontmatter=0 line value
-
-  while IFS= read -r line; do
-    if [[ $line == "---" ]]; then
-      if (( in_frontmatter )); then
-        break
-      else
-        in_frontmatter=1
-        continue
-      fi
-    fi
-    if (( in_frontmatter )) && [[ $line == ${field}:* ]]; then
-      value=${line#${field}:}
-      # Trim leading/trailing whitespace
-      value=${value#"${value%%[! ]*}"}
-      value=${value%"${value##*[! ]}"}
-      # Check for bracket list: [val1, val2, ...]
-      if [[ $value == \[*\] ]]; then
-        value=${value#\[}
-        value=${value%\]}
-        # Split on commas, trim whitespace
-        local items=()
-        local item
-        while IFS= read -r item; do
-          item=${item#"${item%%[! ]*}"}
-          item=${item%"${item##*[! ]}"}
-          [[ -n $item ]] && items+=("$item")
-        done <<< "${value//,/$'\n'}"
-        echo "${items[*]}"
-      else
-        echo "$value"
-      fi
-      return 0
-    fi
-  done <<< "$body"
-}
-
 # --- check if all dependency issues have status:done ---
 # Usage: check_dependencies "11 17" "owner/repo"
 # Returns 0 if all deps have status:done, 1 otherwise.
@@ -238,7 +194,7 @@ unblock_ready_specs() {
   while IFS= read -r number; do
     body=$(gh issue view "$number" --json body -q .body --repo "$repo" 2>/dev/null) || continue
 
-    depends=$(parse_frontmatter depends "$body")
+    depends=$(parse_frontmatter "$body" "depends")
 
     if [[ -z $depends ]]; then
       # No depends field — shouldn't be blocked, fix it
@@ -314,7 +270,7 @@ process_issue() {
 
   # Safety check: if spec has unmet dependencies, block it and skip
   local depends
-  depends=$(parse_frontmatter depends "$body")
+  depends=$(parse_frontmatter "$body" "depends") || true
   if [[ -n $depends ]]; then
     local unmet
     if ! unmet=$(check_dependencies "$depends" "$repo"); then
