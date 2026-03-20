@@ -12,8 +12,8 @@ RUN apt-get update && \
       $EXTRA_PACKAGES && \
     rm -rf /var/lib/apt/lists/*
 
-# Claude CLI
-RUN npm install -g @anthropic-ai/claude-code
+# Claude CLI (pinned — 2.1.79 has a regression causing "Execution error" in -p mode)
+RUN npm install -g @anthropic-ai/claude-code@2.1.76
 
 # Non-root user with host UID so bind-mounted files are readable
 RUN useradd -m -s /bin/bash -u $HOST_UID ralph
