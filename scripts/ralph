@@ -1,492 +1,763 @@
-#!/usr/bin/env zsh
-# ralph — GitHub Issues-driven AI coding loop
-#
-# Fetches specs from GitHub Issues (labeled spec + status:ready), runs
-# Claude Code in Docker to implement one task per iteration, updates
-# issue checkboxes, and labels issues done when complete.
-#
-# Usage: ralph [options]
-#
-# Options:
-#   --issue <number>      Execute a single GitHub Issue spec
-#   --poll                Poll for status:ready issues and process them
-#   --interval <duration> Poll interval (default: 30s, requires --poll)
-#   --timeout <duration>  Limit poll duration (e.g. 30m, 4h, 1d; requires --poll)
-#   --packages "pkg ..."  Extra apt packages baked into image
-#   --push                Git push after each iteration
-#   --model <model>       Claude model (default: sonnet)
-#   -h, --help            Show usage
-set -e
-zmodload zsh/datetime
+#!/usr/bin/env python3
+"""ralph — GitHub Issues-driven AI coding loop
 
-SELF=${0:A}
+Fetches specs from GitHub Issues (labeled spec + status:ready), runs
+Claude Code in Docker to implement one task per iteration, updates
+issue checkboxes, and labels issues done when complete.
 
-usage() {
-  sed -n '/^# Usage:/,/^[^#]/p' "$SELF" | sed -n 's/^# \{0,1\}//p'
-  exit "${1:-0}"
-}
+Usage: ralph [options]
 
-parse_duration() {
-  local input=$1
-  if [[ -z $input ]]; then
-    echo "ralph: invalid duration: empty string" >&2
-    exit 2
-  fi
-  local num suffix
-  if [[ $input =~ '^([0-9]+)([smhd]?)$' ]]; then
-    num=$match[1]
-    suffix=$match[2]
-  else
-    echo "ralph: invalid duration: $input" >&2
-    exit 2
-  fi
-  case $suffix in
-    s|'') echo $(( num )) ;;
-    m)    echo $(( num * 60 )) ;;
-    h)    echo $(( num * 3600 )) ;;
-    d)    echo $(( num * 86400 )) ;;
-  esac
-}
+Options:
+  --issue <number>      Execute a single GitHub Issue spec
+  --poll                Poll for status:ready issues and process them
+  --interval <duration> Poll interval (default: 30s, requires --poll)
+  --timeout <duration>  Limit poll duration (e.g. 30m, 4h, 1d; requires --poll)
+  --packages "pkg ..."  Extra apt packages baked into image
+  --push                Git push after each iteration
+  --model <model>       Claude model (default: sonnet)
+  -h, --help            Show usage
+"""
 
-# --- defaults ---
-PACKAGES=""
-PUSH=0
-TIMEOUT=0
-MODEL=sonnet
-ISSUE_NUMBER=""
-POLL=0
-INTERVAL=30
+import hashlib
+import json
+import os
+import re
+import shutil
+import signal
+import subprocess
+import sys
+import tempfile
+import time
 
-# --- parse args ---
-while [[ $# -gt 0 ]]; do
-  case $1 in
-    --packages)
-      PACKAGES=$2; shift 2 ;;
-    --push)
-      PUSH=1; shift ;;
-    --issue)
-      ISSUE_NUMBER=$2; shift 2 ;;
-    --poll)
-      POLL=1; shift ;;
-    --interval)
-      INTERVAL=$(parse_duration "$2"); shift 2 ;;
-    --model)
-      MODEL=$2; shift 2 ;;
-    --timeout)
-      TIMEOUT=$(parse_duration "$2"); shift 2 ;;
-    -h|--help)
-      usage 0 ;;
-    -*)
-      echo "Unknown option: $1" >&2; usage 1 ;;
-  esac
-done
 
-if (( POLL )) && [[ -n $ISSUE_NUMBER ]]; then
-  echo "ralph: --poll and --issue cannot be used together" >&2
-  exit 2
-fi
+# ---------------------------------------------------------------------------
+# Git helper (same pattern as ta-wt)
+# ---------------------------------------------------------------------------
 
-if (( ! POLL )) && (( INTERVAL != 30 )); then
-  echo "ralph: --interval requires --poll" >&2
-  exit 2
-fi
+class Git:
+    def __init__(self, cwd=None):
+        self.cwd = cwd
 
-if (( TIMEOUT > 0 )) && (( ! POLL )); then
-  echo "ralph: --timeout requires --poll" >&2
-  exit 2
-fi
+    def run(self, *args, check=True, cwd=None):
+        effective_cwd = cwd if cwd is not None else self.cwd
+        return subprocess.run(
+            ["git"] + list(args),
+            cwd=effective_cwd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=check,
+        )
 
-if ! command -v docker &>/dev/null; then
-  echo "ralph: docker is not installed" >&2
-  exit 1
-fi
+    def output(self, *args, cwd=None):
+        try:
+            result = self.run(*args, check=True, cwd=cwd)
+            return result.stdout.strip()
+        except subprocess.CalledProcessError:
+            return ""
 
-if ! command -v gh &>/dev/null; then
-  echo "ralph: gh is not installed (install: brew install gh)" >&2
-  exit 1
-fi
 
-if ! command -v jq &>/dev/null; then
-  echo "ralph: jq is not installed (install: brew install jq)" >&2
-  exit 1
-fi
+# ---------------------------------------------------------------------------
+# Docker helper
+# ---------------------------------------------------------------------------
 
-# --- build image ---
-RALPH_DIR=${0:A:h}/../docker/ralph
-HOST_UID=$(id -u)
+class Docker:
+    def __init__(self, ralph_dir, host_uid):
+        self.ralph_dir = ralph_dir
+        self.host_uid = host_uid
 
-build_image() {
-  local tag=$1; shift
-  if docker image inspect "$tag" &>/dev/null; then
-    echo "ralph: using cached image $tag"
-  else
-    echo "ralph: building image $tag (this may take a minute)..."
-    docker build "$@" -t "$tag" "$RALPH_DIR"
-  fi
-}
+    def build_image(self, tag, extra_args=None):
+        result = subprocess.run(
+            ["docker", "image", "inspect", tag],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        if result.returncode == 0:
+            print(f"ralph: using cached image {tag}")
+            return
 
-if [[ -n $PACKAGES ]]; then
-  PKG_HASH=$(echo "$PACKAGES:$HOST_UID" | shasum -a 256 | cut -c1-12)
-  IMAGE_TAG="ralph:custom-${PKG_HASH}"
-  build_image "$IMAGE_TAG" \
-    --build-arg "EXTRA_PACKAGES=$PACKAGES" \
-    --build-arg "HOST_UID=$HOST_UID"
-else
-  IMAGE_TAG="ralph:uid-${HOST_UID}"
-  build_image "$IMAGE_TAG" \
-    --build-arg "HOST_UID=$HOST_UID"
-fi
+        print(f"ralph: building image {tag} (this may take a minute)...")
+        cmd = ["docker", "build"]
+        if extra_args:
+            cmd.extend(extra_args)
+        cmd.extend(["-t", tag, self.ralph_dir])
+        subprocess.run(cmd, check=True)
 
-# --- resolve auth token ---
-# On macOS, claude stores OAuth credentials in Keychain. Extract the
-# access token and pass via env var so the container can authenticate.
-KEYCHAIN_JSON=$(security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null) || {
-  echo "ralph: no Claude credentials in Keychain — run 'claude' to log in first" >&2
-  exit 1
-}
-OAUTH_TOKEN=$(printf '%s' "$KEYCHAIN_JSON" | jq -r '.claudeAiOauth.accessToken')
+    def compute_tag(self, packages):
+        if packages:
+            hash_input = f"{packages}:{self.host_uid}"
+            pkg_hash = hashlib.sha256(hash_input.encode()).hexdigest()[:12]
+            return f"ralph:custom-{pkg_hash}"
+        return f"ralph:uid-{self.host_uid}"
 
-# --- resolve repo from origin remote ---
-resolve_repo() {
-  git remote get-url origin 2>/dev/null \
-    | sed -E 's#.*github\.com[:/]##; s#\.git$##'
-}
+    def ensure_image(self, packages):
+        tag = self.compute_tag(packages)
+        build_args = ["--build-arg", f"HOST_UID={self.host_uid}"]
+        if packages:
+            build_args.extend(["--build-arg", f"EXTRA_PACKAGES={packages}"])
+        self.build_image(tag, extra_args=build_args)
+        return tag
 
-# --- check if all dependency issues have status:done ---
-# Usage: check_dependencies "11 17" "owner/repo"
-# Returns 0 if all deps have status:done, 1 otherwise.
-# Prints unmet dep numbers to stdout (one per line).
-check_dependencies() {
-  local deps=$1 repo=$2
-  local num labels unmet=()
+    def run_container(self, image_tag, work_dir, worktree_mount, spec_file,
+                      push, model, git_user, git_email, oauth_token):
+        cmd = ["docker", "run", "--rm",
+               "-v", f"{work_dir}:/work"]
+        if worktree_mount:
+            cmd.extend(["-v", f"{worktree_mount}:{worktree_mount}"])
+        cmd.extend([
+            "-v", f"{os.path.expanduser('~/.gitconfig')}:/home/ralph/.gitconfig:ro",
+            "-v", f"{os.path.expanduser('~/.ssh')}:/home/ralph/.ssh:ro",
+            "-e", f"PUSH={push}",
+            "-v", f"{spec_file}:/tmp/spec.md",
+            "-e", "PROMPT_FILE=/tmp/spec.md",
+            "-e", f"MODEL={model}",
+            "-e", f"GIT_USER={git_user}",
+            "-e", f"GIT_EMAIL={git_email}",
+            "-e", f"CLAUDE_CODE_OAUTH_TOKEN={oauth_token}",
+            image_tag,
+        ])
+        return subprocess.run(cmd, check=False).returncode
 
-  for num in ${=deps}; do
-    labels=$(gh issue view "$num" --repo "$repo" --json labels -q '[.labels[].name] | join(",")' 2>/dev/null) || {
-      echo "ralph: warning: could not fetch issue #$num" >&2
-      unmet+=("$num")
-      continue
-    }
-    if [[ $labels != *"status:done"* ]]; then
-      unmet+=("$num")
-    fi
-  done
 
-  if (( ${#unmet} > 0 )); then
-    printf '%s\n' "${unmet[@]}"
-    return 1
-  fi
-  return 0
-}
+# ---------------------------------------------------------------------------
+# GitHub helper
+# ---------------------------------------------------------------------------
 
-# --- scan blocked specs and unblock those with satisfied deps ---
-# Usage: unblock_ready_specs "owner/repo"
-unblock_ready_specs() {
-  local repo=$1
-  local numbers number body depends
+class GitHub:
+    def issue_view_field(self, number, field, repo):
+        """Fetch a single field from an issue using --json."""
+        result = subprocess.run(
+            ["gh", "issue", "view", str(number),
+             "--json", field, "--repo", repo],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            check=True,
+        )
+        data = json.loads(result.stdout)
+        return data.get(field, "")
 
-  numbers=$(gh issue list --label "status:blocked" --label "spec" --repo "$repo" --json number -q '.[].number' 2>/dev/null) || {
-    echo "ralph: warning: failed to fetch blocked issues" >&2
-    return 0
-  }
+    def issue_view_title(self, number, repo):
+        return self.issue_view_field(number, "title", repo)
 
-  [[ -z $numbers ]] && return 0
+    def issue_view_body(self, number, repo):
+        return self.issue_view_field(number, "body", repo)
 
-  while IFS= read -r number; do
-    body=$(gh issue view "$number" --json body -q .body --repo "$repo" 2>/dev/null) || continue
+    def issue_view_labels(self, number, repo):
+        result = subprocess.run(
+            ["gh", "issue", "view", str(number),
+             "--json", "labels", "--repo", repo],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            check=True,
+        )
+        data = json.loads(result.stdout)
+        return [label["name"] for label in data.get("labels", [])]
 
-    depends=$(parse_frontmatter "$body" "depends")
+    def issue_edit(self, number, repo, remove_label=None, add_label=None, body=None):
+        cmd = ["gh", "issue", "edit", str(number)]
+        if remove_label:
+            cmd.extend(["--remove-label", remove_label])
+        if add_label:
+            cmd.extend(["--add-label", add_label])
+        if body is not None:
+            cmd.extend(["--body", body])
+        cmd.extend(["--repo", repo])
+        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
 
-    if [[ -z $depends ]]; then
-      # No depends field — shouldn't be blocked, fix it
-      echo "ralph: unblocked issue #$number — no dependencies declared"
-      gh issue edit "$number" --remove-label "status:blocked" --add-label "status:ready" --repo "$repo" 2>/dev/null || true
-      continue
-    fi
+    def issue_list(self, repo, labels, author=None):
+        cmd = ["gh", "issue", "list"]
+        for label in labels:
+            cmd.extend(["--label", label])
+        if author:
+            cmd.extend(["--author", author])
+        cmd.extend(["--repo", repo, "--json", "number"])
+        result = subprocess.run(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True,
+        )
+        data = json.loads(result.stdout)
+        return [item["number"] for item in data]
 
-    if check_dependencies "$depends" "$repo" >/dev/null; then
-      echo "ralph: unblocked issue #$number — all dependencies met"
-      gh issue edit "$number" --remove-label "status:blocked" --add-label "status:ready" --repo "$repo" 2>/dev/null || true
-    fi
-  done <<< "$numbers"
-}
 
-# --- parse branch from issue title [branch] prefix ---
-parse_issue_branch() {
-  local title=$1
-  local pat='^\[([^]]+)\]'
-  if [[ $title =~ $pat ]]; then
-    echo "$match[1]"
-  else
-    echo "ralph: cannot parse branch from issue title: $title" >&2
-    return 1
-  fi
-}
+# ---------------------------------------------------------------------------
+# Pure functions
+# ---------------------------------------------------------------------------
 
-# --- parse a field from YAML frontmatter in the issue body ---
-# Usage: parse_frontmatter "$body" "branch"
-parse_frontmatter() {
-  local body=$1 field=$2
-  # Extract frontmatter block (between first two --- lines)
-  local fm
-  fm=$(echo "$body" | sed -n '/^---$/,/^---$/p' | sed '1d;$d')
-  if [[ -z $fm ]]; then
-    return 1
-  fi
-  # Extract field value (simple key: value parsing)
-  local value
-  value=$(echo "$fm" | awk -F':[[:space:]]*' -v key="$field" '$1 == key { print $2; exit }')
-  if [[ -z $value ]]; then
-    return 1
-  fi
-  echo "$value"
-}
+def parse_duration(s):
+    """Parse duration string like '30', '30s', '5m', '2h', '1d'. Returns seconds.
 
-# --- process a single GitHub Issue ---
-process_issue() {
-  local issue_number=$1
-  local repo
-  repo=$(resolve_repo) || {
-    echo "ralph: could not detect repo from origin remote" >&2
-    return 1
-  }
+    Raises ValueError for invalid input.
+    """
+    if not s:
+        raise ValueError("empty string")
+    m = re.match(r'^(\d+)([smhd]?)$', s)
+    if not m:
+        raise ValueError(s)
+    num = int(m.group(1))
+    suffix = m.group(2)
+    multipliers = {'': 1, 's': 1, 'm': 60, 'h': 3600, 'd': 86400}
+    return num * multipliers[suffix]
 
-  # Fetch issue data
-  local title body branch
-  title=$(gh issue view "$issue_number" --json title -q .title --repo "$repo") || {
-    echo "ralph: failed to fetch issue #$issue_number from $repo" >&2
-    return 1
-  }
-  body=$(gh issue view "$issue_number" --json body -q .body --repo "$repo") || {
-    echo "ralph: failed to fetch issue #$issue_number from $repo" >&2
-    return 1
-  }
 
-  local base
-  branch=$(parse_frontmatter "$body" "branch") || {
-    echo "ralph: no branch in frontmatter, falling back to title" >&2
-    branch=$(parse_issue_branch "$title") || return 1
-  }
-  base=$(parse_frontmatter "$body" "base") || true  # optional
+def parse_frontmatter(body, field):
+    """Extract a field from YAML-like frontmatter (between --- delimiters).
+    Returns None when field is missing or no frontmatter found.
+    For bracket lists like [11, 17], returns space-separated string of values.
+    """
+    lines = body.split('\n')
+    # Find frontmatter block
+    fm_lines = []
+    in_fm = False
+    for line in lines:
+        if line.strip() == '---':
+            if not in_fm:
+                in_fm = True
+                continue
+            else:
+                break
+        if in_fm:
+            fm_lines.append(line)
 
-  # Safety check: if spec has unmet dependencies, block it and skip
-  local depends
-  depends=$(parse_frontmatter "$body" "depends") || true
-  if [[ -n $depends ]]; then
-    local unmet
-    if ! unmet=$(check_dependencies "$depends" "$repo"); then
-      echo "ralph: issue #$issue_number has unmet dependencies: $(echo "$unmet" | tr '\n' ' '| sed 's/ $//')"
-      echo "ralph: transitioning issue #$issue_number to status:blocked"
-      gh issue edit "$issue_number" --remove-label "status:ready" --add-label "status:blocked" --repo "$repo" 2>/dev/null || true
-      return 0
-    fi
-  fi
+    if not fm_lines:
+        return None
 
-  local work_dir
-  work_dir=$(ensure_worktree "$branch" "$base")
-  echo "ralph: processing issue #$issue_number on branch $branch"
-  echo "ralph: using worktree at $work_dir"
+    for line in fm_lines:
+        colon_pos = line.find(':')
+        if colon_pos < 0:
+            continue
+        key = line[:colon_pos].strip()
+        if key != field:
+            continue
+        value = line[colon_pos + 1:].strip()
+        if not value:
+            return None
+        # Handle bracket list: [11, 17]
+        if value.startswith('[') and value.endswith(']'):
+            inner = value[1:-1]
+            parts = [p.strip() for p in inner.split(',') if p.strip()]
+            return ' '.join(parts)
+        return value
 
-  # Label in-progress
-  gh issue edit "$issue_number" --remove-label "status:ready" --add-label "status:in-progress" --repo "$repo" 2>/dev/null || true
+    return None
 
-  local spec_tmpfile head_before head_after
-  spec_tmpfile=$(mktemp)
 
-  while true; do
-    # Write current issue body as spec file
-    echo "$body" > "$spec_tmpfile"
+def parse_issue_branch(title):
+    """Extract branch name from [branch] prefix in issue title."""
+    m = re.match(r'^\[([^\]]+)\]', title)
+    if m:
+        return m.group(1)
+    print(f"ralph: cannot parse branch from issue title: {title}", file=sys.stderr)
+    return None
 
-    # Worktree git dir mount
-    local worktree_mount=()
-    if [[ -f "$work_dir/.git" ]]; then
-      local main_git_dir
-      main_git_dir=$(git -C "$work_dir" rev-parse --git-common-dir 2>/dev/null)
-      if [[ -n $main_git_dir ]]; then
-        main_git_dir=${main_git_dir:A}
-        worktree_mount=(-v "$main_git_dir:$main_git_dir")
-      fi
-    fi
 
-    # Record HEAD before
-    head_before=$(git -C "$work_dir" rev-parse HEAD 2>/dev/null || echo "none")
+# ---------------------------------------------------------------------------
+# Orchestration
+# ---------------------------------------------------------------------------
 
-    # Run container (single iteration)
-    echo "ralph: starting iteration (image=$IMAGE_TAG, issue=#$issue_number, model=$MODEL)"
-    docker run --rm \
-      -v "$work_dir:/work" \
-      "${worktree_mount[@]}" \
-      -v "$HOME/.gitconfig:/home/ralph/.gitconfig:ro" \
-      -v "$HOME/.ssh:/home/ralph/.ssh:ro" \
-      -e "PUSH=$PUSH" \
-      -v "$spec_tmpfile:/tmp/spec.md" \
-      -e "PROMPT_FILE=/tmp/spec.md" \
-      -e "MODEL=$MODEL" \
-      -e "GIT_USER=$GIT_USER" \
-      -e "GIT_EMAIL=$GIT_EMAIL" \
-      -e "CLAUDE_CODE_OAUTH_TOKEN=$OAUTH_TOKEN" \
-      "$IMAGE_TAG" || {
-        echo "ralph: container failed for issue #$issue_number" >&2
-        gh issue edit "$issue_number" --remove-label "status:in-progress" --add-label "status:needs-attention" --repo "$repo" 2>/dev/null || true
-        rm -f "$spec_tmpfile"
+def resolve_repo(git):
+    """Resolve owner/repo from origin remote URL."""
+    url = git.output("remote", "get-url", "origin")
+    if not url:
+        return None
+    # Strip git@github.com: or https://github.com/ prefix and .git suffix
+    url = re.sub(r'.*github\.com[:/]', '', url)
+    url = re.sub(r'\.git$', '', url)
+    return url
+
+
+def check_dependencies(deps, repo, gh=None):
+    """Check if all dependency issues have status:done.
+    Returns list of unmet dependency numbers.
+    """
+    if gh is None:
+        gh = GitHub()
+    unmet = []
+    for num in deps:
+        try:
+            labels = gh.issue_view_labels(int(num), repo)
+            if "status:done" not in labels:
+                unmet.append(num)
+        except Exception:
+            print(f"ralph: warning: could not fetch issue #{num}", file=sys.stderr)
+            unmet.append(num)
+    return unmet
+
+
+def unblock_ready_specs(repo, gh=None):
+    """Scan blocked specs and unblock those with satisfied dependencies."""
+    if gh is None:
+        gh = GitHub()
+    try:
+        numbers = gh.issue_list(repo, ["status:blocked", "spec"])
+    except (subprocess.CalledProcessError, Exception):
+        print("ralph: warning: failed to fetch blocked issues", file=sys.stderr)
+        return
+
+    for number in numbers:
+        try:
+            body = gh.issue_view_body(number, repo)
+        except Exception:
+            continue
+
+        depends = parse_frontmatter(body, "depends")
+
+        if not depends:
+            print(f"ralph: unblocked issue #{number} — no dependencies declared")
+            gh.issue_edit(number, repo,
+                          remove_label="status:blocked",
+                          add_label="status:ready")
+            continue
+
+        dep_list = depends.split()
+        unmet = check_dependencies(dep_list, repo, gh)
+        if not unmet:
+            print(f"ralph: unblocked issue #{number} — all dependencies met")
+            gh.issue_edit(number, repo,
+                          remove_label="status:blocked",
+                          add_label="status:ready")
+
+
+def ensure_worktree(git, branch, base=None):
+    """Find or create a git worktree for the given branch."""
+    repo_root = git.output("rev-parse", "--show-toplevel")
+    sanitized_branch = branch.replace('/', '-')
+    parent = os.path.dirname(repo_root)
+    repo_name = os.path.basename(repo_root)
+    wt_path = os.path.join(parent, f"{repo_name}-{sanitized_branch}")
+
+    # Check if worktree already exists for this branch
+    try:
+        result = git.run("worktree", "list", "--porcelain")
+        porcelain = result.stdout
+    except subprocess.CalledProcessError:
+        porcelain = ""
+
+    lines = porcelain.splitlines()
+    lines.append("")  # ensure trailing blank to flush last entry
+    wt_dir = ""
+    wt_branch = ""
+    for line in lines:
+        if line.startswith("worktree "):
+            wt_dir = line[len("worktree "):]
+        elif line.startswith("branch "):
+            ref = line[len("branch "):]
+            if ref.startswith("refs/heads/"):
+                wt_branch = ref[len("refs/heads/"):]
+            else:
+                wt_branch = ref
+        elif line == "":
+            if wt_branch == branch:
+                return wt_dir
+            wt_dir = ""
+            wt_branch = ""
+
+    # Determine remote (upstream > origin)
+    remote = ""
+    remotes_raw = git.output("remote")
+    remotes = remotes_raw.splitlines() if remotes_raw else []
+    if "upstream" in remotes:
+        remote = "upstream"
+    elif "origin" in remotes:
+        remote = "origin"
+
+    # Determine default branch
+    default_branch = ""
+    if remote:
+        ref = git.output("symbolic-ref", f"refs/remotes/{remote}/HEAD")
+        if ref:
+            default_branch = ref.replace(f"refs/remotes/{remote}/", "")
+
+    if not default_branch or git.run("rev-parse", "--verify", default_branch, check=False).returncode != 0:
+        default_branch = git.output("symbolic-ref", "--short", "HEAD") or "HEAD"
+
+    # Override with explicit base
+    if base:
+        default_branch = base
+
+    # Create worktree
+    if remote:
+        ls_result = git.run(
+            "ls-remote", "--exit-code", "--heads", remote, f"refs/heads/{branch}",
+            check=False,
+        )
+        if ls_result.returncode == 0:
+            git.run("worktree", "add", "--track", "-b", branch, wt_path,
+                     f"{remote}/{branch}")
+            return wt_path
+
+    git.run("worktree", "add", "-b", branch, wt_path, default_branch)
+    return wt_path
+
+
+def get_auth_token():
+    """Extract OAuth token from macOS Keychain."""
+    try:
+        result = subprocess.run(
+            ["security", "find-generic-password", "-s", "Claude Code-credentials", "-w"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True,
+        )
+        keychain_json = result.stdout.strip()
+    except subprocess.CalledProcessError:
+        print("ralph: no Claude credentials in Keychain — run 'claude' to log in first",
+              file=sys.stderr)
+        sys.exit(1)
+
+    try:
+        data = json.loads(keychain_json)
+        return data["claudeAiOauth"]["accessToken"]
+    except (json.JSONDecodeError, KeyError):
+        print("ralph: failed to parse Claude credentials from Keychain", file=sys.stderr)
+        sys.exit(1)
+
+
+def check_dependencies_prereq():
+    """Check that required tools are on PATH."""
+    if not shutil.which("docker"):
+        print("ralph: docker is not installed", file=sys.stderr)
+        sys.exit(1)
+    if not shutil.which("gh"):
+        print("ralph: gh is not installed (install: brew install gh)", file=sys.stderr)
+        sys.exit(1)
+
+
+def process_issue(issue_number, git, docker, gh, image_tag, push, model,
+                  git_user, git_email, oauth_token):
+    """Process a single GitHub Issue spec."""
+    repo = resolve_repo(git)
+    if not repo:
+        print("ralph: could not detect repo from origin remote", file=sys.stderr)
         return 1
-      }
 
-    # Check if work was done
-    head_after=$(git -C "$work_dir" rev-parse HEAD 2>/dev/null || echo "none")
+    # Fetch issue data
+    try:
+        title = gh.issue_view_title(issue_number, repo)
+    except subprocess.CalledProcessError:
+        print(f"ralph: failed to fetch issue #{issue_number} from {repo}", file=sys.stderr)
+        return 1
 
-    if [[ $head_before == $head_after ]]; then
-      # No commit — all tasks complete
-      echo "ralph: no commit made, marking issue #$issue_number done"
-      gh issue edit "$issue_number" --remove-label "status:in-progress" --add-label "status:done" --repo "$repo" 2>/dev/null || true
-      # Unblock any specs whose dependencies are now met
-      unblock_ready_specs "$repo"
-      rm -f "$spec_tmpfile"
-      break
-    fi
+    try:
+        body = gh.issue_view_body(issue_number, repo)
+    except subprocess.CalledProcessError:
+        print(f"ralph: failed to fetch issue #{issue_number} from {repo}", file=sys.stderr)
+        return 1
 
-    # Update issue body from spec file (container may have checked off tasks)
-    body=$(<"$spec_tmpfile")
-    gh issue edit "$issue_number" --body "$body" --repo "$repo" 2>/dev/null || true
-    echo "ralph: iteration complete, updated issue #$issue_number"
+    # Parse branch
+    branch = parse_frontmatter(body, "branch")
+    if not branch:
+        print("ralph: no branch in frontmatter, falling back to title", file=sys.stderr)
+        branch = parse_issue_branch(title)
+        if not branch:
+            return 1
 
-    # Optional push
-    if (( PUSH )); then
-      git -C "$work_dir" push 2>/dev/null || true
-    fi
-  done
-}
+    base = parse_frontmatter(body, "base")
 
-# --- ensure worktree exists for branch ---
-ensure_worktree() {
-  local branch=$1
-  local base_branch=${2:-}  # optional, defaults to remote HEAD
-  local repo_root sanitized_branch wt_path remote
-  repo_root=$(git rev-parse --show-toplevel)
-  sanitized_branch=${branch//\//-}
-  wt_path="${repo_root:h}/${repo_root:t}-${sanitized_branch}"
+    # Dependency check
+    depends = parse_frontmatter(body, "depends")
+    if depends:
+        dep_list = depends.split()
+        unmet = check_dependencies(dep_list, repo, gh)
+        if unmet:
+            unmet_str = ' '.join(unmet)
+            print(f"ralph: issue #{issue_number} has unmet dependencies: {unmet_str}")
+            print(f"ralph: transitioning issue #{issue_number} to status:blocked")
+            gh.issue_edit(issue_number, repo,
+                          remove_label="status:ready",
+                          add_label="status:blocked")
+            return 0
 
-  # Check if worktree already exists for this branch
-  local porcelain line wt_dir="" wt_branch=""
-  porcelain=$(git worktree list --porcelain)
-  porcelain+=$'\n'
-  while IFS= read -r line; do
-    if [[ $line == "worktree "* ]]; then
-      wt_dir=${line#worktree }
-    elif [[ $line == "branch "* ]]; then
-      wt_branch=${line#branch refs/heads/}
-    elif [[ -z $line ]]; then
-      if [[ $wt_branch == $branch ]]; then
-        echo "$wt_dir"
-        return 0
-      fi
-      wt_dir="" wt_branch=""
-    fi
-  done <<< "$porcelain"
+    # Ensure worktree
+    work_dir = ensure_worktree(git, branch, base)
+    print(f"ralph: processing issue #{issue_number} on branch {branch}")
+    print(f"ralph: using worktree at {work_dir}")
 
-  # Determine remote (optional — purely local repos have none)
-  if git remote | grep -qx upstream; then
-    remote=upstream
-  elif git remote | grep -qx origin; then
-    remote=origin
-  fi
+    # Label in-progress
+    gh.issue_edit(issue_number, repo,
+                  remove_label="status:ready",
+                  add_label="status:in-progress")
 
-  # Determine default branch name (must be a valid local ref)
-  local default_branch
-  if [[ -n $remote ]]; then
-    default_branch=$(git symbolic-ref "refs/remotes/${remote}/HEAD" 2>/dev/null | sed "s|refs/remotes/${remote}/||") || true
-  fi
-  if [[ -z $default_branch ]] || ! git rev-parse --verify "$default_branch" &>/dev/null; then
-    default_branch=$(git symbolic-ref --short HEAD 2>/dev/null) || default_branch=HEAD
-  fi
+    # Create temp file for spec
+    fd, spec_tmpfile = tempfile.mkstemp()
+    os.close(fd)
 
-  # Override default branch with explicit base if provided
-  if [[ -n $base_branch ]]; then
-    default_branch=$base_branch
-  fi
+    try:
+        while True:
+            # Write current body as spec
+            with open(spec_tmpfile, 'w') as f:
+                f.write(body)
 
-  # Create worktree: track remote branch if it exists, else branch from default
-  if [[ -n $remote ]] && git ls-remote --exit-code --heads "$remote" "refs/heads/$branch" &>/dev/null; then
-    git worktree add --track -b "$branch" "$wt_path" "${remote}/${branch}" >&2
-  else
-    git worktree add -b "$branch" "$wt_path" "$default_branch" >&2
-  fi
+            # Resolve worktree git dir for mount
+            worktree_mount = None
+            git_file = os.path.join(work_dir, ".git")
+            if os.path.isfile(git_file):
+                main_git_dir = git.output("rev-parse", "--git-common-dir", cwd=work_dir)
+                if main_git_dir:
+                    main_git_dir = os.path.realpath(main_git_dir)
+                    worktree_mount = main_git_dir
 
-  echo "$wt_path"
-}
+            # Record HEAD before
+            head_before = git.output("rev-parse", "HEAD", cwd=work_dir) or "none"
 
-# --- configure git inside container ---
-GIT_USER=$(git config user.name 2>/dev/null || echo "ralph")
-GIT_EMAIL=$(git config user.email 2>/dev/null || echo "ralph@localhost")
+            # Run container
+            push_val = 1 if push else 0
+            print(f"ralph: starting iteration (image={image_tag}, issue=#{issue_number}, model={model})")
+            rc = docker.run_container(
+                image_tag, work_dir, worktree_mount, spec_tmpfile,
+                push_val, model, git_user, git_email, oauth_token,
+            )
+            if rc != 0:
+                print(f"ralph: container failed for issue #{issue_number}", file=sys.stderr)
+                gh.issue_edit(issue_number, repo,
+                              remove_label="status:in-progress",
+                              add_label="status:needs-attention")
+                return 1
+
+            # Check if work was done
+            head_after = git.output("rev-parse", "HEAD", cwd=work_dir) or "none"
+
+            if head_before == head_after:
+                print(f"ralph: no commit made, marking issue #{issue_number} done")
+                gh.issue_edit(issue_number, repo,
+                              remove_label="status:in-progress",
+                              add_label="status:done")
+                unblock_ready_specs(repo, gh)
+                break
+
+            # Update issue body from spec file
+            with open(spec_tmpfile, 'r') as f:
+                body = f.read()
+            gh.issue_edit(issue_number, repo, body=body)
+            print(f"ralph: iteration complete, updated issue #{issue_number}")
+
+            # Optional push
+            if push:
+                git.run("push", cwd=work_dir, check=False)
+    finally:
+        try:
+            os.unlink(spec_tmpfile)
+        except OSError:
+            pass
+
+    return 0
 
 
-# --- issue mode ---
-if [[ -n $ISSUE_NUMBER ]]; then
-  process_issue "$ISSUE_NUMBER"
-  exit $?
-fi
+def poll_loop(git, docker, gh, image_tag, push, model, git_user, git_email,
+              oauth_token, interval, timeout):
+    """Poll for ready issues and process them."""
+    repo = resolve_repo(git)
+    if not repo:
+        print("ralph: could not detect repo from origin remote", file=sys.stderr)
+        sys.exit(1)
 
-# --- poll mode ---
-if (( POLL )); then
-  REPO=$(resolve_repo) || {
-    echo "ralph: could not detect repo from origin remote" >&2
-    exit 1
-  }
+    deadline = 0
+    if timeout > 0:
+        deadline = time.time() + timeout
 
-  POLL_DEADLINE=0
-  if (( TIMEOUT > 0 )); then
-    POLL_DEADLINE=$(( EPOCHSECONDS + TIMEOUT ))
-  fi
+    # Signal handling
+    interrupted = [False]
 
-  trap 'printf "\n"; echo "ralph: poll interrupted"; exit 0' INT TERM
+    def handle_signal(signum, frame):
+        interrupted[0] = True
 
-  local last_was_idle=0
-  local timestamp
+    signal.signal(signal.SIGINT, handle_signal)
+    signal.signal(signal.SIGTERM, handle_signal)
 
-  while true; do
-    # Check deadline
-    if (( POLL_DEADLINE > 0 )) && (( EPOCHSECONDS >= POLL_DEADLINE )); then
-      (( last_was_idle )) && printf "\n"
-      echo "ralph: poll timeout reached"
-      break
-    fi
+    last_was_idle = False
 
-    # Unblock any specs whose dependencies are now met
-    unblock_ready_specs "$REPO"
+    while not interrupted[0]:
+        # Check deadline
+        if deadline > 0 and time.time() >= deadline:
+            if last_was_idle:
+                sys.stdout.write("\n")
+            print("ralph: poll timeout reached")
+            break
 
-    # Fetch ready issues
-    issue_numbers=$(gh issue list --label "spec,status:ready" --author "@me" --repo "$REPO" --json number -q '.[].number' 2>/dev/null) || {
-      (( last_was_idle )) && printf "\n"
-      echo "ralph: failed to list issues from $REPO" >&2
-      last_was_idle=0
-      sleep "$INTERVAL"
-      continue
-    }
+        # Unblock specs
+        unblock_ready_specs(repo, gh)
 
-    if [[ -n $issue_numbers ]]; then
-      (( last_was_idle )) && printf "\n"
-      last_was_idle=0
-      while IFS= read -r num; do
-        echo "ralph: found ready issue #$num"
-        process_issue "$num" || true
-      done <<< "$issue_numbers"
-    else
-      timestamp=$(strftime "%H:%M:%S" "$EPOCHSECONDS")
-      printf "\rralph: no ready issues found (last checked at %s)%s" "$timestamp" $'\e[K'
-      last_was_idle=1
-    fi
+        # Fetch ready issues
+        try:
+            numbers = gh.issue_list(repo, ["spec", "status:ready"], author="@me")
+        except Exception:
+            if last_was_idle:
+                sys.stdout.write("\n")
+            print(f"ralph: failed to list issues from {repo}", file=sys.stderr)
+            last_was_idle = False
+            time.sleep(interval)
+            continue
 
-    # Check deadline before sleeping
-    if (( POLL_DEADLINE > 0 )) && (( EPOCHSECONDS >= POLL_DEADLINE )); then
-      (( last_was_idle )) && printf "\n"
-      echo "ralph: poll timeout reached"
-      break
-    fi
+        if numbers:
+            if last_was_idle:
+                sys.stdout.write("\n")
+            last_was_idle = False
+            for num in numbers:
+                print(f"ralph: found ready issue #{num}")
+                try:
+                    process_issue(num, git, docker, gh, image_tag, push, model,
+                                  git_user, git_email, oauth_token)
+                except Exception:
+                    pass
+        else:
+            timestamp = time.strftime("%H:%M:%S")
+            sys.stdout.write(f"\rralph: no ready issues found (last checked at {timestamp})\033[K")
+            sys.stdout.flush()
+            last_was_idle = True
 
-    sleep "$INTERVAL"
-  done
-  exit 0
-fi
+        # Check deadline before sleeping
+        if deadline > 0 and time.time() >= deadline:
+            if last_was_idle:
+                sys.stdout.write("\n")
+            print("ralph: poll timeout reached")
+            break
 
-# --- no mode specified ---
-echo "ralph: no mode specified. Use --issue <number> or --poll" >&2
-usage 2
+        time.sleep(interval)
+
+    if interrupted[0]:
+        sys.stdout.write("\n")
+        print("ralph: poll interrupted")
+
+
+# ---------------------------------------------------------------------------
+# Usage
+# ---------------------------------------------------------------------------
+
+USAGE_TEXT = """\
+Usage: ralph [options]
+
+Options:
+  --issue <number>      Execute a single GitHub Issue spec
+  --poll                Poll for status:ready issues and process them
+  --interval <duration> Poll interval (default: 30s, requires --poll)
+  --timeout <duration>  Limit poll duration (e.g. 30m, 4h, 1d; requires --poll)
+  --packages "pkg ..."  Extra apt packages baked into image
+  --push                Git push after each iteration
+  --model <model>       Claude model (default: sonnet)
+  -h, --help            Show usage"""
+
+
+def usage(exit_code=0):
+    """Print usage and exit."""
+    print(USAGE_TEXT)
+    sys.exit(exit_code)
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+def main():
+    # Parse arguments manually to match zsh behavior exactly
+    args = sys.argv[1:]
+    packages = ""
+    push = False
+    timeout_val = 0
+    model = "sonnet"
+    issue_number = ""
+    poll = False
+    interval = 30
+
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg == "--packages":
+            if i + 1 >= len(args):
+                print("ralph: --packages requires an argument", file=sys.stderr)
+                sys.exit(2)
+            packages = args[i + 1]
+            i += 2
+        elif arg == "--push":
+            push = True
+            i += 1
+        elif arg == "--issue":
+            if i + 1 >= len(args):
+                print("ralph: --issue requires an argument", file=sys.stderr)
+                sys.exit(2)
+            issue_number = args[i + 1]
+            i += 2
+        elif arg == "--poll":
+            poll = True
+            i += 1
+        elif arg == "--interval":
+            if i + 1 >= len(args):
+                print("ralph: --interval requires an argument", file=sys.stderr)
+                sys.exit(2)
+            try:
+                interval = parse_duration(args[i + 1])
+            except ValueError as e:
+                print(f"ralph: invalid duration: {e}", file=sys.stderr)
+                sys.exit(2)
+            i += 2
+        elif arg == "--model":
+            if i + 1 >= len(args):
+                print("ralph: --model requires an argument", file=sys.stderr)
+                sys.exit(2)
+            model = args[i + 1]
+            i += 2
+        elif arg == "--timeout":
+            if i + 1 >= len(args):
+                print("ralph: --timeout requires an argument", file=sys.stderr)
+                sys.exit(2)
+            try:
+                timeout_val = parse_duration(args[i + 1])
+            except ValueError as e:
+                print(f"ralph: invalid duration: {e}", file=sys.stderr)
+                sys.exit(2)
+            i += 2
+        elif arg in ("-h", "--help"):
+            usage(0)
+        elif arg.startswith("-"):
+            print(f"ralph: unknown option: {arg}", file=sys.stderr)
+            usage(1)
+        else:
+            print(f"ralph: unknown option: {arg}", file=sys.stderr)
+            usage(1)
+    # Validation
+    if poll and issue_number:
+        print("ralph: --poll and --issue cannot be used together", file=sys.stderr)
+        sys.exit(2)
+
+    if not poll and interval != 30:
+        print("ralph: --interval requires --poll", file=sys.stderr)
+        sys.exit(2)
+
+    if timeout_val > 0 and not poll:
+        print("ralph: --timeout requires --poll", file=sys.stderr)
+        sys.exit(2)
+
+    # Prerequisite checks
+    check_dependencies_prereq()
+
+    # Resolve script directory for Dockerfile path
+    self_path = os.path.realpath(__file__)
+    ralph_dir = os.path.join(os.path.dirname(self_path), "..", "docker", "ralph")
+    ralph_dir = os.path.normpath(ralph_dir)
+
+    host_uid = os.getuid()
+    docker_helper = Docker(ralph_dir, host_uid)
+    image_tag = docker_helper.ensure_image(packages)
+
+    # Auth
+    oauth_token = get_auth_token()
+
+    # Git user config
+    git = Git()
+    git_user = git.output("config", "user.name") or "ralph"
+    git_email = git.output("config", "user.email") or "ralph@localhost"
+    gh = GitHub()
+
+    # Issue mode
+    if issue_number:
+        rc = process_issue(int(issue_number), git, docker_helper, gh, image_tag,
+                           push, model, git_user, git_email, oauth_token)
+        sys.exit(rc)
+
+    # Poll mode
+    if poll:
+        poll_loop(git, docker_helper, gh, image_tag, push, model, git_user,
+                  git_email, oauth_token, interval, timeout_val)
+        sys.exit(0)
+
+    # No mode specified
+    print("ralph: no mode specified. Use --issue <number> or --poll", file=sys.stderr)
+    usage(2)
+
+
+if __name__ == "__main__":
+    main()

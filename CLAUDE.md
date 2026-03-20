@@ -147,6 +147,27 @@ docker/
   - Issue title format: `[<branch-name>] Feature Title`
   - Labels: `spec` (identifies as Ralph spec), `status:ready` / `status:in-progress` / `status:done` / `status:needs-attention`
 
+## Testing
+
+### Running Tests
+
+- **Shell tests (bats)**: `bats tests/test_<name>.bats` — integration tests that stub external commands
+- **Python tests (pytest)**: `pytest tests/test_<name>.py -v` — unit tests for Python scripts
+- **Run all bats tests**: `bats tests/test_*.bats`
+- **Run all pytest tests**: `pytest tests/ -v`
+
+Always run `pytest` directly (not `python3 -m pytest`) to use the Homebrew-installed pytest.
+
+### Python Scripts
+
+Some scripts (e.g., `scripts/ralph`) are written in Python 3 (stdlib only, no third-party dependencies). They use `#!/usr/bin/env python3` shebangs and have no `.py` extension so they work as regular commands when symlinked to `~/bin`.
+
+To import these extensionless scripts in tests, use the `import_script()` helper from `tests/conftest.py`:
+```python
+from conftest import import_script
+ralph = import_script("ralph")
+```
+
 ## Making Changes
 
 - **Adding a new host**: Create `hosts/<hostname>/roles` listing desired roles. Optionally add `brewfile` and `ssh_host_config`.

@@ -38,6 +38,10 @@ STUB
   export CLAUDE_LOG
   cat > "$BATS_TEST_TMPDIR/bin/claude" <<'STUB'
 #!/bin/bash
+if [[ "$1" == "--version" ]]; then
+  echo "1.0.0-stub"
+  exit 0
+fi
 echo "claude invoked: $*" >> "$CLAUDE_LOG"
 count=$(cat "$GIT_HEAD_COUNTER")
 echo "$((count + 1))" > "$GIT_HEAD_COUNTER"
