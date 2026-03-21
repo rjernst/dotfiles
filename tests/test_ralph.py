@@ -334,6 +334,24 @@ class TestRunClaudeSetupToken:
         result = ralph.run_claude_setup_token()
         assert result == "sk-ant-oat01-abc123XYZ_defGHI"
 
+    @patch("shutil.which", return_value="/usr/bin/claude")
+    @patch("pty.spawn")
+    def test_token_adjacent_to_ansi_escape(self, mock_spawn, mock_which):
+        """Token immediately followed by ANSI escape code (no space)."""
+        data = b"sk-ant-oat01-fulltoken123abc_XYZ\x1b[?2026l"
+        mock_spawn.side_effect = self._make_spawn(data)
+        result = ralph.run_claude_setup_token()
+        assert result == "sk-ant-oat01-fulltoken123abc_XYZ"
+
+    @patch("shutil.which", return_value="/usr/bin/claude")
+    @patch("pty.spawn")
+    def test_takes_longest_match(self, mock_spawn, mock_which):
+        """When token appears multiple times (e.g., partial + full), take longest."""
+        data = b"sk-ant-oat01-short\nfull: sk-ant-oat01-short-and-longer-version\n"
+        mock_spawn.side_effect = self._make_spawn(data)
+        result = ralph.run_claude_setup_token()
+        assert result == "sk-ant-oat01-short-and-longer-version"
+
 
 # ---------------------------------------------------------------------------
 # store_token (mocked stdin + keychain)

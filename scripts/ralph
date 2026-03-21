@@ -457,12 +457,16 @@ def run_claude_setup_token():
         sys.exit(1)
 
     full_output = b"".join(captured).decode("utf-8", errors="replace")
-    match = re.search(r'(sk-ant-oat01-\S+)', full_output)
-    if not match:
+    # Token chars are alphanumeric, hyphens, and underscores.
+    # Use a specific character class to avoid capturing trailing ANSI codes.
+    # Find all matches and take the longest (in case of partial matches
+    # from split read chunks).
+    matches = re.findall(r'sk-ant-oat01-[A-Za-z0-9_-]+', full_output)
+    if not matches:
         print("ralph: could not find token in setup-token output", file=sys.stderr)
         sys.exit(1)
 
-    return match.group(1)
+    return max(matches, key=len)
 
 
 def _parse_and_store_token(agent, raw):
