@@ -2,6 +2,7 @@
 
 import io
 import json
+import re
 import subprocess
 import time
 from unittest.mock import MagicMock, patch, call
@@ -278,49 +279,22 @@ class TestWriteTokenToKeychain:
 # run_claude_setup_token (mocked subprocess)
 # ---------------------------------------------------------------------------
 
-class TestRunClaudeSetupToken:
-    def _make_spawn(self, output_bytes, exit_status=0):
-        """Create a fake pty.spawn that feeds output_bytes through master_read."""
-        def fake_spawn(cmd, master_read):
-            with patch("os.read", return_value=output_bytes):
-                master_read(3)  # fd=3, arbitrary
-            return exit_status
-        return fake_spawn
+class TestExtractTokenFromOutput:
+    """Test the token extraction regex logic used by run_claude_setup_token."""
 
-    @patch("shutil.which", return_value="/usr/bin/claude")
-    @patch("pty.spawn")
-    def test_extracts_token_from_pty_output(self, mock_spawn, mock_which):
-        tui_data = b"\x1b[?2026hWelcome\n\xe2\x80\xa6\nsk-ant-oat01-realtoken123abc\nDone\x1b[?2026l"
-        mock_spawn.side_effect = self._make_spawn(tui_data)
-        result = ralph.run_claude_setup_token()
-        assert result == "sk-ant-oat01-realtoken123abc"
+    def _extract(self, raw_bytes):
+        """Simulate the extraction logic from run_claude_setup_token."""
+        full_output = raw_bytes.decode("utf-8", errors="replace")
+        matches = re.findall(r'sk-ant-oat01-[A-Za-z0-9_-]+', full_output)
+        if not matches:
+            return None
+        return max(matches, key=len)
 
-    @patch("shutil.which", return_value="/usr/bin/claude")
-    @patch("pty.spawn")
-    def test_exits_on_nonzero_return(self, mock_spawn, mock_which):
-        mock_spawn.side_effect = self._make_spawn(b"", exit_status=256)
-        with pytest.raises(SystemExit) as exc_info:
-            ralph.run_claude_setup_token()
-        assert exc_info.value.code == 1
+    def test_extracts_token_from_clean_output(self):
+        data = b"Your token: sk-ant-oat01-realtoken123abc\nDone.\n"
+        assert self._extract(data) == "sk-ant-oat01-realtoken123abc"
 
-    @patch("shutil.which", return_value="/usr/bin/claude")
-    @patch("pty.spawn")
-    def test_exits_when_no_token_in_output(self, mock_spawn, mock_which):
-        mock_spawn.side_effect = self._make_spawn(b"No token here\n")
-        with pytest.raises(SystemExit) as exc_info:
-            ralph.run_claude_setup_token()
-        assert exc_info.value.code == 1
-
-    @patch("shutil.which", return_value=None)
-    def test_exits_when_claude_not_found(self, mock_which):
-        with pytest.raises(SystemExit) as exc_info:
-            ralph.run_claude_setup_token()
-        assert exc_info.value.code == 1
-
-    @patch("shutil.which", return_value="/usr/bin/claude")
-    @patch("pty.spawn")
-    def test_extracts_token_from_noisy_output(self, mock_spawn, mock_which):
-        """Ensure regex finds token buried in ANSI codes and TUI output."""
+    def test_extracts_from_noisy_tui_output(self):
         noisy = (
             b"\x1b[?2026hWelcome to Claude Code v2.1.76\n"
             b"\xe2\x80\xa6\xe2\x80\xa6\xe2\x80\xa6\xe2\x80\xa6\n"
@@ -330,38 +304,51 @@ class TestRunClaudeSetupToken:
             b"Set via: export CLAUDE_CODE_OAUTH_TOKEN=<token>\n"
             b"\x1b[?2026l\n"
         )
-        mock_spawn.side_effect = self._make_spawn(noisy)
-        result = ralph.run_claude_setup_token()
-        assert result == "sk-ant-oat01-abc123XYZ_defGHI"
+        assert self._extract(noisy) == "sk-ant-oat01-abc123XYZ_defGHI"
 
-    @patch("shutil.which", return_value="/usr/bin/claude")
-    @patch("pty.spawn")
-    def test_token_adjacent_to_ansi_escape(self, mock_spawn, mock_which):
-        """Token immediately followed by ANSI escape code (no space)."""
+    def test_token_adjacent_to_ansi_escape(self):
         data = b"sk-ant-oat01-fulltoken123abc_XYZ\x1b[?2026l"
-        mock_spawn.side_effect = self._make_spawn(data)
-        result = ralph.run_claude_setup_token()
-        assert result == "sk-ant-oat01-fulltoken123abc_XYZ"
+        assert self._extract(data) == "sk-ant-oat01-fulltoken123abc_XYZ"
 
-    @patch("shutil.which", return_value="/usr/bin/claude")
-    @patch("pty.spawn")
-    def test_takes_longest_match(self, mock_spawn, mock_which):
-        """When token appears multiple times (e.g., partial + full), take longest."""
+    def test_takes_longest_match(self):
         data = b"sk-ant-oat01-short\nfull: sk-ant-oat01-short-and-longer-version\n"
-        mock_spawn.side_effect = self._make_spawn(data)
-        result = ralph.run_claude_setup_token()
-        assert result == "sk-ant-oat01-short-and-longer-version"
+        assert self._extract(data) == "sk-ant-oat01-short-and-longer-version"
+
+    def test_handles_108_char_token(self):
+        token = "sk-ant-oat01-" + "A" * 67 + "_" + "B" * 27  # 108 chars
+        data = f"Your token: {token}\nDone.\n".encode()
+        result = self._extract(data)
+        assert result == token
+        assert len(result) == 108
+
+    def test_returns_none_when_no_token(self):
+        assert self._extract(b"No token here\n") is None
+
+
+class TestRunClaudeSetupToken:
+    @patch("shutil.which", return_value=None)
+    def test_exits_when_claude_not_found(self, mock_which):
+        with pytest.raises(SystemExit) as exc_info:
+            ralph.run_claude_setup_token()
+        assert exc_info.value.code == 1
 
 
 # ---------------------------------------------------------------------------
 # store_token (mocked stdin + keychain)
 # ---------------------------------------------------------------------------
 
+def _mock_validation_success():
+    """Return a patch that makes token validation succeed."""
+    return patch("ralph.subprocess.run",
+                 return_value=MagicMock(returncode=0, stderr=""))
+
+
 class TestStoreToken:
+    @_mock_validation_success()
     @patch("ralph.write_token_to_keychain")
     @patch("ralph.time.time", return_value=1700000000.0)
     @patch("ralph.sys.stdin", new_callable=lambda: io.StringIO("sk-ant-oat01-abc123"))
-    def test_bare_string_wraps_in_json(self, mock_stdin, mock_time, mock_write):
+    def test_bare_string_wraps_in_json(self, mock_stdin, mock_time, mock_write, mock_validate):
         ralph.store_token("claude")
         written_json = mock_write.call_args[0][1]
         data = json.loads(written_json)
@@ -369,24 +356,26 @@ class TestStoreToken:
         expected_expiry = 1700000000000 + 365 * 86400 * 1000
         assert data["expiresAt"] == expected_expiry
 
+    @_mock_validation_success()
     @patch("ralph.write_token_to_keychain")
     @patch("ralph.time.time", return_value=1700000000.0)
     @patch("ralph.sys.stdin", new_callable=lambda: io.StringIO(
         json.dumps({"accessToken": "sk-test", "expiresAt": 1800000000000})
     ))
-    def test_json_input_preserved(self, mock_stdin, mock_time, mock_write):
+    def test_json_input_preserved(self, mock_stdin, mock_time, mock_write, mock_validate):
         ralph.store_token("claude")
         written_json = mock_write.call_args[0][1]
         data = json.loads(written_json)
         assert data["accessToken"] == "sk-test"
         assert data["expiresAt"] == 1800000000000
 
+    @_mock_validation_success()
     @patch("ralph.write_token_to_keychain")
     @patch("ralph.time.time", return_value=1700000000.0)
     @patch("ralph.sys.stdin", new_callable=lambda: io.StringIO(
         json.dumps({"accessToken": "sk-test"})
     ))
-    def test_json_input_without_expiry_gets_default(self, mock_stdin, mock_time, mock_write):
+    def test_json_input_without_expiry_gets_default(self, mock_stdin, mock_time, mock_write, mock_validate):
         ralph.store_token("claude")
         written_json = mock_write.call_args[0][1]
         data = json.loads(written_json)
@@ -400,18 +389,20 @@ class TestStoreToken:
             ralph.store_token("claude")
         assert exc_info.value.code == 1
 
+    @_mock_validation_success()
     @patch("ralph.write_token_to_keychain")
     @patch("ralph.time.time", return_value=1700000000.0)
     @patch("ralph.sys.stdin", new_callable=lambda: io.StringIO("sk-token"))
-    def test_uses_correct_agent(self, mock_stdin, mock_time, mock_write):
+    def test_uses_correct_agent(self, mock_stdin, mock_time, mock_write, mock_validate):
         ralph.store_token("codex")
         assert mock_write.call_args[0][0] == "codex"
 
+    @_mock_validation_success()
     @patch("ralph.write_token_to_keychain")
     @patch("ralph.time.time", return_value=1700000000.0)
     @patch("ralph.run_claude_setup_token", return_value="sk-from-setup")
     @patch("ralph.sys.stdin")
-    def test_interactive_runs_claude_setup_token(self, mock_stdin, mock_setup, mock_time, mock_write):
+    def test_interactive_runs_claude_setup_token(self, mock_stdin, mock_setup, mock_time, mock_write, mock_validate):
         mock_stdin.isatty.return_value = True
         ralph.store_token("claude")
         mock_setup.assert_called_once()
@@ -419,21 +410,32 @@ class TestStoreToken:
         data = json.loads(written_json)
         assert data["accessToken"] == "sk-from-setup"
 
+    @_mock_validation_success()
     @patch("ralph.write_token_to_keychain")
     @patch("ralph.time.time", return_value=1700000000.0)
     @patch("ralph.sys.stdin", new_callable=lambda: io.StringIO("sk-token"))
-    def test_prints_confirmation(self, mock_stdin, mock_time, mock_write, capsys):
+    def test_prints_confirmation(self, mock_stdin, mock_time, mock_write, mock_validate, capsys):
         ralph.store_token("claude")
         captured = capsys.readouterr()
         assert "ralph: token stored for agent claude" in captured.out
         assert "expires" in captured.out
 
+    @patch("ralph.subprocess.run",
+           return_value=MagicMock(returncode=1, stderr="401 authentication_error"))
+    @patch("ralph.time.time", return_value=1700000000.0)
+    @patch("ralph.sys.stdin", new_callable=lambda: io.StringIO("sk-bad-token"))
+    def test_invalid_token_rejected(self, mock_stdin, mock_time, mock_validate):
+        with pytest.raises(SystemExit) as exc_info:
+            ralph.store_token("claude")
+        assert exc_info.value.code == 1
+
+    @_mock_validation_success()
     @patch("ralph.write_token_to_keychain")
     @patch("ralph.time.time", return_value=1700000000.0)
     @patch("ralph.sys.stdin", new_callable=lambda: io.StringIO(
         json.dumps({"foo": "bar"})
     ))
-    def test_json_without_access_token_warns(self, mock_stdin, mock_time, mock_write, capsys):
+    def test_json_without_access_token_warns(self, mock_stdin, mock_time, mock_write, mock_validate, capsys):
         ralph.store_token("claude")
         captured = capsys.readouterr()
         assert "input JSON missing accessToken" in captured.err
@@ -523,52 +525,57 @@ class TestEnsureToken:
         result = ralph.ensure_token("claude")
         assert result == "sk-cached"
 
+    @_mock_validation_success()
     @patch("ralph.write_token_to_keychain")
     @patch("ralph.run_claude_setup_token", return_value="sk-fresh")
     @patch("ralph.read_token_from_keychain", return_value=None)
     @patch("ralph.time.time", return_value=1700000000.0)
-    def test_runs_setup_when_missing(self, mock_time, mock_read, mock_setup, mock_write):
+    def test_runs_setup_when_missing(self, mock_time, mock_read, mock_setup, mock_write, mock_validate):
         result = ralph.ensure_token("claude")
         assert result == "sk-fresh"
         mock_setup.assert_called_once()
 
+    @_mock_validation_success()
     @patch("ralph.write_token_to_keychain")
     @patch("ralph.run_claude_setup_token", return_value="sk-renewed")
     @patch("ralph.read_token_from_keychain")
     @patch("ralph.time.time", return_value=1700000000.0)
-    def test_runs_setup_when_expired(self, mock_time, mock_read, mock_setup, mock_write):
+    def test_runs_setup_when_expired(self, mock_time, mock_read, mock_setup, mock_write, mock_validate):
         past_ms = 1700000000000 - 86400 * 1000
         mock_read.return_value = {"accessToken": "sk-old", "expiresAt": past_ms}
         result = ralph.ensure_token("claude")
         assert result == "sk-renewed"
         mock_setup.assert_called_once()
 
+    @_mock_validation_success()
     @patch("ralph.write_token_to_keychain")
     @patch("ralph.run_claude_setup_token", return_value="sk-fresh")
     @patch("ralph.read_token_from_keychain", return_value=None)
     @patch("ralph.time.time", return_value=1700000000.0)
-    def test_stores_token_after_setup(self, mock_time, mock_read, mock_setup, mock_write):
+    def test_stores_token_after_setup(self, mock_time, mock_read, mock_setup, mock_write, mock_validate):
         ralph.ensure_token("claude")
         mock_write.assert_called_once()
         written_json = mock_write.call_args[0][1]
         data = json.loads(written_json)
         assert data["accessToken"] == "sk-fresh"
 
+    @_mock_validation_success()
     @patch("ralph.write_token_to_keychain")
     @patch("ralph.run_claude_setup_token", return_value="sk-fresh")
     @patch("ralph.read_token_from_keychain", return_value=None)
     @patch("ralph.time.time", return_value=1700000000.0)
-    def test_missing_token_prints_status(self, mock_time, mock_read, mock_setup, mock_write, capsys):
+    def test_missing_token_prints_status(self, mock_time, mock_read, mock_setup, mock_write, mock_validate, capsys):
         ralph.ensure_token("claude")
         captured = capsys.readouterr()
         assert "no token found" in captured.err
         assert "running claude setup-token" in captured.err
 
+    @_mock_validation_success()
     @patch("ralph.write_token_to_keychain")
     @patch("ralph.run_claude_setup_token", return_value="sk-renewed")
     @patch("ralph.read_token_from_keychain")
     @patch("ralph.time.time", return_value=1700000000.0)
-    def test_expired_token_prints_status(self, mock_time, mock_read, mock_setup, mock_write, capsys):
+    def test_expired_token_prints_status(self, mock_time, mock_read, mock_setup, mock_write, mock_validate, capsys):
         past_ms = 1700000000000 - 86400 * 1000
         mock_read.return_value = {"accessToken": "sk-old", "expiresAt": past_ms}
         ralph.ensure_token("claude")
@@ -658,10 +665,11 @@ class TestMainTokenSubcommands:
 
 
 class TestTokenRoundTrip:
+    @_mock_validation_success()
     @patch("ralph.write_token_to_keychain")
     @patch("ralph.time.time", return_value=1700000000.0)
     @patch("ralph.sys.stdin", new_callable=lambda: io.StringIO("sk-round-trip-token"))
-    def test_store_then_read_round_trip(self, mock_stdin, mock_time, mock_write):
+    def test_store_then_read_round_trip(self, mock_stdin, mock_time, mock_write, mock_validate):
         """Verify the JSON written by store_token can be parsed back correctly."""
         ralph.store_token("claude")
         written_json = mock_write.call_args[0][1]

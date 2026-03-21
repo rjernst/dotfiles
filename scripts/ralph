@@ -436,20 +436,74 @@ def run_claude_setup_token():
     normally for the user), while we capture output in the background
     and extract the sk-ant-* token via regex.
     """
+    import fcntl
+    import io
     import pty
+    import select
+    import struct
+    import termios
+    import tty
 
     if not shutil.which("claude"):
         print("ralph: 'claude' command not found", file=sys.stderr)
         sys.exit(1)
 
+    # Create pty pair and set width to 512 columns so the token (108+ chars)
+    # doesn't wrap. pty.spawn uses os.forkpty which doesn't let us set the
+    # window size, so we manage the fork ourselves.
+    master_fd, slave_fd = pty.openpty()
+    winsize = struct.pack('HHHH', 24, 512, 0, 0)
+    fcntl.ioctl(master_fd, termios.TIOCSWINSZ, winsize)
+
+    pid = os.fork()
+    if pid == 0:
+        # Child: connect to slave pty and exec setup-token
+        os.close(master_fd)
+        os.setsid()
+        os.login_tty(slave_fd)
+        os.execlp("claude", "claude", "setup-token")
+
+    # Parent
+    os.close(slave_fd)
     captured = []
 
-    def master_read(fd):
-        data = os.read(fd, 1024)
-        captured.append(data)
-        return data
+    # Set raw mode on stdin so keypresses pass through to the child
+    try:
+        old_attrs = termios.tcgetattr(sys.stdin.fileno())
+        tty.setraw(sys.stdin.fileno())
+        restore_term = True
+    except (termios.error, io.UnsupportedOperation):
+        restore_term = False
 
-    status = pty.spawn(["claude", "setup-token"], master_read)
+    try:
+        while True:
+            try:
+                rfds = select.select([master_fd, sys.stdin.fileno()], [], [], 0.1)[0]
+            except (ValueError, OSError):
+                break
+            if master_fd in rfds:
+                try:
+                    data = os.read(master_fd, 4096)
+                except OSError:
+                    break
+                if not data:
+                    break
+                captured.append(data)
+                os.write(sys.stdout.fileno(), data)
+            if sys.stdin.fileno() in rfds:
+                try:
+                    data = os.read(sys.stdin.fileno(), 1024)
+                except OSError:
+                    break
+                if not data:
+                    break
+                os.write(master_fd, data)
+    finally:
+        if restore_term:
+            termios.tcsetattr(sys.stdin.fileno(), termios.TCSAFLUSH, old_attrs)
+        os.close(master_fd)
+
+    _, status = os.waitpid(pid, 0)
     exit_code = os.waitstatus_to_exitcode(status) if hasattr(os, 'waitstatus_to_exitcode') else status >> 8
 
     if exit_code != 0:
@@ -458,9 +512,7 @@ def run_claude_setup_token():
 
     full_output = b"".join(captured).decode("utf-8", errors="replace")
     # Token chars are alphanumeric, hyphens, and underscores.
-    # Use a specific character class to avoid capturing trailing ANSI codes.
-    # Find all matches and take the longest (in case of partial matches
-    # from split read chunks).
+    # Find all matches and take the longest (in case of partial matches).
     matches = re.findall(r'sk-ant-oat01-[A-Za-z0-9_-]+', full_output)
     if not matches:
         print("ralph: could not find token in setup-token output", file=sys.stderr)
@@ -488,6 +540,21 @@ def _parse_and_store_token(agent, raw):
     except (json.JSONDecodeError, ValueError):
         # Bare token string
         data = {"accessToken": raw, "expiresAt": default_expiry}
+
+    # Validate the token before storing
+    token = data["accessToken"]
+    print(f"ralph: validating token ({len(token)} chars)...", file=sys.stderr)
+    result = subprocess.run(
+        ["claude", "-p", "--model", "haiku", "ok"],
+        env={**os.environ, "CLAUDE_CODE_OAUTH_TOKEN": token},
+        stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
+    )
+    if result.returncode != 0:
+        print(f"ralph: token validation failed — token is not valid", file=sys.stderr)
+        if "401" in result.stderr or "authentication" in result.stderr.lower():
+            print("ralph: the token was rejected by the API (401 Unauthorized)", file=sys.stderr)
+        sys.exit(1)
+    print("ralph: token validated successfully", file=sys.stderr)
 
     json_str = json.dumps(data)
     write_token_to_keychain(agent, json_str)
