@@ -5,19 +5,13 @@ Fetches specs from GitHub Issues (labeled spec + status:ready), runs
 Claude Code in Docker to implement one task per iteration, updates
 issue checkboxes, and labels issues done when complete.
 
-Usage: ralph [options]
+Also provides token management for the credential injection proxy:
+  store-token, check-token, get-token (see ralph --help).
 
-Options:
-  --issue <number>      Execute a single GitHub Issue spec
-  --poll                Poll for status:ready issues and process them
-  --interval <duration> Poll interval (default: 30s, requires --poll)
-  --timeout <duration>  Limit poll duration (e.g. 30m, 4h, 1d; requires --poll)
-  --packages "pkg ..."  Extra apt packages baked into image
-  --push                Git push after each iteration
-  --model <model>       Claude model (default: sonnet)
-  -h, --help            Show usage
+Usage: ralph <command> [options]
 """
 
+import datetime
 import hashlib
 import json
 import os
@@ -387,25 +381,171 @@ def ensure_worktree(git, branch, base=None):
     return wt_path
 
 
-def get_auth_token():
-    """Extract OAuth token from macOS Keychain."""
+# ---------------------------------------------------------------------------
+# Token management
+# ---------------------------------------------------------------------------
+
+MS_PER_DAY = 86400 * 1000
+DEFAULT_EXPIRY_DAYS = 365
+
+
+def keychain_service_name(agent):
+    """Return the Keychain service name for the given agent."""
+    return f"{agent}-token"
+
+
+def read_token_from_keychain(agent):
+    """Read and parse the token JSON from macOS Keychain.
+
+    Returns the parsed dict, or None if not found.
+    """
+    service = keychain_service_name(agent)
     try:
         result = subprocess.run(
-            ["security", "find-generic-password", "-s", "Claude Code-credentials", "-w"],
+            ["security", "find-generic-password", "-s", service, "-a", "agent-loop", "-w"],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True,
         )
-        keychain_json = result.stdout.strip()
+        return json.loads(result.stdout.strip())
     except subprocess.CalledProcessError:
-        print("ralph: no Claude credentials in Keychain — run 'claude' to log in first",
-              file=sys.stderr)
+        return None
+    except (json.JSONDecodeError, ValueError):
+        return None
+
+
+def write_token_to_keychain(agent, json_str):
+    """Write token JSON string to macOS Keychain."""
+    service = keychain_service_name(agent)
+    subprocess.run(
+        ["security", "add-generic-password",
+         "-s", service, "-a", "agent-loop", "-w", json_str, "-U"],
+        check=True,
+    )
+
+
+def format_expiry_date(expires_at_ms):
+    """Format an expiresAt timestamp (ms) as a human-readable date string."""
+    return datetime.datetime.fromtimestamp(
+        expires_at_ms / 1000, tz=datetime.timezone.utc
+    ).strftime("%Y-%m-%d")
+
+
+def run_claude_setup_token():
+    """Run 'claude setup-token' interactively and return the token string."""
+    try:
+        result = subprocess.run(
+            ["claude", "setup-token"],
+            stdout=subprocess.PIPE, text=True,
+        )
+    except FileNotFoundError:
+        print("ralph: 'claude' command not found", file=sys.stderr)
+        sys.exit(1)
+    if result.returncode != 0:
+        print("ralph: claude setup-token failed", file=sys.stderr)
+        sys.exit(1)
+    token = result.stdout.strip()
+    if not token:
+        print("ralph: claude setup-token produced no output", file=sys.stderr)
+        sys.exit(1)
+    return token
+
+
+def _parse_and_store_token(agent, raw):
+    """Parse raw token string, store in Keychain, return the data dict."""
+    now_ms = int(time.time() * 1000)
+    default_expiry = now_ms + DEFAULT_EXPIRY_DAYS * MS_PER_DAY
+
+    # Try to parse as JSON
+    try:
+        data = json.loads(raw)
+        if isinstance(data, dict) and "accessToken" in data:
+            if "expiresAt" not in data:
+                data["expiresAt"] = default_expiry
+        else:
+            # JSON but not the expected format — treat as bare token
+            print("ralph: input JSON missing accessToken, treating as bare token",
+                  file=sys.stderr)
+            data = {"accessToken": raw, "expiresAt": default_expiry}
+    except (json.JSONDecodeError, ValueError):
+        # Bare token string
+        data = {"accessToken": raw, "expiresAt": default_expiry}
+
+    json_str = json.dumps(data)
+    write_token_to_keychain(agent, json_str)
+    expiry_date = format_expiry_date(data["expiresAt"])
+    print(f"ralph: token stored for agent {agent} (expires {expiry_date})")
+    return data
+
+
+def store_token(agent):
+    """Store a token in Keychain. Runs claude setup-token if interactive."""
+    if sys.stdin.isatty():
+        raw = run_claude_setup_token()
+    else:
+        raw = sys.stdin.read().strip()
+    if not raw:
+        print("ralph: no token provided on stdin", file=sys.stderr)
+        sys.exit(1)
+    _parse_and_store_token(agent, raw)
+
+
+def check_token(agent):
+    """Check token validity in Keychain. Exit 0 if valid, 1 if expired/missing."""
+    data = read_token_from_keychain(agent)
+    if data is None:
+        print(f"ralph: no token found for agent {agent}"
+              " — run: ralph store-token", file=sys.stderr)
         sys.exit(1)
 
-    try:
-        data = json.loads(keychain_json)
-        return data["claudeAiOauth"]["accessToken"]
-    except (json.JSONDecodeError, KeyError):
-        print("ralph: failed to parse Claude credentials from Keychain", file=sys.stderr)
+    now_ms = int(time.time() * 1000)
+    expires_at = data.get("expiresAt", 0)
+    expiry_date = format_expiry_date(expires_at)
+
+    if expires_at > now_ms:
+        remaining_days = int((expires_at - now_ms) / MS_PER_DAY)
+        print(f"ralph: token valid for agent {agent}"
+              f" (expires {expiry_date}, {remaining_days} days remaining)")
+        sys.exit(0)
+    else:
+        print(f"ralph: token expired for agent {agent}"
+              f" (expired {expiry_date})", file=sys.stderr)
         sys.exit(1)
+
+
+def get_token(agent):
+    """Print bare accessToken to stdout. Exit 1 if missing or expired."""
+    data = read_token_from_keychain(agent)
+    if data is None:
+        print(f"ralph: no token found for agent {agent}", file=sys.stderr)
+        sys.exit(1)
+
+    now_ms = int(time.time() * 1000)
+    expires_at = data.get("expiresAt", 0)
+
+    if expires_at <= now_ms:
+        print(f"ralph: token expired for agent {agent}", file=sys.stderr)
+        sys.exit(1)
+
+    print(data["accessToken"], end="")
+
+
+def ensure_token(agent):
+    """Ensure a valid token exists. Runs claude setup-token if missing or expired."""
+    data = read_token_from_keychain(agent)
+    now_ms = int(time.time() * 1000)
+
+    if data is not None:
+        expires_at = data.get("expiresAt", 0)
+        if expires_at > now_ms:
+            return data["accessToken"]
+        print(f"ralph: token expired for agent {agent}, running claude setup-token...",
+              file=sys.stderr)
+    else:
+        print(f"ralph: no token found for agent {agent}, running claude setup-token...",
+              file=sys.stderr)
+
+    raw = run_claude_setup_token()
+    stored = _parse_and_store_token(agent, raw)
+    return stored["accessToken"]
 
 
 def check_dependencies_prereq():
@@ -619,11 +759,20 @@ def poll_loop(git, docker, gh, image_tag, push, model, git_user, git_email,
 # ---------------------------------------------------------------------------
 
 USAGE_TEXT = """\
-Usage: ralph [options]
+Usage: ralph <command> [options]
 
-Options:
+Token commands:
+  store-token           Run claude setup-token and store in Keychain
+                        (or read from stdin when piped)
+  check-token           Check if stored token is valid
+  get-token             Print stored token to stdout
+  --agent <name>        Agent name for token commands (default: claude)
+
+Issue commands:
   --issue <number>      Execute a single GitHub Issue spec
   --poll                Poll for status:ready issues and process them
+
+Options:
   --interval <duration> Poll interval (default: 30s, requires --poll)
   --timeout <duration>  Limit poll duration (e.g. 30m, 4h, 1d; requires --poll)
   --packages "pkg ..."  Extra apt packages baked into image
@@ -643,8 +792,44 @@ def usage(exit_code=0):
 # ---------------------------------------------------------------------------
 
 def main():
-    # Parse arguments manually to match zsh behavior exactly
     args = sys.argv[1:]
+
+    # Token management subcommands — handle before flag parsing
+    # Supports both: ralph store-token --agent codex
+    #            and: ralph --agent codex store-token
+    token_subcommands = {"store-token", "check-token", "get-token"}
+    subcmd = None
+    for a in args:
+        if a in token_subcommands:
+            subcmd = a
+            break
+
+    if subcmd is not None:
+        agent = "claude"
+        rest = [a for a in args if a != subcmd]
+        j = 0
+        while j < len(rest):
+            if rest[j] == "--agent":
+                if j + 1 >= len(rest):
+                    print("ralph: --agent requires an argument", file=sys.stderr)
+                    sys.exit(2)
+                agent = rest[j + 1]
+                j += 2
+            elif rest[j] in ("-h", "--help"):
+                usage(0)
+            else:
+                print(f"ralph: unknown option for {subcmd}: {rest[j]}", file=sys.stderr)
+                sys.exit(2)
+
+        if subcmd == "store-token":
+            store_token(agent)
+        elif subcmd == "check-token":
+            check_token(agent)
+        elif subcmd == "get-token":
+            get_token(agent)
+        sys.exit(0)
+
+    # Parse arguments manually to match zsh behavior exactly
     packages = ""
     push = False
     timeout_val = 0
@@ -733,8 +918,8 @@ def main():
     docker_helper = Docker(ralph_dir, host_uid)
     image_tag = docker_helper.ensure_image(packages)
 
-    # Auth
-    oauth_token = get_auth_token()
+    # Auth — check stored token, run claude setup-token if missing/expired
+    oauth_token = ensure_token("claude")
 
     # Git user config
     git = Git()
