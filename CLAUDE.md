@@ -86,7 +86,7 @@ claude/
   skills/              # Claude Code skills (symlinked to ~/.claude/skills)
     create-spec/       # /create-spec — interactive Ralph spec generator (creates GitHub Issues)
 scripts/                 # All files auto-symlinked to ~/bin by setup
-  ralph                # GitHub Issues-driven AI coding loop (see docker/ralph/)
+  ralph                # GitHub Issues-driven AI coding loop (sandbox-based)
   ta                   # Terminal Agent tool (subcommand dispatcher)
   ta-wt                # Worktree manager (list, create, remove, prune, status)
   ta-workspace         # Tmux workspace session manager (create, list, attach, kill)
@@ -99,9 +99,12 @@ scripts/                 # All files auto-symlinked to ~/bin by setup
   update-dotfiles      # Pull and re-run setup
   macos/               # macOS system preference scripts (not symlinked)
 docker/
-  ralph/               # Docker image for ralph AI coding loop
-    Dockerfile         # Claude Code + git container image
-    entrypoint.sh      # Single-iteration runner: invoke Claude, commit, exit
+  agent-loop/          # Docker images for AI agent sandbox isolation
+    claude/            # Claude Code sandbox image
+      Dockerfile       # Sandbox image (sleep infinity, no entrypoint)
+    proxy/             # Credential injection reverse proxy
+      Dockerfile       # Proxy container image
+      proxy.py         # Credential injection proxy server
 ```
 
 ## Key Conventions
@@ -142,7 +145,9 @@ docker/
 - `ralph --poll --timeout 2h` — Poll with deadline
 - `ralph --model <model>` — Use a specific Claude model (default: sonnet)
 - `ralph --push` — Git push after each iteration
-- `ralph --packages "pkg ..."` — Bake extra apt packages into the image
+- `ralph --rebuild` — Force re-pull base image and rebuild sandbox
+- `ralph --agent <name>` — Use a specific agent (default: claude)
+- `ralph selftest` — Smoke test the full pipeline (proxy, sandbox, auth, network isolation)
 - `/create-spec` — Interactive Ralph spec generator (creates GitHub Issues with `spec` + `status:ready` labels)
   - Issue title format: `[<branch-name>] Feature Title`
   - Labels: `spec` (identifies as Ralph spec), `status:ready` / `status:in-progress` / `status:done` / `status:needs-attention`

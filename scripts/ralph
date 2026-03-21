@@ -11,6 +11,7 @@ Also provides token management for the credential injection proxy:
 Usage: ralph <command> [options]
 """
 
+import atexit
 import datetime
 import hashlib
 import json
@@ -20,7 +21,6 @@ import shutil
 import signal
 import subprocess
 import sys
-import tempfile
 import time
 import urllib.request
 
@@ -51,71 +51,6 @@ class Git:
         except subprocess.CalledProcessError:
             return ""
 
-
-# ---------------------------------------------------------------------------
-# Docker helper
-# ---------------------------------------------------------------------------
-
-class Docker:
-    def __init__(self, ralph_dir, host_uid):
-        self.ralph_dir = ralph_dir
-        self.host_uid = host_uid
-
-    def build_image(self, tag, extra_args=None, force=False):
-        if not force:
-            result = subprocess.run(
-                ["docker", "image", "inspect", tag],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                check=False,
-            )
-            if result.returncode == 0:
-                print(f"ralph: using cached image {tag}")
-                return
-
-        print(f"ralph: building image {tag} (this may take a minute)...")
-        cmd = ["docker", "build"]
-        if force:
-            cmd.append("--no-cache")
-        if extra_args:
-            cmd.extend(extra_args)
-        cmd.extend(["-t", tag, self.ralph_dir])
-        subprocess.run(cmd, check=True)
-
-    def compute_tag(self, packages):
-        if packages:
-            hash_input = f"{packages}:{self.host_uid}"
-            pkg_hash = hashlib.sha256(hash_input.encode()).hexdigest()[:12]
-            return f"ralph:custom-{pkg_hash}"
-        return f"ralph:uid-{self.host_uid}"
-
-    def ensure_image(self, packages, force_rebuild=False):
-        tag = self.compute_tag(packages)
-        build_args = ["--build-arg", f"HOST_UID={self.host_uid}"]
-        if packages:
-            build_args.extend(["--build-arg", f"EXTRA_PACKAGES={packages}"])
-        self.build_image(tag, extra_args=build_args, force=force_rebuild)
-        return tag
-
-    def run_container(self, image_tag, work_dir, worktree_mount, spec_file,
-                      push, model, git_user, git_email, oauth_token):
-        cmd = ["docker", "run", "--rm",
-               "-v", f"{work_dir}:/work"]
-        if worktree_mount:
-            cmd.extend(["-v", f"{worktree_mount}:{worktree_mount}"])
-        cmd.extend([
-            "-v", f"{os.path.expanduser('~/.gitconfig')}:/home/ralph/.gitconfig:ro",
-            "-v", f"{os.path.expanduser('~/.ssh')}:/home/ralph/.ssh:ro",
-            "-e", f"PUSH={push}",
-            "-v", f"{spec_file}:/tmp/spec.md",
-            "-e", "PROMPT_FILE=/tmp/spec.md",
-            "-e", f"MODEL={model}",
-            "-e", f"GIT_USER={git_user}",
-            "-e", f"GIT_EMAIL={git_email}",
-            "-e", f"CLAUDE_CODE_OAUTH_TOKEN={oauth_token}",
-            image_tag,
-        ])
-        return subprocess.run(cmd, check=False).returncode
 
 
 # ---------------------------------------------------------------------------
@@ -373,6 +308,112 @@ class Sandbox:
             pruned.append(name)
         return pruned
 
+    # -- Iteration ------------------------------------------------------------
+
+    ITERATION_PROMPT = (
+        "You are an AI coding agent. You will be invoked repeatedly "
+        "— once per task.\n"
+        "Read the spec file at `/tmp/spec.md` for what to build.\n"
+        "\n"
+        "Your job this iteration: implement EXACTLY ONE task, then stop.\n"
+        "\n"
+        "Steps:\n"
+        "1. Study the spec and existing codebase (especially CLAUDE.md) "
+        "to understand patterns\n"
+        "2. Check git log to see what has already been implemented\n"
+        "3. Pick the FIRST incomplete task from the spec\n"
+        "4. Implement that single task fully — no stubs or placeholders\n"
+        "5. Write tests as appropriate for the project\n"
+        "6. Run the tests\n"
+        "7. If tests pass, mark ONLY that task done in the spec file "
+        "and commit\n"
+        "8. If tests fail, fix before committing\n"
+        "\n"
+        "IMPORTANT: Do NOT implement more than one task. After committing, "
+        "stop immediately.\n"
+        "The loop will call you again for the next task.\n"
+        "If ALL tasks are already complete, just say so "
+        "— do not make any commits.\n"
+        "\n"
+        "Rules:\n"
+        "- One task, one commit, then stop\n"
+        "- Follow conventions in CLAUDE.md if it exists\n"
+        "- Search the codebase before assuming something isn't implemented"
+    )
+
+    @staticmethod
+    def setup_git_config(sandbox_name, user, email):
+        """Configure git user and safe directory settings inside the sandbox."""
+        subprocess.run(
+            ["docker", "sandbox", "exec", sandbox_name,
+             "git", "config", "--global", "user.name", user],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False,
+        )
+        subprocess.run(
+            ["docker", "sandbox", "exec", sandbox_name,
+             "git", "config", "--global", "user.email", email],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False,
+        )
+        subprocess.run(
+            ["docker", "sandbox", "exec", sandbox_name,
+             "git", "config", "--global", "--add", "safe.directory", "*"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False,
+        )
+
+    def run_iteration(self, sandbox_name, spec_content, model, env_vars=None):
+        """Run a single Claude Code iteration inside the sandbox.
+
+        Writes spec content to /tmp/spec.md inside the sandbox, runs claude
+        with the iteration prompt, then reads back the (possibly updated) spec.
+
+        Returns (exit_code, updated_spec_content).
+        """
+        spec_path = "/tmp/spec.md"
+
+        # Write spec into sandbox
+        write_proc = subprocess.run(
+            ["docker", "sandbox", "exec", sandbox_name,
+             "tee", spec_path],
+            input=spec_content, text=True, check=False,
+            stdout=subprocess.DEVNULL,
+        )
+        if write_proc.returncode != 0:
+            return write_proc.returncode, spec_content
+
+        # Run claude with iteration prompt
+        cmd = ["docker", "sandbox", "exec"]
+        if env_vars:
+            for k, v in env_vars.items():
+                cmd.extend(["-e", f"{k}={v}"])
+        cmd.extend([
+            sandbox_name, "claude",
+            "-p", self.ITERATION_PROMPT,
+            "--model", model,
+            "--dangerously-skip-permissions",
+            "--effort", "high",
+        ])
+        rc = subprocess.run(cmd, check=False).returncode
+
+        # Read back (possibly updated) spec
+        read_proc = subprocess.run(
+            ["docker", "sandbox", "exec", sandbox_name, "cat", spec_path],
+            stdout=subprocess.PIPE, text=True, check=False,
+        )
+        updated = read_proc.stdout if read_proc.returncode == 0 else spec_content
+
+        return rc, updated
+
+    # -- Selftest --------------------------------------------------------------
+
+    @staticmethod
+    def remove_sandbox(name):
+        """Remove a sandbox by name (best-effort)."""
+        subprocess.run(
+            ["docker", "sandbox", "rm", name],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            check=False,
+        )
+
     # -- Pre-flight validation ------------------------------------------------
 
     def preflight_check(self, sandbox_name, agent, proxy_port):
@@ -440,6 +481,296 @@ class Sandbox:
                     " — outbound requests should be blocked")
 
         return failures
+
+
+# ---------------------------------------------------------------------------
+# Proxy lifecycle
+# ---------------------------------------------------------------------------
+
+# Default port for the credential injection proxy, keyed by agent name.
+DEFAULT_PROXY_PORTS = {"claude": 18080}
+DEFAULT_PROXY_PORT = 18080
+
+# Image tag for the proxy container.
+PROXY_IMAGE_TAG = "agent-loop-proxy:v1"
+
+
+def proxy_container_name(agent):
+    """Return the Docker container name for the proxy."""
+    return f"agent-loop-proxy-{agent}"
+
+
+def proxy_port_for_agent(agent):
+    """Return the proxy port for the given agent."""
+    return DEFAULT_PROXY_PORTS.get(agent, DEFAULT_PROXY_PORT)
+
+
+def proxy_health_check(port):
+    """Check if the proxy is healthy at the given port.
+
+    Returns True if the health endpoint responds 200 with expected body.
+    """
+    try:
+        resp = urllib.request.urlopen(
+            f"http://localhost:{port}/health", timeout=3)
+        return resp.status == 200
+    except Exception:
+        return False
+
+
+def start_proxy(agent, port, dotfiles_dir):
+    """Start the credential injection proxy container.
+
+    Reads the token from Keychain and pipes it to the proxy container via stdin.
+    The container runs in detached mode with --rm so it cleans up on stop.
+
+    Returns the container name.
+    """
+    token_data = read_token_from_keychain(agent)
+    if token_data is None:
+        print(f"ralph: no token found for agent {agent}"
+              " — run: ralph store-token", file=sys.stderr)
+        sys.exit(1)
+
+    now_ms = int(time.time() * 1000)
+    if token_data.get("expiresAt", 0) <= now_ms:
+        print(f"ralph: token expired for agent {agent}"
+              " — run: ralph store-token", file=sys.stderr)
+        sys.exit(1)
+
+    token = token_data["accessToken"]
+    name = proxy_container_name(agent)
+
+    # Build the proxy image if needed
+    proxy_dir = os.path.join(dotfiles_dir, "docker", "agent-loop", "proxy")
+    result = subprocess.run(
+        ["docker", "image", "inspect", PROXY_IMAGE_TAG],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False,
+    )
+    if result.returncode != 0:
+        print(f"ralph: building proxy image {PROXY_IMAGE_TAG}...")
+        subprocess.run(
+            ["docker", "build", "-t", PROXY_IMAGE_TAG, proxy_dir], check=True)
+
+    print(f"ralph: starting proxy container {name} on port {port}...")
+    proc = subprocess.run(
+        ["docker", "run", "-i", "--rm", "-d",
+         "--name", name,
+         "-p", f"{port}:18080",
+         PROXY_IMAGE_TAG],
+        input=token + "\n",
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        check=False,
+    )
+    if proc.returncode != 0:
+        print(f"ralph: failed to start proxy container: {proc.stderr.strip()}",
+              file=sys.stderr)
+        sys.exit(1)
+
+    return name
+
+
+def stop_proxy(agent):
+    """Stop and remove the proxy container for the given agent."""
+    name = proxy_container_name(agent)
+    subprocess.run(
+        ["docker", "stop", name],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False,
+    )
+
+
+def ensure_proxy(agent, port, dotfiles_dir):
+    """Ensure the proxy is running and healthy.
+
+    If a proxy container is already running and healthy, reuse it.
+    Otherwise, stop any stale container and start a new one.
+
+    Returns the proxy port.
+    """
+    if proxy_health_check(port):
+        print(f"ralph: reusing healthy proxy on port {port}")
+        return port
+
+    # Stop any stale container with the same name
+    name = proxy_container_name(agent)
+    result = subprocess.run(
+        ["docker", "inspect", "--format", "{{.State.Running}}", name],
+        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
+        check=False,
+    )
+    if result.returncode == 0:
+        # Container exists but health check failed — stop it
+        print(f"ralph: stopping stale proxy container {name}...")
+        subprocess.run(
+            ["docker", "stop", name],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False,
+        )
+        # Wait briefly for --rm to clean up
+        try:
+            subprocess.run(
+                ["docker", "wait", name],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                check=False, timeout=5,
+            )
+        except subprocess.TimeoutExpired:
+            pass  # proceed to start a new container anyway
+
+    start_proxy(agent, port, dotfiles_dir)
+
+    # Wait for health check
+    for _ in range(10):
+        time.sleep(0.5)
+        if proxy_health_check(port):
+            return port
+
+    print("ralph: proxy failed to become healthy", file=sys.stderr)
+    stop_proxy(agent)
+    sys.exit(1)
+
+
+def register_proxy_cleanup(agent):
+    """Register an atexit handler to stop the proxy container on exit."""
+    atexit.register(stop_proxy, agent)
+
+
+# ---------------------------------------------------------------------------
+# Selftest
+# ---------------------------------------------------------------------------
+
+def selftest(agent, dotfiles_dir):
+    """Run a full pipeline smoke test without executing a real spec.
+
+    Returns 0 if all checks pass, 1 if any fail.
+    """
+    port = proxy_port_for_agent(agent)
+    sandbox_name = f"agent-loop-selftest-{agent}"
+    sandbox = Sandbox(dotfiles_dir)
+    checks = []
+    proxy_started = False
+    sandbox_created = False
+
+    def report(name, passed, detail=""):
+        status = "PASS" if passed else "FAIL"
+        msg = f"  {status}: {name}"
+        if detail:
+            msg += f" — {detail}"
+        print(msg)
+        checks.append(passed)
+
+    try:
+        # 1. Check token
+        print("ralph: selftest starting...")
+        token_data = read_token_from_keychain(agent)
+        if token_data is None:
+            report("check token", False, "no token found — run: ralph store-token")
+            print("ralph: selftest aborted — token required for remaining checks")
+            return 1
+
+        now_ms = int(time.time() * 1000)
+        expires_at = token_data.get("expiresAt", 0)
+        if expires_at <= now_ms:
+            report("check token", False, "token expired — run: ralph store-token")
+            print("ralph: selftest aborted — valid token required")
+            return 1
+        remaining_days = int((expires_at - now_ms) / MS_PER_DAY)
+        report("check token", True, f"expires in {remaining_days} days")
+
+        # 2. Start proxy and verify health
+        ensure_proxy(agent, port, dotfiles_dir)
+        proxy_started = True
+        healthy = proxy_health_check(port)
+        report("proxy health", healthy,
+               f"http://localhost:{port}/health" if healthy
+               else "proxy not reachable after start")
+        if not healthy:
+            print("ralph: selftest aborted — proxy required for remaining checks")
+            return 1
+
+        # 3. Build/ensure image
+        try:
+            tag = sandbox.ensure_image(agent)
+            report("build image", True, tag)
+        except Exception as e:
+            report("build image", False, str(e))
+            print("ralph: selftest aborted — image required for remaining checks")
+            return 1
+
+        # 4. Create test sandbox
+        try:
+            Sandbox.remove_sandbox(sandbox_name)
+            sandbox._docker_sandbox_create(sandbox_name, tag, os.getcwd())
+            sandbox_created = True
+            report("create sandbox", True, sandbox_name)
+        except Exception as e:
+            report("create sandbox", False, str(e))
+            print("ralph: selftest aborted — sandbox required for remaining checks")
+            return 1
+
+        # 5. Apply network policy
+        try:
+            Sandbox.apply_network_policy(sandbox_name)
+            report("network policy", True)
+        except Exception as e:
+            report("network policy", False, str(e))
+
+        # 6. Verify proxy reachable from sandbox
+        result = subprocess.run(
+            ["docker", "sandbox", "exec", sandbox_name,
+             "curl", "-sf", "--max-time", "5",
+             f"http://host.docker.internal:{port}/health"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            check=False,
+        )
+        report("proxy reachable from sandbox", result.returncode == 0,
+               "via host.docker.internal" if result.returncode == 0
+               else f"curl exit code {result.returncode}")
+
+        # 7. Verify Claude auth works through proxy
+        result = subprocess.run(
+            ["docker", "sandbox", "exec",
+             "-e", "CLAUDE_CODE_OAUTH_TOKEN=phantom",
+             "-e", f"ANTHROPIC_BASE_URL=http://host.docker.internal:{port}/v1",
+             sandbox_name,
+             "claude", "-p", "say ok", "--model", "haiku"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            check=False, timeout=60,
+        )
+        report("claude auth via proxy", result.returncode == 0,
+               "response received" if result.returncode == 0
+               else f"exit code {result.returncode}")
+
+        # 8. Verify network isolation (google.com should be blocked)
+        result = subprocess.run(
+            ["docker", "sandbox", "exec", sandbox_name,
+             "curl", "-s", "--max-time", "5", "https://google.com"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            check=False,
+        )
+        blocked = result.returncode != 0
+        report("network isolation", blocked,
+               "outbound blocked" if blocked
+               else "outbound NOT blocked — network policy ineffective")
+
+    except subprocess.TimeoutExpired:
+        report("timeout", False, "a check timed out")
+    finally:
+        # 9. Cleanup
+        if sandbox_created:
+            print(f"ralph: cleaning up test sandbox {sandbox_name}...")
+            Sandbox.remove_sandbox(sandbox_name)
+        if proxy_started:
+            stop_proxy(agent)
+
+    # 10. Report summary
+    passed = sum(1 for c in checks if c)
+    total = len(checks)
+    if all(checks):
+        print(f"ralph: selftest complete — all {total} checks passed")
+        return 0
+    else:
+        failed = total - passed
+        print(f"ralph: selftest complete — {failed}/{total} checks failed")
+        return 1
 
 
 # ---------------------------------------------------------------------------
@@ -973,8 +1304,8 @@ def check_dependencies_prereq():
         sys.exit(1)
 
 
-def process_issue(issue_number, git, docker, gh, image_tag, push, model,
-                  git_user, git_email, oauth_token):
+def process_issue(issue_number, git, sandbox, gh, agent, push, model,
+                  git_user, git_email, proxy_port):
     """Process a single GitHub Issue spec."""
     repo = resolve_repo(git)
     if not repo:
@@ -1023,78 +1354,62 @@ def process_issue(issue_number, git, docker, gh, image_tag, push, model,
     print(f"ralph: processing issue #{issue_number} on branch {branch}")
     print(f"ralph: using worktree at {work_dir}")
 
+    # Ensure sandbox
+    sandbox_name = sandbox.ensure_sandbox(agent, branch, work_dir)
+
+    # Configure git inside sandbox
+    sandbox.setup_git_config(sandbox_name, git_user, git_email)
+
     # Label in-progress
     gh.issue_edit(issue_number, repo,
                   remove_label="status:ready",
                   add_label="status:in-progress")
 
-    # Create temp file for spec
-    fd, spec_tmpfile = tempfile.mkstemp()
-    os.close(fd)
+    # Build env vars for sandbox exec — real token stays in proxy,
+    # sandbox only sees a phantom token and the proxy's base URL.
+    env_vars = {
+        "CLAUDE_CODE_OAUTH_TOKEN": "phantom",
+        "ANTHROPIC_BASE_URL": f"http://host.docker.internal:{proxy_port}/v1",
+    }
 
-    try:
-        while True:
-            # Write current body as spec
-            with open(spec_tmpfile, 'w') as f:
-                f.write(body)
+    while True:
+        # Record HEAD before
+        head_before = git.output("rev-parse", "HEAD", cwd=work_dir) or "none"
 
-            # Resolve worktree git dir for mount
-            worktree_mount = None
-            git_file = os.path.join(work_dir, ".git")
-            if os.path.isfile(git_file):
-                main_git_dir = git.output("rev-parse", "--git-common-dir", cwd=work_dir)
-                if main_git_dir:
-                    main_git_dir = os.path.realpath(main_git_dir)
-                    worktree_mount = main_git_dir
+        # Run iteration
+        print(f"ralph: starting iteration (sandbox={sandbox_name}, issue=#{issue_number}, model={model})")
+        rc, body = sandbox.run_iteration(sandbox_name, body, model, env_vars)
+        if rc != 0:
+            print(f"ralph: iteration failed for issue #{issue_number}", file=sys.stderr)
+            gh.issue_edit(issue_number, repo,
+                          remove_label="status:in-progress",
+                          add_label="status:needs-attention")
+            return 1
 
-            # Record HEAD before
-            head_before = git.output("rev-parse", "HEAD", cwd=work_dir) or "none"
+        # Check if work was done
+        head_after = git.output("rev-parse", "HEAD", cwd=work_dir) or "none"
 
-            # Run container
-            push_val = 1 if push else 0
-            print(f"ralph: starting iteration (image={image_tag}, issue=#{issue_number}, model={model})")
-            rc = docker.run_container(
-                image_tag, work_dir, worktree_mount, spec_tmpfile,
-                push_val, model, git_user, git_email, oauth_token,
-            )
-            if rc != 0:
-                print(f"ralph: container failed for issue #{issue_number}", file=sys.stderr)
-                gh.issue_edit(issue_number, repo,
-                              remove_label="status:in-progress",
-                              add_label="status:needs-attention")
-                return 1
+        if head_before == head_after:
+            print(f"ralph: no commit made, marking issue #{issue_number} done")
+            gh.issue_edit(issue_number, repo,
+                          remove_label="status:in-progress",
+                          add_label="status:done")
+            unblock_ready_specs(repo, gh)
+            break
 
-            # Check if work was done
-            head_after = git.output("rev-parse", "HEAD", cwd=work_dir) or "none"
+        # Update issue body from spec
+        gh.issue_edit(issue_number, repo, body=body)
+        print(f"ralph: iteration complete, updated issue #{issue_number}")
 
-            if head_before == head_after:
-                print(f"ralph: no commit made, marking issue #{issue_number} done")
-                gh.issue_edit(issue_number, repo,
-                              remove_label="status:in-progress",
-                              add_label="status:done")
-                unblock_ready_specs(repo, gh)
-                break
-
-            # Update issue body from spec file
-            with open(spec_tmpfile, 'r') as f:
-                body = f.read()
-            gh.issue_edit(issue_number, repo, body=body)
-            print(f"ralph: iteration complete, updated issue #{issue_number}")
-
-            # Optional push
-            if push:
-                git.run("push", cwd=work_dir, check=False)
-    finally:
-        try:
-            os.unlink(spec_tmpfile)
-        except OSError:
-            pass
+        # Optional push (from host)
+        if push:
+            git.run("push", cwd=work_dir, check=False)
 
     return 0
 
 
-def poll_loop(git, docker, gh, image_tag, push, model, git_user, git_email,
-              oauth_token, interval, timeout):
+def poll_loop(git, sandbox, gh, agent, push, model, git_user, git_email,
+              proxy_port, interval, timeout):
     """Poll for ready issues and process them."""
     repo = resolve_repo(git)
     if not repo:
@@ -1145,10 +1460,17 @@ def poll_loop(git, docker, gh, image_tag, push, model, git_user, git_email,
             for num in numbers:
                 print(f"ralph: found ready issue #{num}")
                 try:
-                    process_issue(num, git, docker, gh, image_tag, push, model,
-                                  git_user, git_email, oauth_token)
-                except Exception:
-                    pass
+                    process_issue(num, git, sandbox, gh, agent, push, model,
+                                  git_user, git_email, proxy_port)
+                except Exception as exc:
+                    print(f"ralph: unexpected error processing issue #{num}: {exc}",
+                          file=sys.stderr)
+                    try:
+                        gh.issue_edit(num, repo,
+                                      remove_label="status:in-progress",
+                                      add_label="status:needs-attention")
+                    except Exception:
+                        pass
         else:
             timestamp = time.strftime("%H:%M:%S")
             sys.stdout.write(f"\rralph: no ready issues found (last checked at {timestamp})\033[K")
@@ -1181,9 +1503,9 @@ Token commands:
                         (or read from stdin when piped)
   check-token           Check if stored token is valid
   get-token             Print stored token to stdout
-  --agent <name>        Agent name for token commands (default: claude)
 
 Sandbox commands:
+  selftest              Smoke test the full pipeline (proxy, sandbox, auth)
   prune-sandboxes       Remove orphaned sandboxes
 
 Issue commands:
@@ -1191,9 +1513,9 @@ Issue commands:
   --poll                Poll for status:ready issues and process them
 
 Options:
+  --agent <name>        Agent name (default: claude)
   --interval <duration> Poll interval (default: 30s, requires --poll)
   --timeout <duration>  Limit poll duration (e.g. 30m, 4h, 1d; requires --poll)
-  --packages "pkg ..."  Extra apt packages baked into image
   --push                Git push after each iteration
   --rebuild             Force re-pull base image and rebuild sandbox
   --model <model>       Claude model (default: sonnet)
@@ -1276,8 +1598,32 @@ def main():
             print("ralph: no orphan sandboxes found")
         sys.exit(0)
 
+    # Selftest subcommand
+    if args and args[0] == "selftest":
+        agent = "claude"
+        rest = args[1:]
+        j = 0
+        while j < len(rest):
+            if rest[j] == "--agent":
+                if j + 1 >= len(rest):
+                    print("ralph: --agent requires an argument", file=sys.stderr)
+                    sys.exit(2)
+                agent = rest[j + 1]
+                j += 2
+            elif rest[j] in ("-h", "--help"):
+                usage(0)
+            else:
+                print(f"ralph: unknown option for selftest: {rest[j]}",
+                      file=sys.stderr)
+                sys.exit(2)
+
+        check_dependencies_prereq()
+        self_path = os.path.realpath(__file__)
+        dotfiles_dir = os.path.normpath(
+            os.path.join(os.path.dirname(self_path), ".."))
+        sys.exit(selftest(agent, dotfiles_dir))
+
     # Parse arguments manually to match zsh behavior exactly
-    packages = ""
     push = False
     rebuild = False
     timeout_val = 0
@@ -1285,17 +1631,12 @@ def main():
     issue_number = ""
     poll = False
     interval = 30
+    agent = "claude"
 
     i = 0
     while i < len(args):
         arg = args[i]
-        if arg == "--packages":
-            if i + 1 >= len(args):
-                print("ralph: --packages requires an argument", file=sys.stderr)
-                sys.exit(2)
-            packages = args[i + 1]
-            i += 2
-        elif arg == "--push":
+        if arg == "--push":
             push = True
             i += 1
         elif arg == "--rebuild":
@@ -1336,6 +1677,12 @@ def main():
                 print(f"ralph: invalid duration: {e}", file=sys.stderr)
                 sys.exit(2)
             i += 2
+        elif arg == "--agent":
+            if i + 1 >= len(args):
+                print("ralph: --agent requires an argument", file=sys.stderr)
+                sys.exit(2)
+            agent = args[i + 1]
+            i += 2
         elif arg in ("-h", "--help"):
             usage(0)
         elif arg.startswith("-"):
@@ -1357,20 +1704,30 @@ def main():
         print("ralph: --timeout requires --poll", file=sys.stderr)
         sys.exit(2)
 
+    if not poll and not issue_number:
+        print("ralph: no mode specified. Use --issue <number> or --poll", file=sys.stderr)
+        usage(2)
+
     # Prerequisite checks
     check_dependencies_prereq()
 
-    # Resolve script directory for Dockerfile path
+    # Resolve dotfiles directory
     self_path = os.path.realpath(__file__)
-    ralph_dir = os.path.join(os.path.dirname(self_path), "..", "docker", "ralph")
-    ralph_dir = os.path.normpath(ralph_dir)
+    dotfiles_dir = os.path.normpath(
+        os.path.join(os.path.dirname(self_path), ".."))
 
-    host_uid = os.getuid()
-    docker_helper = Docker(ralph_dir, host_uid)
-    image_tag = docker_helper.ensure_image(packages, force_rebuild=rebuild)
+    # Initialize sandbox and ensure image
+    sandbox = Sandbox(dotfiles_dir)
+    sandbox.ensure_image(agent, force_rebuild=rebuild)
 
-    # Auth — check stored token, run claude setup-token if missing/expired
-    oauth_token = ensure_token("claude")
+    # Auth — ensure valid token exists before starting proxy
+    # (auto-runs claude setup-token if missing/expired)
+    ensure_token(agent)
+
+    # Start proxy (reads token from Keychain internally)
+    proxy_port = proxy_port_for_agent(agent)
+    ensure_proxy(agent, proxy_port, dotfiles_dir)
+    register_proxy_cleanup(agent)
 
     # Git user config
     git = Git()
@@ -1380,19 +1737,15 @@ def main():
 
     # Issue mode
     if issue_number:
-        rc = process_issue(int(issue_number), git, docker_helper, gh, image_tag,
-                           push, model, git_user, git_email, oauth_token)
+        rc = process_issue(int(issue_number), git, sandbox, gh, agent,
+                           push, model, git_user, git_email, proxy_port)
         sys.exit(rc)
 
     # Poll mode
     if poll:
-        poll_loop(git, docker_helper, gh, image_tag, push, model, git_user,
-                  git_email, oauth_token, interval, timeout_val)
+        poll_loop(git, sandbox, gh, agent, push, model, git_user,
+                  git_email, proxy_port, interval, timeout_val)
         sys.exit(0)
-
-    # No mode specified
-    print("ralph: no mode specified. Use --issue <number> or --poll", file=sys.stderr)
-    usage(2)
 
 
 if __name__ == "__main__":

@@ -21,6 +21,12 @@ def import_script(name, path=None):
         repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         path = os.path.join(repo_root, "scripts", name)
 
+    # Return cached module if already imported from the same path
+    if name in sys.modules:
+        existing = sys.modules[name]
+        if getattr(existing, "__file__", None) == path:
+            return existing
+
     loader = importlib.machinery.SourceFileLoader(name, path)
     spec = importlib.util.spec_from_file_location(name, path, loader=loader)
     module = importlib.util.module_from_spec(spec)
