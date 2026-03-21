@@ -279,35 +279,60 @@ class TestWriteTokenToKeychain:
 # ---------------------------------------------------------------------------
 
 class TestRunClaudeSetupToken:
-    @patch("ralph.subprocess.run")
-    def test_returns_token_on_success(self, mock_run):
-        mock_run.return_value = MagicMock(stdout="sk-ant-oat01-setup\n", returncode=0)
+    def _make_spawn(self, output_bytes, exit_status=0):
+        """Create a fake pty.spawn that feeds output_bytes through master_read."""
+        def fake_spawn(cmd, master_read):
+            with patch("os.read", return_value=output_bytes):
+                master_read(3)  # fd=3, arbitrary
+            return exit_status
+        return fake_spawn
+
+    @patch("shutil.which", return_value="/usr/bin/claude")
+    @patch("pty.spawn")
+    def test_extracts_token_from_pty_output(self, mock_spawn, mock_which):
+        tui_data = b"\x1b[?2026hWelcome\n\xe2\x80\xa6\nsk-ant-oat01-realtoken123abc\nDone\x1b[?2026l"
+        mock_spawn.side_effect = self._make_spawn(tui_data)
         result = ralph.run_claude_setup_token()
-        assert result == "sk-ant-oat01-setup"
-        mock_run.assert_called_once_with(
-            ["claude", "setup-token"],
-            stdout=subprocess.PIPE, text=True,
+        assert result == "sk-ant-oat01-realtoken123abc"
+
+    @patch("shutil.which", return_value="/usr/bin/claude")
+    @patch("pty.spawn")
+    def test_exits_on_nonzero_return(self, mock_spawn, mock_which):
+        mock_spawn.side_effect = self._make_spawn(b"", exit_status=256)
+        with pytest.raises(SystemExit) as exc_info:
+            ralph.run_claude_setup_token()
+        assert exc_info.value.code == 1
+
+    @patch("shutil.which", return_value="/usr/bin/claude")
+    @patch("pty.spawn")
+    def test_exits_when_no_token_in_output(self, mock_spawn, mock_which):
+        mock_spawn.side_effect = self._make_spawn(b"No token here\n")
+        with pytest.raises(SystemExit) as exc_info:
+            ralph.run_claude_setup_token()
+        assert exc_info.value.code == 1
+
+    @patch("shutil.which", return_value=None)
+    def test_exits_when_claude_not_found(self, mock_which):
+        with pytest.raises(SystemExit) as exc_info:
+            ralph.run_claude_setup_token()
+        assert exc_info.value.code == 1
+
+    @patch("shutil.which", return_value="/usr/bin/claude")
+    @patch("pty.spawn")
+    def test_extracts_token_from_noisy_output(self, mock_spawn, mock_which):
+        """Ensure regex finds token buried in ANSI codes and TUI output."""
+        noisy = (
+            b"\x1b[?2026hWelcome to Claude Code v2.1.76\n"
+            b"\xe2\x80\xa6\xe2\x80\xa6\xe2\x80\xa6\xe2\x80\xa6\n"
+            b"\n"
+            b"Your token: sk-ant-oat01-abc123XYZ_defGHI\n"
+            b"\n"
+            b"Set via: export CLAUDE_CODE_OAUTH_TOKEN=<token>\n"
+            b"\x1b[?2026l\n"
         )
-
-    @patch("ralph.subprocess.run")
-    def test_exits_on_nonzero_return(self, mock_run):
-        mock_run.return_value = MagicMock(stdout="", returncode=1)
-        with pytest.raises(SystemExit) as exc_info:
-            ralph.run_claude_setup_token()
-        assert exc_info.value.code == 1
-
-    @patch("ralph.subprocess.run")
-    def test_exits_on_empty_output(self, mock_run):
-        mock_run.return_value = MagicMock(stdout="\n", returncode=0)
-        with pytest.raises(SystemExit) as exc_info:
-            ralph.run_claude_setup_token()
-        assert exc_info.value.code == 1
-
-    @patch("ralph.subprocess.run", side_effect=FileNotFoundError)
-    def test_exits_when_claude_not_found(self, mock_run):
-        with pytest.raises(SystemExit) as exc_info:
-            ralph.run_claude_setup_token()
-        assert exc_info.value.code == 1
+        mock_spawn.side_effect = self._make_spawn(noisy)
+        result = ralph.run_claude_setup_token()
+        assert result == "sk-ant-oat01-abc123XYZ_defGHI"
 
 
 # ---------------------------------------------------------------------------
