@@ -22,6 +22,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.request
 
 
 # ---------------------------------------------------------------------------
@@ -60,19 +61,22 @@ class Docker:
         self.ralph_dir = ralph_dir
         self.host_uid = host_uid
 
-    def build_image(self, tag, extra_args=None):
-        result = subprocess.run(
-            ["docker", "image", "inspect", tag],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            check=False,
-        )
-        if result.returncode == 0:
-            print(f"ralph: using cached image {tag}")
-            return
+    def build_image(self, tag, extra_args=None, force=False):
+        if not force:
+            result = subprocess.run(
+                ["docker", "image", "inspect", tag],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+            )
+            if result.returncode == 0:
+                print(f"ralph: using cached image {tag}")
+                return
 
         print(f"ralph: building image {tag} (this may take a minute)...")
         cmd = ["docker", "build"]
+        if force:
+            cmd.append("--no-cache")
         if extra_args:
             cmd.extend(extra_args)
         cmd.extend(["-t", tag, self.ralph_dir])
@@ -85,12 +89,12 @@ class Docker:
             return f"ralph:custom-{pkg_hash}"
         return f"ralph:uid-{self.host_uid}"
 
-    def ensure_image(self, packages):
+    def ensure_image(self, packages, force_rebuild=False):
         tag = self.compute_tag(packages)
         build_args = ["--build-arg", f"HOST_UID={self.host_uid}"]
         if packages:
             build_args.extend(["--build-arg", f"EXTRA_PACKAGES={packages}"])
-        self.build_image(tag, extra_args=build_args)
+        self.build_image(tag, extra_args=build_args, force=force_rebuild)
         return tag
 
     def run_container(self, image_tag, work_dir, worktree_mount, spec_file,
@@ -112,6 +116,330 @@ class Docker:
             image_tag,
         ])
         return subprocess.run(cmd, check=False).returncode
+
+
+# ---------------------------------------------------------------------------
+# Sandbox helper (Docker sandbox-based isolation)
+# ---------------------------------------------------------------------------
+
+class Sandbox:
+    """Manages Docker sandbox images for agent-loop isolation."""
+
+    BASE_IMAGE_MAX_AGE_DAYS = 7
+
+    def __init__(self, dotfiles_dir):
+        self.dotfiles_dir = dotfiles_dir
+
+    def dockerfile_path(self, agent):
+        """Path to the Dockerfile for the given agent."""
+        return os.path.join(
+            self.dotfiles_dir, "docker", "agent-loop", agent, "Dockerfile")
+
+    def build_context(self, agent):
+        """Path to the Docker build context directory."""
+        return os.path.join(self.dotfiles_dir, "docker", "agent-loop", agent)
+
+    @staticmethod
+    def parse_base_image(dockerfile_content):
+        """Extract the final-stage FROM image from Dockerfile content."""
+        image = None
+        for line in dockerfile_content.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("FROM "):
+                image = stripped.split()[1]
+        return image
+
+    @staticmethod
+    def content_hash(dockerfile_content, base_digest):
+        """Compute deterministic content hash from Dockerfile + base image digest."""
+        df_hash = hashlib.sha256(dockerfile_content.encode()).hexdigest()
+        bd_hash = hashlib.sha256(base_digest.encode()).hexdigest()
+        combined = f"{df_hash}:{bd_hash}"
+        return hashlib.sha256(combined.encode()).hexdigest()[:12]
+
+    @staticmethod
+    def image_tag(agent, chash):
+        """Format the image tag from agent name and content hash."""
+        return f"agent-loop-sandbox-{agent}:v{chash}"
+
+    @staticmethod
+    def _parse_docker_timestamp(ts):
+        """Parse a Docker timestamp to a timezone-aware datetime.
+
+        Handles nanosecond precision and Z suffix.
+        """
+        ts = re.sub(r'(\.\d{6})\d+', r'\1', ts)
+        ts = ts.replace('Z', '+00:00')
+        return datetime.datetime.fromisoformat(ts)
+
+    def get_base_digest(self, image):
+        """Get the repo digest of a locally-pulled Docker image."""
+        result = subprocess.run(
+            ["docker", "image", "inspect", image,
+             "--format", "{{index .RepoDigests 0}}"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            check=False,
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+        return ""
+
+    def base_image_age_days(self, image):
+        """Return the age of a local Docker image in days, or None if missing."""
+        result = subprocess.run(
+            ["docker", "inspect", "--format", "{{.Created}}", image],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            return None
+        try:
+            created = self._parse_docker_timestamp(result.stdout.strip())
+            now = datetime.datetime.now(tz=datetime.timezone.utc)
+            return (now - created).days
+        except (ValueError, TypeError):
+            return None
+
+    def needs_rebuild(self, agent):
+        """Check if the base image should be re-pulled (missing or >7 days old)."""
+        with open(self.dockerfile_path(agent)) as f:
+            content = f.read()
+        base_image = self.parse_base_image(content)
+        if not base_image:
+            return True
+        age = self.base_image_age_days(base_image)
+        if age is None:
+            return True
+        return age > self.BASE_IMAGE_MAX_AGE_DAYS
+
+    def pull_base_image(self, agent):
+        """Pull the base image referenced in the agent's Dockerfile."""
+        with open(self.dockerfile_path(agent)) as f:
+            content = f.read()
+        base_image = self.parse_base_image(content)
+        if not base_image:
+            raise RuntimeError(
+                f"no FROM directive in {self.dockerfile_path(agent)}")
+        print(f"ralph: pulling base image {base_image}...")
+        subprocess.run(["docker", "pull", base_image], check=True)
+
+    def image_exists(self, tag):
+        """Check if a Docker image exists locally."""
+        result = subprocess.run(
+            ["docker", "image", "inspect", tag],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        return result.returncode == 0
+
+    def compute_tag(self, agent):
+        """Compute the content-addressed image tag for an agent's sandbox."""
+        with open(self.dockerfile_path(agent)) as f:
+            df_content = f.read()
+        base_image = self.parse_base_image(df_content)
+        base_digest = self.get_base_digest(base_image) if base_image else ""
+        chash = self.content_hash(df_content, base_digest)
+        return self.image_tag(agent, chash)
+
+    def build_image(self, agent, tag):
+        """Build the sandbox image for the given agent."""
+        ctx = self.build_context(agent)
+        print(f"ralph: building sandbox image {tag}...")
+        subprocess.run(["docker", "build", "-t", tag, ctx], check=True)
+
+    def ensure_image(self, agent, force_rebuild=False):
+        """Ensure the sandbox image is built and up-to-date.
+
+        Returns the image tag.
+        """
+        if force_rebuild or self.needs_rebuild(agent):
+            self.pull_base_image(agent)
+
+        tag = self.compute_tag(agent)
+
+        if not force_rebuild and self.image_exists(tag):
+            print(f"ralph: using cached sandbox image {tag}")
+            return tag
+
+        self.build_image(agent, tag)
+        return tag
+
+    # -- Sandbox lifecycle --------------------------------------------------
+
+    @staticmethod
+    def sandbox_name(agent, branch):
+        """Generate sandbox name from agent and branch.
+
+        Sanitizes the branch: replaces '/' with '-', strips leading/trailing
+        hyphens, collapses consecutive hyphens, and lowercases.
+        """
+        sanitized = branch.replace("/", "-").lower()
+        sanitized = re.sub(r'-+', '-', sanitized).strip("-")
+        return f"agent-loop-{agent}-{sanitized}"
+
+    @staticmethod
+    def _docker_sandbox_ls():
+        """List sandboxes via 'docker sandbox ls --json'. Returns parsed JSON."""
+        result = subprocess.run(
+            ["docker", "sandbox", "ls", "--json"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            return {"vms": []}
+        try:
+            return json.loads(result.stdout)
+        except (json.JSONDecodeError, ValueError):
+            return {"vms": []}
+
+    def sandbox_exists(self, name):
+        """Check if a sandbox with the given name exists."""
+        data = self._docker_sandbox_ls()
+        for vm in data.get("vms", []):
+            if vm.get("name") == name:
+                return True
+        return False
+
+    @staticmethod
+    def _docker_sandbox_create(name, tag, worktree_path):
+        """Create a new Docker sandbox."""
+        subprocess.run(
+            ["docker", "sandbox", "create",
+             "--name", name, "-t", tag, "claude", worktree_path],
+            check=True,
+        )
+
+    @staticmethod
+    def apply_network_policy(name):
+        """Apply deny-by-default network policy with allowed hosts."""
+        subprocess.run(
+            ["docker", "sandbox", "network", "proxy", name,
+             "--policy", "deny",
+             "--allow-host", "localhost",
+             "--allow-host", "api.anthropic.com",
+             "--allow-host", "statsig.anthropic.com",
+             "--allow-host", "sentry.io"],
+            check=True,
+        )
+
+    def ensure_sandbox(self, agent, branch, worktree_path):
+        """Ensure a sandbox exists for the given agent and branch.
+
+        Reuses an existing sandbox or creates a new one with network policy.
+        Returns the sandbox name.
+        """
+        name = self.sandbox_name(agent, branch)
+        if self.sandbox_exists(name):
+            print(f"ralph: reusing sandbox {name}")
+            return name
+        tag = self.ensure_image(agent)
+        print(f"ralph: creating sandbox {name}...")
+        self._docker_sandbox_create(name, tag, worktree_path)
+        self.apply_network_policy(name)
+        return name
+
+    @staticmethod
+    def cleanup_sandbox(agent, branch):
+        """Remove the sandbox for a given agent and branch."""
+        name = Sandbox.sandbox_name(agent, branch)
+        print(f"ralph: removing sandbox {name}")
+        subprocess.run(
+            ["docker", "sandbox", "rm", name],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            check=False,
+        )
+
+    def prune_sandboxes(self, agent):
+        """Remove orphaned sandboxes whose workspace paths no longer exist.
+
+        Returns list of pruned sandbox names.
+        """
+        prefix = f"agent-loop-{agent}-"
+        data = self._docker_sandbox_ls()
+        pruned = []
+        for vm in data.get("vms", []):
+            name = vm.get("name", "")
+            if not name.startswith(prefix):
+                continue
+            workspace = vm.get("workspace", "")
+            if workspace and os.path.exists(workspace):
+                continue
+            print(f"ralph: pruning orphan sandbox {name}")
+            subprocess.run(
+                ["docker", "sandbox", "rm", name],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                check=False,
+            )
+            pruned.append(name)
+        return pruned
+
+    # -- Pre-flight validation ------------------------------------------------
+
+    def preflight_check(self, sandbox_name, agent, proxy_port):
+        """Run pre-flight validation before starting an iteration.
+
+        Checks token validity, proxy health, sandbox responsiveness,
+        and network policy enforcement.
+
+        Returns a list of failure messages. Empty list means all checks passed.
+        """
+        failures = []
+
+        # 1. Token valid
+        data = read_token_from_keychain(agent)
+        if data is None:
+            failures.append(
+                f"no token found for agent {agent}"
+                " — run: ralph store-token")
+        else:
+            now_ms = int(time.time() * 1000)
+            expires_at = data.get("expiresAt", 0)
+            if expires_at <= now_ms:
+                failures.append(
+                    f"token expired for agent {agent}"
+                    " — run: ralph store-token")
+
+        # 2. Proxy running
+        try:
+            resp = urllib.request.urlopen(
+                f"http://localhost:{proxy_port}/health", timeout=3)
+            if resp.status != 200:
+                failures.append(
+                    f"proxy health check returned status {resp.status}"
+                    " — ensure the credential proxy is running")
+        except Exception:
+            failures.append(
+                f"proxy not reachable at http://localhost:{proxy_port}/health"
+                " — start the credential proxy")
+
+        # 3. Sandbox responsive
+        sandbox_ok = False
+        result = subprocess.run(
+            ["docker", "sandbox", "exec", sandbox_name, "echo", "ok"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            failures.append(
+                f"sandbox {sandbox_name} is not responding"
+                f" — try: docker sandbox rm {sandbox_name}")
+        else:
+            sandbox_ok = True
+
+        # 4. Network policy applied (only if sandbox is responsive)
+        if sandbox_ok:
+            result = subprocess.run(
+                ["docker", "sandbox", "exec", sandbox_name,
+                 "curl", "-s", "--max-time", "3", "https://google.com"],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                check=False,
+            )
+            if result.returncode == 0:
+                failures.append(
+                    f"network policy not applied to sandbox {sandbox_name}"
+                    " — outbound requests should be blocked")
+
+        return failures
 
 
 # ---------------------------------------------------------------------------
@@ -855,6 +1183,9 @@ Token commands:
   get-token             Print stored token to stdout
   --agent <name>        Agent name for token commands (default: claude)
 
+Sandbox commands:
+  prune-sandboxes       Remove orphaned sandboxes
+
 Issue commands:
   --issue <number>      Execute a single GitHub Issue spec
   --poll                Poll for status:ready issues and process them
@@ -864,6 +1195,7 @@ Options:
   --timeout <duration>  Limit poll duration (e.g. 30m, 4h, 1d; requires --poll)
   --packages "pkg ..."  Extra apt packages baked into image
   --push                Git push after each iteration
+  --rebuild             Force re-pull base image and rebuild sandbox
   --model <model>       Claude model (default: sonnet)
   -h, --help            Show usage"""
 
@@ -916,9 +1248,38 @@ def main():
             get_token(agent)
         sys.exit(0)
 
+    # Sandbox subcommands
+    if args and args[0] == "prune-sandboxes":
+        agent = "claude"
+        rest = args[1:]
+        j = 0
+        while j < len(rest):
+            if rest[j] == "--agent":
+                if j + 1 >= len(rest):
+                    print("ralph: --agent requires an argument", file=sys.stderr)
+                    sys.exit(2)
+                agent = rest[j + 1]
+                j += 2
+            elif rest[j] in ("-h", "--help"):
+                usage(0)
+            else:
+                print(f"ralph: unknown option for prune-sandboxes: {rest[j]}",
+                      file=sys.stderr)
+                sys.exit(2)
+
+        self_path = os.path.realpath(__file__)
+        dotfiles_dir = os.path.normpath(
+            os.path.join(os.path.dirname(self_path), ".."))
+        sb = Sandbox(dotfiles_dir)
+        pruned = sb.prune_sandboxes(agent)
+        if not pruned:
+            print("ralph: no orphan sandboxes found")
+        sys.exit(0)
+
     # Parse arguments manually to match zsh behavior exactly
     packages = ""
     push = False
+    rebuild = False
     timeout_val = 0
     model = "sonnet"
     issue_number = ""
@@ -936,6 +1297,9 @@ def main():
             i += 2
         elif arg == "--push":
             push = True
+            i += 1
+        elif arg == "--rebuild":
+            rebuild = True
             i += 1
         elif arg == "--issue":
             if i + 1 >= len(args):
@@ -1003,7 +1367,7 @@ def main():
 
     host_uid = os.getuid()
     docker_helper = Docker(ralph_dir, host_uid)
-    image_tag = docker_helper.ensure_image(packages)
+    image_tag = docker_helper.ensure_image(packages, force_rebuild=rebuild)
 
     # Auth — check stored token, run claude setup-token if missing/expired
     oauth_token = ensure_token("claude")
