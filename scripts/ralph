@@ -494,6 +494,13 @@ DEFAULT_PROXY_PORT = 18080
 # Image tag for the proxy container.
 PROXY_IMAGE_TAG = "agent-loop-proxy:v1"
 
+# Map short model aliases to full model IDs for ANTHROPIC_CUSTOM_MODEL_OPTION.
+MODEL_ALIASES = {
+    "opus": "claude-opus-4-6",
+    "sonnet": "claude-sonnet-4-6",
+    "haiku": "claude-haiku-4-5-20251001",
+}
+
 
 def proxy_container_name(agent):
     """Return the Docker container name for the proxy."""
@@ -726,7 +733,8 @@ def selftest(agent, dotfiles_dir):
         result = subprocess.run(
             ["docker", "sandbox", "exec",
              "-e", "CLAUDE_CODE_OAUTH_TOKEN=phantom",
-             "-e", f"ANTHROPIC_BASE_URL=http://host.docker.internal:{port}/v1",
+             "-e", f"ANTHROPIC_BASE_URL=http://host.docker.internal:{port}",
+             "-e", f"ANTHROPIC_CUSTOM_MODEL_OPTION={MODEL_ALIASES['haiku']}",
              sandbox_name,
              "claude", "-p", "say ok", "--model", "haiku"],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
@@ -1364,9 +1372,14 @@ def process_issue(issue_number, git, sandbox, gh, agent, push, model,
 
     # Build env vars for sandbox exec — real token stays in proxy,
     # sandbox only sees a phantom token and the proxy's base URL.
+    # ANTHROPIC_CUSTOM_MODEL_OPTION bypasses client-side model validation
+    # which otherwise fails because the phantom token has no subscription
+    # tier metadata.
+    model_id = MODEL_ALIASES.get(model, model)
     env_vars = {
         "CLAUDE_CODE_OAUTH_TOKEN": "phantom",
-        "ANTHROPIC_BASE_URL": f"http://host.docker.internal:{proxy_port}/v1",
+        "ANTHROPIC_BASE_URL": f"http://host.docker.internal:{proxy_port}",
+        "ANTHROPIC_CUSTOM_MODEL_OPTION": model_id,
     }
 
     while True:

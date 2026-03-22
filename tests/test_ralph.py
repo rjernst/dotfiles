@@ -1534,7 +1534,7 @@ class TestProcessIssueSandbox:
         call_args = sandbox.run_iteration.call_args
         env_vars = call_args[1].get("env_vars") or call_args[0][3]
         assert env_vars["CLAUDE_CODE_OAUTH_TOKEN"] == "phantom"
-        assert env_vars["ANTHROPIC_BASE_URL"] == "http://host.docker.internal:18080/v1"
+        assert env_vars["ANTHROPIC_BASE_URL"] == "http://host.docker.internal:18080"
 
     @patch("ralph.ensure_worktree", return_value="/work/my-branch")
     @patch("ralph.resolve_repo", return_value="owner/repo")
