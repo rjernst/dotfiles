@@ -3,6 +3,7 @@
 ## Git Commits
 
 - Never add `Co-Authored-By` trailers to commit messages.
+- Commit messages should never be bullet lists. Write a concise conceptual explanation of *what* and *why* the commit changes something. Don't enumerate exact changes — the diff speaks for itself.
 
 ## Branch Safety
 
