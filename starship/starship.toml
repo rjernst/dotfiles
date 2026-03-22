@@ -1,7 +1,7 @@
 "$schema" = 'https://starship.rs/config-schema.json'
 
 format = """\
-[╭─](blue)$username$hostname$directory$fill$git_branch$git_status$java$kubernetes$gcloud$cmd_duration$jobs$status$time
+[╭─](blue)$username$hostname$directory$fill$git_branch$git_status${custom.java}$kubernetes$gcloud$cmd_duration$jobs$status$time
 [╰─](blue) $character"""
 
 [fill]
@@ -43,7 +43,14 @@ staged = '+${count}'
 deleted = '✘${count}'
 
 [java]
-format = "[\ue0b6](fg:240)[ ☕ $version ](bg:240 red)[\ue0b4](fg:240)[─](blue)"
+disabled = true
+
+[custom.java]
+command = "jenv version-name"
+detect_files = ['pom.xml', 'build.gradle', 'build.gradle.kts', 'build.sbt', '.java-version', '.deps.edn', 'project.clj', 'build.boot', 'build.xml']
+detect_extensions = ['java', 'class', 'gradle', 'jar', 'cljs', 'cljc']
+format = "[\ue0b6](fg:240)[ ☕ $output ](bg:240 red)[\ue0b4](fg:240)[─](blue)"
+shell = ['sh']
 
 [kubernetes]
 disabled = false
