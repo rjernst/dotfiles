@@ -370,9 +370,9 @@ class Sandbox:
         """
         spec_path = "/tmp/spec.md"
 
-        # Write spec into sandbox
+        # Write spec into sandbox (-i keeps stdin open for piping)
         write_proc = subprocess.run(
-            ["docker", "sandbox", "exec", sandbox_name,
+            ["docker", "sandbox", "exec", "-i", sandbox_name,
              "tee", spec_path],
             input=spec_content, text=True, check=False,
             stdout=subprocess.DEVNULL,
