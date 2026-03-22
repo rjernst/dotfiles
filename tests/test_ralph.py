@@ -720,27 +720,26 @@ class TestProxyHealthCheck:
 
 
 class TestStartProxy:
+    @patch("ralph.subprocess.Popen")
     @patch("ralph.subprocess.run")
     @patch("ralph.read_token_from_keychain")
     @patch("ralph.time.time", return_value=1700000000.0)
-    def test_constructs_correct_docker_run_command(self, mock_time, mock_read, mock_run):
+    def test_constructs_correct_docker_run_command(self, mock_time, mock_read, mock_run, mock_popen):
         future_ms = 1700000000000 + 30 * 86400 * 1000
         mock_read.return_value = {"accessToken": "sk-test-token", "expiresAt": future_ms}
-        # First call: docker image inspect (image exists)
-        # Second call: docker run
-        mock_run.side_effect = [
-            MagicMock(returncode=0),  # image inspect
-            MagicMock(returncode=0, stdout="container-id\n", stderr=""),  # docker run
-        ]
+        # Image inspect succeeds
+        mock_run.return_value = MagicMock(returncode=0)
+        # Popen mock with stdin
+        mock_proc = MagicMock()
+        mock_popen.return_value = mock_proc
 
         result = ralph.start_proxy("claude", 18080, "/fake/dotfiles")
         assert result == "agent-loop-proxy-claude"
 
-        # Verify docker run call
-        run_call = mock_run.call_args_list[1]
-        cmd = run_call[0][0]
+        # Verify docker run call (via Popen, no -d flag)
+        cmd = mock_popen.call_args[0][0]
         assert cmd[:4] == ["docker", "run", "-i", "--rm"]
-        assert "-d" in cmd
+        assert "-d" not in cmd
         assert "--name" in cmd
         name_idx = cmd.index("--name")
         assert cmd[name_idx + 1] == "agent-loop-proxy-claude"
@@ -749,19 +748,21 @@ class TestStartProxy:
         assert cmd[p_idx + 1] == "18080:18080"
         assert cmd[-1] == ralph.PROXY_IMAGE_TAG
         # Verify token piped via stdin
-        assert run_call[1]["input"] == "sk-test-token\n"
+        mock_proc.stdin.write.assert_called_once_with(b"sk-test-token\n")
+        mock_proc.stdin.close.assert_called_once()
 
+    @patch("ralph.subprocess.Popen")
     @patch("ralph.subprocess.run")
     @patch("ralph.read_token_from_keychain")
     @patch("ralph.time.time", return_value=1700000000.0)
-    def test_builds_image_when_missing(self, mock_time, mock_read, mock_run):
+    def test_builds_image_when_missing(self, mock_time, mock_read, mock_run, mock_popen):
         future_ms = 1700000000000 + 30 * 86400 * 1000
         mock_read.return_value = {"accessToken": "sk-test", "expiresAt": future_ms}
         mock_run.side_effect = [
             MagicMock(returncode=1),  # image inspect — not found
             MagicMock(returncode=0),  # docker build
-            MagicMock(returncode=0, stdout="cid\n", stderr=""),  # docker run
         ]
+        mock_popen.return_value = MagicMock()
 
         ralph.start_proxy("claude", 18080, "/fake/dotfiles")
 
@@ -785,19 +786,17 @@ class TestStartProxy:
             ralph.start_proxy("claude", 18080, "/fake/dotfiles")
         assert exc_info.value.code == 1
 
+    @patch("ralph.subprocess.Popen")
     @patch("ralph.subprocess.run")
     @patch("ralph.read_token_from_keychain")
     @patch("ralph.time.time", return_value=1700000000.0)
-    def test_exits_when_docker_run_fails(self, mock_time, mock_read, mock_run):
+    def test_popen_failure_raises(self, mock_time, mock_read, mock_run, mock_popen):
         future_ms = 1700000000000 + 30 * 86400 * 1000
         mock_read.return_value = {"accessToken": "sk-test", "expiresAt": future_ms}
-        mock_run.side_effect = [
-            MagicMock(returncode=0),  # image inspect
-            MagicMock(returncode=1, stdout="", stderr="port in use"),  # docker run fails
-        ]
-        with pytest.raises(SystemExit) as exc_info:
+        mock_run.return_value = MagicMock(returncode=0)  # image inspect
+        mock_popen.side_effect = OSError("docker not available")
+        with pytest.raises(OSError):
             ralph.start_proxy("claude", 18080, "/fake/dotfiles")
-        assert exc_info.value.code == 1
 
 
 class TestStopProxy:
