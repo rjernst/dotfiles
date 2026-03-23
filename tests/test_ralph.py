@@ -2162,9 +2162,10 @@ class TestProcessIssueSandbox:
         sandbox = MagicMock()
         sandbox.ensure_sandbox.return_value = "agent-loop-claude-my-branch"
         sandbox.run_iteration.return_value = (0, "updated spec")
-        # First call returns "abc", second returns "def" (new commit),
-        # third returns "def" (no new commit = done)
-        sandbox.exec_output.side_effect = ["abc", "def", "def", "def"]
+        # First call is printenv no_proxy, then HEAD checks:
+        # "abc" before iteration, "def" after (new commit),
+        # "def" again (no new commit = done)
+        sandbox.exec_output.side_effect = ["", "abc", "def", "def", "def"]
 
         gh = MagicMock()
         gh.issue_view_title.return_value = "[my-branch] Test Issue"
@@ -2334,11 +2335,12 @@ class TestSelftest:
                              mock_health, mock_img, mock_create, mock_policy,
                              mock_run, mock_stop, mock_remove, capsys):
         mock_read.return_value = {"accessToken": "sk-test", "expiresAt": self.FUTURE_MS}
-        # sandbox exec calls: proxy reachable (ok), claude (ok), curl google (blocked)
+        # sandbox exec calls: proxy reachable, printenv no_proxy, claude, curl google
         mock_run.side_effect = [
-            MagicMock(returncode=0, stdout="ok", stderr=""),    # curl proxy health
-            MagicMock(returncode=0, stdout="ok", stderr=""),    # claude via proxy
-            MagicMock(returncode=28, stdout="", stderr=""),     # curl google (blocked)
+            MagicMock(returncode=0, stdout="ok", stderr=""),                        # curl proxy health
+            MagicMock(returncode=0, stdout="localhost,127.0.0.1,::1", stderr=""),   # printenv no_proxy
+            MagicMock(returncode=0, stdout="ok", stderr=""),                        # claude via proxy
+            MagicMock(returncode=28, stdout="", stderr=""),                         # curl google (blocked)
         ]
 
         rc = ralph.selftest("claude", "/fake/dotfiles")
@@ -2393,6 +2395,7 @@ class TestSelftest:
         # proxy reachable fails, which causes failures but cleanup should still run
         mock_run.side_effect = [
             MagicMock(returncode=1, stdout="", stderr=""),     # curl proxy health (fail)
+            MagicMock(returncode=0, stdout="", stderr=""),     # printenv no_proxy
             MagicMock(returncode=1, stdout="", stderr=""),     # claude (fail)
             MagicMock(returncode=0, stdout="ok", stderr=""),   # curl google (not blocked)
         ]
@@ -2418,9 +2421,10 @@ class TestSelftest:
                                    mock_img, mock_create, mock_policy,
                                    mock_run, mock_stop, mock_remove, capsys):
         mock_read.return_value = {"accessToken": "sk-test", "expiresAt": self.FUTURE_MS}
-        # proxy reachable ok, claude fails, network not blocked
+        # proxy reachable ok, printenv no_proxy, claude fails, network not blocked
         mock_run.side_effect = [
             MagicMock(returncode=0, stdout="ok", stderr=""),   # curl proxy health
+            MagicMock(returncode=0, stdout="", stderr=""),     # printenv no_proxy
             MagicMock(returncode=1, stdout="", stderr="err"),  # claude fails
             MagicMock(returncode=0, stdout="ok", stderr=""),   # curl google (NOT blocked)
         ]
@@ -2521,9 +2525,10 @@ class TestSelftest:
             mock_policy, mock_run, mock_stop, mock_remove, capsys):
         mock_read.return_value = {"accessToken": "sk-test", "expiresAt": self.FUTURE_MS}
         mock_run.side_effect = [
-            MagicMock(returncode=0, stdout="ok", stderr=""),
-            MagicMock(returncode=0, stdout="ok", stderr=""),
-            MagicMock(returncode=28, stdout="", stderr=""),
+            MagicMock(returncode=0, stdout="ok", stderr=""),                        # curl proxy health
+            MagicMock(returncode=0, stdout="localhost,127.0.0.1,::1", stderr=""),   # printenv no_proxy
+            MagicMock(returncode=0, stdout="ok", stderr=""),                        # claude via proxy
+            MagicMock(returncode=28, stdout="", stderr=""),                         # curl google (blocked)
         ]
 
         rc = ralph.selftest("claude", "/fake/dotfiles")
@@ -2554,9 +2559,10 @@ class TestSelftest:
             mock_policy, mock_run, mock_stop, mock_remove, capsys):
         mock_read.return_value = {"accessToken": "sk-test", "expiresAt": self.FUTURE_MS}
         mock_run.side_effect = [
-            MagicMock(returncode=0, stdout="ok", stderr=""),
-            MagicMock(returncode=0, stdout="ok", stderr=""),
-            MagicMock(returncode=28, stdout="", stderr=""),
+            MagicMock(returncode=0, stdout="ok", stderr=""),                        # curl proxy health
+            MagicMock(returncode=0, stdout="localhost,127.0.0.1,::1", stderr=""),   # printenv no_proxy
+            MagicMock(returncode=0, stdout="ok", stderr=""),                        # claude via proxy
+            MagicMock(returncode=28, stdout="", stderr=""),                         # curl google (blocked)
         ]
 
         rc = ralph.selftest("claude", "/fake/dotfiles")
@@ -2583,9 +2589,10 @@ class TestSelftest:
             mock_run, mock_stop, mock_remove, capsys):
         mock_read.return_value = {"accessToken": "sk-test", "expiresAt": self.FUTURE_MS}
         mock_run.side_effect = [
-            MagicMock(returncode=0, stdout="ok", stderr=""),
-            MagicMock(returncode=0, stdout="ok", stderr=""),
-            MagicMock(returncode=28, stdout="", stderr=""),
+            MagicMock(returncode=0, stdout="ok", stderr=""),                        # curl proxy health
+            MagicMock(returncode=0, stdout="localhost,127.0.0.1,::1", stderr=""),   # printenv no_proxy
+            MagicMock(returncode=0, stdout="ok", stderr=""),                        # claude via proxy
+            MagicMock(returncode=28, stdout="", stderr=""),                         # curl google (blocked)
         ]
 
         rc = ralph.selftest("claude", "/fake/dotfiles")

@@ -974,11 +974,16 @@ def selftest(agent, dotfiles_dir):
                else f"curl exit code {result.returncode}")
 
         # 7. Verify Claude auth works through proxy
+        # Bypass Docker sandbox's MITM proxy for our credential proxy
+        cur_no_proxy = Sandbox.exec_output(sandbox_name, "printenv", "no_proxy")
+        no_proxy = f"{cur_no_proxy},host.docker.internal" if cur_no_proxy else "host.docker.internal"
         result = subprocess.run(
             ["docker", "sandbox", "exec",
              "-e", "CLAUDE_CODE_OAUTH_TOKEN=phantom",
              "-e", f"ANTHROPIC_BASE_URL=http://host.docker.internal:{port}",
              "-e", f"ANTHROPIC_CUSTOM_MODEL_OPTION={MODEL_ALIASES['haiku']}",
+             "-e", f"no_proxy={no_proxy}",
+             "-e", f"NO_PROXY={no_proxy}",
              sandbox_name,
              "claude", "-p", "say ok", "--model", "haiku"],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
@@ -1684,10 +1689,16 @@ def process_issue(issue_number, git, sandbox, gh, agent, push, model,
     # which otherwise fails because the phantom token has no subscription
     # tier metadata.
     model_id = MODEL_ALIASES.get(model, model)
+    # Docker sandboxes route HTTP through a MITM proxy (port 3128).
+    # Bypass it for our credential proxy so requests go direct.
+    cur_no_proxy = sandbox.exec_output(sandbox_name, "printenv", "no_proxy")
+    no_proxy = f"{cur_no_proxy},host.docker.internal" if cur_no_proxy else "host.docker.internal"
     env_vars = {
         "CLAUDE_CODE_OAUTH_TOKEN": "phantom",
         "ANTHROPIC_BASE_URL": f"http://host.docker.internal:{proxy_port}",
         "ANTHROPIC_CUSTOM_MODEL_OPTION": model_id,
+        "no_proxy": no_proxy,
+        "NO_PROXY": no_proxy,
     }
 
     try:
