@@ -98,7 +98,6 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
     def _proxy(self):
         if self.idle_shutdown:
             self.idle_shutdown.reset()
-        print(f"proxy: {self.command} {self.path}", file=sys.stderr)
 
         # Read request body (if any).
         content_length = int(self.headers.get("Content-Length", 0))
@@ -123,9 +122,11 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             resp = urllib.request.urlopen(req, timeout=300)
             self._stream_response(resp.status, resp.headers, resp)
         except urllib.error.HTTPError as exc:
+            print(f"proxy: {self.command} {self.path} → {exc.code}", file=sys.stderr)
             self._stream_response(exc.code, exc.headers, exc)
         except urllib.error.URLError as exc:
-            print(f"proxy: upstream error: {exc.reason}", file=sys.stderr)
+            print(f"proxy: {self.command} {self.path} → upstream error: {exc.reason}",
+                  file=sys.stderr)
             body = f"proxy: upstream unreachable: {exc.reason}".encode()
             self.send_response(502)
             self.send_header("Content-Type", "text/plain")
