@@ -1669,6 +1669,61 @@ class TestProcessIssueSandbox:
     @patch("ralph.unblock_ready_specs")
     @patch("ralph.ensure_worktree", return_value="/work/my-branch")
     @patch("ralph.resolve_repo", return_value="owner/repo")
+    def test_resets_sandbox_when_out_of_sync(self, mock_repo, mock_wt, mock_unblock):
+        git = MagicMock()
+
+        sandbox = MagicMock()
+        sandbox.ensure_sandbox.return_value = "agent-loop-claude-my-branch"
+        sandbox.run_iteration.return_value = (0, "updated spec")
+        sandbox.check_in_sync.return_value = False
+        sandbox.reset_to_host.return_value = True
+        # HEAD doesn't change = spec complete
+        sandbox.exec_output.return_value = "abc123"
+
+        gh = MagicMock()
+        gh.issue_view_title.return_value = "[my-branch] Test Issue"
+        gh.issue_view_body.return_value = "---\nbranch: my-branch\n---\nSpec"
+
+        ralph.process_issue(
+            42, git, sandbox, gh, "claude", False, "sonnet",
+            "user", "user@test.com", 18080)
+
+        sandbox.check_in_sync.assert_called_once_with(
+            "agent-loop-claude-my-branch", "/work/my-branch", git)
+        sandbox.reset_to_host.assert_called_once_with(
+            "agent-loop-claude-my-branch", "/work/my-branch")
+
+    @patch("ralph.unblock_ready_specs")
+    @patch("ralph.ensure_worktree", return_value="/work/my-branch")
+    @patch("ralph.resolve_repo", return_value="owner/repo")
+    def test_recreates_sandbox_when_reset_fails(self, mock_repo, mock_wt, mock_unblock):
+        git = MagicMock()
+
+        sandbox = MagicMock()
+        sandbox.ensure_sandbox.return_value = "agent-loop-claude-my-branch"
+        sandbox.run_iteration.return_value = (0, "updated spec")
+        sandbox.check_in_sync.return_value = False
+        sandbox.reset_to_host.return_value = False
+        # HEAD doesn't change = spec complete
+        sandbox.exec_output.return_value = "abc123"
+
+        gh = MagicMock()
+        gh.issue_view_title.return_value = "[my-branch] Test Issue"
+        gh.issue_view_body.return_value = "---\nbranch: my-branch\n---\nSpec"
+
+        ralph.process_issue(
+            42, git, sandbox, gh, "claude", False, "sonnet",
+            "user", "user@test.com", 18080)
+
+        sandbox.remove_sandbox.assert_called_once_with("agent-loop-claude-my-branch")
+        # ensure_sandbox called twice: initial + recreation
+        assert sandbox.ensure_sandbox.call_count == 2
+        # setup_git_config called twice: initial + after recreation
+        assert sandbox.setup_git_config.call_count == 2
+
+    @patch("ralph.unblock_ready_specs")
+    @patch("ralph.ensure_worktree", return_value="/work/my-branch")
+    @patch("ralph.resolve_repo", return_value="owner/repo")
     def test_uses_ensure_sandbox_and_run_iteration(self, mock_repo, mock_wt, mock_unblock):
         git = MagicMock()
 
