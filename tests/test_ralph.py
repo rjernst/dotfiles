@@ -720,11 +720,12 @@ class TestProxyHealthCheck:
 
 
 class TestStartProxy:
+    @patch("ralph.compute_proxy_tag", return_value="agent-loop-proxy:vfake123")
     @patch("ralph.subprocess.Popen")
     @patch("ralph.subprocess.run")
     @patch("ralph.read_token_from_keychain")
     @patch("ralph.time.time", return_value=1700000000.0)
-    def test_constructs_correct_docker_run_command(self, mock_time, mock_read, mock_run, mock_popen):
+    def test_constructs_correct_docker_run_command(self, mock_time, mock_read, mock_run, mock_popen, mock_tag):
         future_ms = 1700000000000 + 30 * 86400 * 1000
         mock_read.return_value = {"accessToken": "sk-test-token", "expiresAt": future_ms}
         # Image inspect succeeds
@@ -738,7 +739,8 @@ class TestStartProxy:
 
         # Verify docker run call (via Popen, no -d flag)
         cmd = mock_popen.call_args[0][0]
-        assert cmd[:4] == ["docker", "run", "-i", "--rm"]
+        assert cmd[:3] == ["docker", "run", "-i"]
+        assert "--rm" not in cmd
         assert "-d" not in cmd
         assert "--name" in cmd
         name_idx = cmd.index("--name")
@@ -746,16 +748,17 @@ class TestStartProxy:
         assert "-p" in cmd
         p_idx = cmd.index("-p")
         assert cmd[p_idx + 1] == "18080:18080"
-        assert cmd[-1] == ralph.PROXY_IMAGE_TAG
+        assert cmd[-1].startswith("agent-loop-proxy:v")
         # Verify token piped via stdin
         mock_proc.stdin.write.assert_called_once_with(b"sk-test-token\n")
         mock_proc.stdin.close.assert_called_once()
 
+    @patch("ralph.compute_proxy_tag", return_value="agent-loop-proxy:vfake123")
     @patch("ralph.subprocess.Popen")
     @patch("ralph.subprocess.run")
     @patch("ralph.read_token_from_keychain")
     @patch("ralph.time.time", return_value=1700000000.0)
-    def test_builds_image_when_missing(self, mock_time, mock_read, mock_run, mock_popen):
+    def test_builds_image_when_missing(self, mock_time, mock_read, mock_run, mock_popen, mock_tag):
         future_ms = 1700000000000 + 30 * 86400 * 1000
         mock_read.return_value = {"accessToken": "sk-test", "expiresAt": future_ms}
         mock_run.side_effect = [
@@ -769,7 +772,7 @@ class TestStartProxy:
         build_call = mock_run.call_args_list[1]
         cmd = build_call[0][0]
         assert cmd[0:2] == ["docker", "build"]
-        assert ralph.PROXY_IMAGE_TAG in cmd
+        assert any(c.startswith("agent-loop-proxy:v") for c in cmd)
 
     @patch("ralph.read_token_from_keychain", return_value=None)
     def test_exits_when_no_token(self, mock_read):
@@ -786,11 +789,12 @@ class TestStartProxy:
             ralph.start_proxy("claude", 18080, "/fake/dotfiles")
         assert exc_info.value.code == 1
 
+    @patch("ralph.compute_proxy_tag", return_value="agent-loop-proxy:vfake123")
     @patch("ralph.subprocess.Popen")
     @patch("ralph.subprocess.run")
     @patch("ralph.read_token_from_keychain")
     @patch("ralph.time.time", return_value=1700000000.0)
-    def test_popen_failure_raises(self, mock_time, mock_read, mock_run, mock_popen):
+    def test_popen_failure_raises(self, mock_time, mock_read, mock_run, mock_popen, mock_tag):
         future_ms = 1700000000000 + 30 * 86400 * 1000
         mock_read.return_value = {"accessToken": "sk-test", "expiresAt": future_ms}
         mock_run.return_value = MagicMock(returncode=0)  # image inspect
@@ -816,8 +820,12 @@ class TestStopProxy:
 
 
 class TestEnsureProxy:
+    @patch("ralph.compute_proxy_tag", return_value="agent-loop-proxy:vfake123")
+    @patch("ralph.subprocess.run")
     @patch("ralph.proxy_health_check", return_value=True)
-    def test_reuses_healthy_proxy(self, mock_health):
+    def test_reuses_healthy_proxy(self, mock_health, mock_run, mock_tag):
+        # docker inspect returns matching image tag
+        mock_run.return_value = MagicMock(returncode=0, stdout="agent-loop-proxy:vfake123\n")
         result = ralph.ensure_proxy("claude", 18080, "/fake/dotfiles")
         assert result == 18080
         mock_health.assert_called_once_with(18080)
@@ -842,15 +850,18 @@ class TestEnsureProxy:
         # docker inspect succeeds (stale container exists)
         mock_run.side_effect = [
             MagicMock(returncode=0, stdout="true\n"),  # inspect
+            MagicMock(returncode=0),  # docker logs
             MagicMock(returncode=0),  # stop
-            MagicMock(returncode=0),  # wait
+            MagicMock(returncode=0),  # rm
         ]
 
         ralph.ensure_proxy("claude", 18080, "/fake/dotfiles")
 
-        # Verify stop was called
-        stop_call = mock_run.call_args_list[1]
+        # Verify stop and rm were called
+        stop_call = mock_run.call_args_list[2]
         assert stop_call[0][0] == ["docker", "stop", "agent-loop-proxy-claude"]
+        rm_call = mock_run.call_args_list[3]
+        assert rm_call[0][0] == ["docker", "rm", "agent-loop-proxy-claude"]
         mock_start.assert_called_once()
 
     @patch("ralph.stop_proxy")
@@ -866,12 +877,6 @@ class TestEnsureProxy:
         assert exc_info.value.code == 1
         mock_stop.assert_called_once_with("claude")
 
-
-class TestRegisterProxyCleanup:
-    @patch("ralph.atexit.register")
-    def test_registers_stop_proxy(self, mock_register):
-        ralph.register_proxy_cleanup("claude")
-        mock_register.assert_called_once_with(ralph.stop_proxy, "claude")
 
 
 # ---------------------------------------------------------------------------
@@ -1831,15 +1836,13 @@ class TestMainSandboxFlags:
     @patch("ralph.sys.argv", ["ralph", "--issue", "42", "--agent", "codex"])
     @patch("ralph.process_issue", return_value=0)
     @patch("ralph.ensure_token", return_value="sk-test")
-    @patch("ralph.register_proxy_cleanup")
     @patch("ralph.ensure_proxy", return_value=18080)
     @patch("ralph.Git")
     @patch.object(ralph.Sandbox, "ensure_image")
     @patch("ralph.check_dependencies_prereq")
     def test_agent_flag_passed_through(self, mock_prereq, mock_img,
                                        mock_git_cls, mock_proxy,
-                                       mock_cleanup, mock_token,
-                                       mock_process):
+                                       mock_token, mock_process):
         mock_git_cls.return_value = MagicMock(
             output=MagicMock(return_value="user"))
         with pytest.raises(SystemExit) as exc_info:
@@ -1860,15 +1863,13 @@ class TestMainSandboxFlags:
     @patch("ralph.sys.argv", ["ralph", "--issue", "42", "--rebuild"])
     @patch("ralph.process_issue", return_value=0)
     @patch("ralph.ensure_token", return_value="sk-test")
-    @patch("ralph.register_proxy_cleanup")
     @patch("ralph.ensure_proxy", return_value=18080)
     @patch("ralph.Git")
     @patch.object(ralph.Sandbox, "ensure_image")
     @patch("ralph.check_dependencies_prereq")
     def test_rebuild_forces_image_rebuild(self, mock_prereq, mock_img,
                                           mock_git_cls, mock_proxy,
-                                          mock_cleanup, mock_token,
-                                          mock_process):
+                                          mock_token, mock_process):
         mock_git_cls.return_value = MagicMock(
             output=MagicMock(return_value="user"))
         with pytest.raises(SystemExit):
@@ -1878,31 +1879,26 @@ class TestMainSandboxFlags:
     @patch("ralph.sys.argv", ["ralph", "--issue", "42"])
     @patch("ralph.process_issue", return_value=0)
     @patch("ralph.ensure_token", return_value="sk-test")
-    @patch("ralph.register_proxy_cleanup")
     @patch("ralph.ensure_proxy", return_value=18080)
     @patch("ralph.Git")
     @patch.object(ralph.Sandbox, "ensure_image")
     @patch("ralph.check_dependencies_prereq")
     def test_starts_proxy_before_processing(self, mock_prereq, mock_img,
                                             mock_git_cls, mock_proxy,
-                                            mock_cleanup, mock_token,
-                                            mock_process):
+                                            mock_token, mock_process):
         mock_git_cls.return_value = MagicMock(
             output=MagicMock(return_value="user"))
         with pytest.raises(SystemExit):
             ralph.main()
         mock_proxy.assert_called_once()
-        mock_cleanup.assert_called_once()
 
     @patch("ralph.sys.argv", ["ralph", "--issue", "42"])
     @patch("ralph.process_issue", return_value=0)
-    @patch("ralph.register_proxy_cleanup")
     @patch("ralph.Git")
     @patch.object(ralph.Sandbox, "ensure_image")
     @patch("ralph.check_dependencies_prereq")
     def test_ensure_token_called_before_proxy(self, mock_prereq, mock_img,
-                                              mock_git_cls, mock_cleanup,
-                                              mock_process):
+                                              mock_git_cls, mock_process):
         mock_git_cls.return_value = MagicMock(
             output=MagicMock(return_value="user"))
         call_order = []
@@ -2117,18 +2113,19 @@ class TestSelftest:
 # ensure_proxy — docker wait timeout
 # ---------------------------------------------------------------------------
 
-class TestEnsureProxyDockerWaitTimeout:
+class TestEnsureProxyStaleCleanup:
     @patch("ralph.proxy_health_check", side_effect=[False] + [True])
     @patch("ralph.start_proxy")
     @patch("ralph.subprocess.run")
     @patch("ralph.time.sleep")
-    def test_proceeds_when_docker_wait_times_out(self, mock_sleep, mock_run,
-                                                  mock_start, mock_health):
-        """If docker wait times out on a stuck container, start_proxy still runs."""
+    def test_logs_and_removes_stale_container(self, mock_sleep, mock_run,
+                                               mock_start, mock_health):
+        """Stale proxy is logged, stopped, removed, then a new one starts."""
         mock_run.side_effect = [
-            MagicMock(returncode=0, stdout="true\n"),       # inspect (stale exists)
-            MagicMock(returncode=0),                         # stop
-            subprocess.TimeoutExpired(cmd="docker wait", timeout=5),  # wait timeout
+            MagicMock(returncode=0, stdout="true\n"),  # inspect (stale exists)
+            MagicMock(returncode=0),                    # docker logs
+            MagicMock(returncode=0),                    # stop
+            MagicMock(returncode=0),                    # rm
         ]
 
         result = ralph.ensure_proxy("claude", 18080, "/fake/dotfiles")

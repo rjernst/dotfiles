@@ -11,7 +11,6 @@ Also provides token management for the credential injection proxy:
 Usage: ralph <command> [options]
 """
 
-import atexit
 import datetime
 import hashlib
 import json
@@ -585,8 +584,19 @@ class Sandbox:
 DEFAULT_PROXY_PORTS = {"claude": 18080}
 DEFAULT_PROXY_PORT = 18080
 
-# Image tag for the proxy container.
-PROXY_IMAGE_TAG = "agent-loop-proxy:v1"
+def compute_proxy_tag(dotfiles_dir):
+    """Compute a content-addressed image tag for the proxy.
+
+    Hashes the Dockerfile and proxy.py so any code change triggers a rebuild.
+    """
+    proxy_dir = os.path.join(dotfiles_dir, "docker", "agent-loop", "proxy")
+    h = hashlib.sha256()
+    for name in sorted(os.listdir(proxy_dir)):
+        path = os.path.join(proxy_dir, name)
+        if os.path.isfile(path):
+            with open(path, "rb") as f:
+                h.update(f.read())
+    return f"agent-loop-proxy:v{h.hexdigest()[:12]}"
 
 # Map short model aliases to full model IDs for ANTHROPIC_CUSTOM_MODEL_OPTION.
 MODEL_ALIASES = {
@@ -623,7 +633,7 @@ def start_proxy(agent, port, dotfiles_dir):
     """Start the credential injection proxy container.
 
     Reads the token from Keychain and pipes it to the proxy container via stdin.
-    The container runs in detached mode with --rm so it cleans up on stop.
+    The container persists after stop so logs remain available for debugging.
 
     Returns the container name.
     """
@@ -642,25 +652,26 @@ def start_proxy(agent, port, dotfiles_dir):
     token = token_data["accessToken"]
     name = proxy_container_name(agent)
 
-    # Build the proxy image if needed
+    # Build the proxy image if needed (content-addressed tag)
     proxy_dir = os.path.join(dotfiles_dir, "docker", "agent-loop", "proxy")
+    tag = compute_proxy_tag(dotfiles_dir)
     result = subprocess.run(
-        ["docker", "image", "inspect", PROXY_IMAGE_TAG],
+        ["docker", "image", "inspect", tag],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False,
     )
     if result.returncode != 0:
-        print(f"ralph: building proxy image {PROXY_IMAGE_TAG}...")
+        print(f"ralph: building proxy image {tag}...")
         subprocess.run(
-            ["docker", "build", "-t", PROXY_IMAGE_TAG, proxy_dir], check=True)
+            ["docker", "build", "-t", tag, proxy_dir], check=True)
 
     print(f"ralph: starting proxy container {name} on port {port}...")
     proc = subprocess.Popen(
-        ["docker", "run", "-i", "--rm",
+        ["docker", "run", "-i",
          "--name", name,
          "-p", f"{port}:18080",
-         PROXY_IMAGE_TAG],
+         tag],
         stdin=subprocess.PIPE,
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
     )
     proc.stdin.write((token + "\n").encode())
     proc.stdin.close()
@@ -669,7 +680,7 @@ def start_proxy(agent, port, dotfiles_dir):
 
 
 def stop_proxy(agent):
-    """Stop and remove the proxy container for the given agent."""
+    """Stop the proxy container for the given agent."""
     name = proxy_container_name(agent)
     subprocess.run(
         ["docker", "stop", name],
@@ -685,33 +696,43 @@ def ensure_proxy(agent, port, dotfiles_dir):
 
     Returns the proxy port.
     """
+    name = proxy_container_name(agent)
+
+    # Check if a healthy proxy is running on the current image
     if proxy_health_check(port):
-        print(f"ralph: reusing healthy proxy on port {port}")
-        return port
+        tag = compute_proxy_tag(dotfiles_dir)
+        result = subprocess.run(
+            ["docker", "inspect", "--format", "{{.Config.Image}}", name],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
+            check=False,
+        )
+        if result.returncode == 0 and result.stdout.strip() == tag:
+            print(f"ralph: reusing healthy proxy on port {port}")
+            return port
+        print(f"ralph: proxy image outdated, replacing...")
 
     # Stop any stale container with the same name
-    name = proxy_container_name(agent)
     result = subprocess.run(
         ["docker", "inspect", "--format", "{{.State.Running}}", name],
         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
         check=False,
     )
     if result.returncode == 0:
-        # Container exists but health check failed — stop it
+        # Container exists but health check failed — replace it
         print(f"ralph: stopping stale proxy container {name}...")
+        print(f"ralph: proxy logs from dead container:", file=sys.stderr)
+        subprocess.run(
+            ["docker", "logs", "--tail", "20", name],
+            check=False,
+        )
         subprocess.run(
             ["docker", "stop", name],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False,
         )
-        # Wait briefly for --rm to clean up
-        try:
-            subprocess.run(
-                ["docker", "wait", name],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                check=False, timeout=5,
-            )
-        except subprocess.TimeoutExpired:
-            pass  # proceed to start a new container anyway
+        subprocess.run(
+            ["docker", "rm", name],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False,
+        )
 
     start_proxy(agent, port, dotfiles_dir)
 
@@ -722,13 +743,12 @@ def ensure_proxy(agent, port, dotfiles_dir):
             return port
 
     print("ralph: proxy failed to become healthy", file=sys.stderr)
+    name = proxy_container_name(agent)
+    subprocess.run(["docker", "logs", "--tail", "20", name], check=False)
     stop_proxy(agent)
     sys.exit(1)
 
 
-def register_proxy_cleanup(agent):
-    """Register an atexit handler to stop the proxy container on exit."""
-    atexit.register(stop_proxy, agent)
 
 
 # ---------------------------------------------------------------------------
@@ -1859,7 +1879,6 @@ def main():
     # Start proxy (reads token from Keychain internally)
     proxy_port = proxy_port_for_agent(agent)
     ensure_proxy(agent, proxy_port, dotfiles_dir)
-    register_proxy_cleanup(agent)
 
     # Git user config
     git = Git()

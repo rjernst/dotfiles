@@ -6,13 +6,15 @@ configurable upstream target, replacing the Authorization header with
 the real token.  The real token never touches disk, logs, or env vars.
 
 Environment variables:
-  LISTEN_PORT  — port to listen on (default: 18080)
-  TARGET       — upstream base URL (default: https://api.anthropic.com)
+  LISTEN_PORT   — port to listen on (default: 18080)
+  TARGET        — upstream base URL (default: https://api.anthropic.com)
+  IDLE_TIMEOUT  — seconds of inactivity before self-shutdown (default: 300, 0=disabled)
 """
 
 import http.server
 import os
 import sys
+import threading
 import urllib.error
 import urllib.request
 
@@ -31,12 +33,34 @@ def read_token():
     return token
 
 
+class IdleShutdown:
+    """Shuts down an HTTPServer after a period of inactivity."""
+
+    def __init__(self, timeout, server):
+        self.timeout = timeout
+        self.server = server
+        self._timer = None
+
+    def reset(self):
+        """Reset the idle countdown. Call on every request."""
+        if self._timer:
+            self._timer.cancel()
+        self._timer = threading.Timer(self.timeout, self._shutdown)
+        self._timer.daemon = True
+        self._timer.start()
+
+    def _shutdown(self):
+        print(f"proxy: idle for {self.timeout}s, shutting down", file=sys.stderr)
+        self.server.shutdown()
+
+
 class ProxyHandler(http.server.BaseHTTPRequestHandler):
     """Forwards requests to TARGET, injecting the real bearer token."""
 
     # Assigned by the factory before the server starts.
     real_token = None
     target = None
+    idle_shutdown = None
 
     # Suppress default stderr request logging — we do our own.
     def log_message(self, fmt, *args):
@@ -45,6 +69,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
     # --- health endpoint ---------------------------------------------------
 
     def do_GET(self):
+        if self.idle_shutdown:
+            self.idle_shutdown.reset()
         if self.path == "/health":
             body = b"agent-loop-proxy ok"
             self.send_response(200)
@@ -70,6 +96,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         self._proxy()
 
     def _proxy(self):
+        if self.idle_shutdown:
+            self.idle_shutdown.reset()
         print(f"proxy: {self.command} {self.path}", file=sys.stderr)
 
         # Read request body (if any).
@@ -127,12 +155,21 @@ def main():
     token = read_token()
     port = int(os.environ.get("LISTEN_PORT", "18080"))
     target = os.environ.get("TARGET", "https://api.anthropic.com")
+    idle_timeout = int(os.environ.get("IDLE_TIMEOUT", "300"))
 
     ProxyHandler.real_token = token
     ProxyHandler.target = target
 
     server = http.server.HTTPServer(("0.0.0.0", port), ProxyHandler)
-    print(f"proxy: listening on :{port}, target={target}", file=sys.stderr)
+
+    if idle_timeout > 0:
+        idle = IdleShutdown(idle_timeout, server)
+        ProxyHandler.idle_shutdown = idle
+        idle.reset()
+        print(f"proxy: listening on :{port}, target={target}, idle_timeout={idle_timeout}s",
+              file=sys.stderr)
+    else:
+        print(f"proxy: listening on :{port}, target={target}", file=sys.stderr)
 
     try:
         server.serve_forever()
