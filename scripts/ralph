@@ -661,7 +661,7 @@ def start_proxy(agent, port, dotfiles_dir):
          "-p", f"{port}:18080",
          tag],
         stdin=subprocess.PIPE,
-        stdout=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )
     proc.stdin.write((token + "\n").encode())
     proc.stdin.close()
