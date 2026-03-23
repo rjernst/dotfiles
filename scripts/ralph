@@ -1031,7 +1031,13 @@ def ensure_worktree(git, branch, base=None):
         default_branch = base
 
     # Create worktree
-    if remote:
+    local_exists = git.run(
+        "rev-parse", "--verify", f"refs/heads/{branch}", check=False,
+    ).returncode == 0
+
+    if local_exists:
+        git.run("worktree", "add", wt_path, branch)
+    elif remote:
         ls_result = git.run(
             "ls-remote", "--exit-code", "--heads", remote, f"refs/heads/{branch}",
             check=False,
@@ -1039,9 +1045,10 @@ def ensure_worktree(git, branch, base=None):
         if ls_result.returncode == 0:
             git.run("worktree", "add", "--track", "-b", branch, wt_path,
                      f"{remote}/{branch}")
-            return wt_path
-
-    git.run("worktree", "add", "-b", branch, wt_path, default_branch)
+        else:
+            git.run("worktree", "add", "-b", branch, wt_path, default_branch)
+    else:
+        git.run("worktree", "add", "-b", branch, wt_path, default_branch)
     return wt_path
 
 

@@ -1499,6 +1499,169 @@ class TestSandboxRunIteration:
 
 
 # ---------------------------------------------------------------------------
+# ensure_worktree
+# ---------------------------------------------------------------------------
+
+def _mock_git_for_worktree(*, remotes="origin", porcelain="",
+                           toplevel="/Users/me/code/myrepo",
+                           symbolic_ref="refs/remotes/origin/main",
+                           default_branch_name="main",
+                           rev_parse_verify_ok=True,
+                           ls_remote_ok=False,
+                           local_branch_exists=False):
+    """Build a MagicMock Git instance with side-effects for ensure_worktree."""
+    git = MagicMock()
+
+    # git.output dispatches on first arg
+    def output_side_effect(*args, **kwargs):
+        if args[0] == "rev-parse" and args[1] == "--show-toplevel":
+            return toplevel
+        if args[0] == "remote":
+            return remotes
+        if args[0] == "symbolic-ref":
+            # "symbolic-ref refs/remotes/<remote>/HEAD" → full ref
+            if len(args) > 1 and "remotes" in args[1]:
+                return symbolic_ref
+            # "symbolic-ref --short HEAD" → short branch name
+            return default_branch_name
+        return ""
+    git.output.side_effect = output_side_effect
+
+    # git.run dispatches on first arg
+    def run_side_effect(*args, **kwargs):
+        check = kwargs.get("check", True)
+        if args[0] == "worktree" and args[1] == "list":
+            return MagicMock(stdout=porcelain)
+        if args[0] == "rev-parse" and args[1] == "--verify":
+            if "refs/heads/" in args[2]:
+                # Checking if a local branch exists
+                rc = 0 if local_branch_exists else 128
+            else:
+                # Verifying default branch name is valid
+                rc = 0 if rev_parse_verify_ok else 128
+            result = MagicMock(returncode=rc)
+            if check and rc != 0:
+                raise subprocess.CalledProcessError(rc, "git")
+            return result
+        if args[0] == "ls-remote":
+            rc = 0 if ls_remote_ok else 2
+            return MagicMock(returncode=rc)
+        # worktree add, etc. — just succeed
+        return MagicMock(returncode=0)
+    git.run.side_effect = run_side_effect
+
+    return git
+
+
+class TestEnsureWorktree:
+    def test_returns_existing_worktree(self):
+        """If a worktree already exists for the branch, return its path."""
+        porcelain = (
+            "worktree /Users/me/code/myrepo\n"
+            "branch refs/heads/main\n"
+            "\n"
+            "worktree /Users/me/code/myrepo-my-feature\n"
+            "branch refs/heads/my-feature\n"
+            "\n"
+        )
+        git = _mock_git_for_worktree(porcelain=porcelain)
+
+        result = ralph.ensure_worktree(git, "my-feature")
+        assert result == "/Users/me/code/myrepo-my-feature"
+        # Should not call worktree add
+        for c in git.run.call_args_list:
+            assert c[0][0:2] != ("worktree", "add")
+
+    def test_creates_new_branch_from_default(self):
+        """No remote branch, no local branch — creates new branch from default."""
+        git = _mock_git_for_worktree(remotes="origin", ls_remote_ok=False,
+                                     local_branch_exists=False)
+
+        result = ralph.ensure_worktree(git, "new-feature")
+        assert result == "/Users/me/code/myrepo-new-feature"
+        git.run.assert_any_call(
+            "worktree", "add", "-b", "new-feature",
+            "/Users/me/code/myrepo-new-feature", "main")
+
+    def test_tracks_remote_branch(self):
+        """Remote branch exists — creates tracking worktree."""
+        git = _mock_git_for_worktree(remotes="origin", ls_remote_ok=True,
+                                     local_branch_exists=False)
+
+        result = ralph.ensure_worktree(git, "remote-feature")
+        assert result == "/Users/me/code/myrepo-remote-feature"
+        git.run.assert_any_call(
+            "worktree", "add", "--track", "-b", "remote-feature",
+            "/Users/me/code/myrepo-remote-feature", "origin/remote-feature")
+
+    def test_uses_existing_local_branch(self):
+        """Local branch exists but no worktree — attaches without -b."""
+        git = _mock_git_for_worktree(remotes="origin", local_branch_exists=True)
+
+        result = ralph.ensure_worktree(git, "existing-branch")
+        assert result == "/Users/me/code/myrepo-existing-branch"
+        git.run.assert_any_call(
+            "worktree", "add",
+            "/Users/me/code/myrepo-existing-branch", "existing-branch")
+
+    def test_prefers_upstream_over_origin(self):
+        """When both upstream and origin exist, use upstream."""
+        git = _mock_git_for_worktree(
+            remotes="origin\nupstream", ls_remote_ok=False,
+            local_branch_exists=False,
+            symbolic_ref="refs/remotes/upstream/main",
+        )
+
+        ralph.ensure_worktree(git, "feat")
+        # Should resolve default branch via upstream
+        git.output.assert_any_call("symbolic-ref", "refs/remotes/upstream/HEAD")
+
+    def test_no_remote_creates_branch_from_head(self):
+        """No remotes — falls back to HEAD for base branch."""
+        git = _mock_git_for_worktree(remotes="", local_branch_exists=False)
+
+        result = ralph.ensure_worktree(git, "solo-feature")
+        assert result == "/Users/me/code/myrepo-solo-feature"
+        git.run.assert_any_call(
+            "worktree", "add", "-b", "solo-feature",
+            "/Users/me/code/myrepo-solo-feature", "main")
+
+    def test_base_override(self):
+        """Explicit base overrides the resolved default branch."""
+        git = _mock_git_for_worktree(remotes="origin", ls_remote_ok=False,
+                                     local_branch_exists=False)
+
+        result = ralph.ensure_worktree(git, "feat", base="develop")
+        assert result == "/Users/me/code/myrepo-feat"
+        git.run.assert_any_call(
+            "worktree", "add", "-b", "feat",
+            "/Users/me/code/myrepo-feat", "develop")
+
+    def test_slash_in_branch_name_sanitized(self):
+        """Slashes in branch names are replaced with hyphens in the path."""
+        git = _mock_git_for_worktree(remotes="origin", ls_remote_ok=False,
+                                     local_branch_exists=False)
+
+        result = ralph.ensure_worktree(git, "user/my-feature")
+        assert result == "/Users/me/code/myrepo-user-my-feature"
+
+    def test_worktree_list_failure_treated_as_empty(self):
+        """If git worktree list fails, treat as no existing worktrees."""
+        git = _mock_git_for_worktree(remotes="origin", ls_remote_ok=False,
+                                     local_branch_exists=False)
+        # Override worktree list to raise
+        original_side_effect = git.run.side_effect
+        def run_with_wt_failure(*args, **kwargs):
+            if args[0] == "worktree" and args[1] == "list":
+                raise subprocess.CalledProcessError(1, "git")
+            return original_side_effect(*args, **kwargs)
+        git.run.side_effect = run_with_wt_failure
+
+        result = ralph.ensure_worktree(git, "new-feat")
+        assert result == "/Users/me/code/myrepo-new-feat"
+
+
+# ---------------------------------------------------------------------------
 # process_issue (sandbox-based, mocked)
 # ---------------------------------------------------------------------------
 
