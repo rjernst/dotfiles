@@ -846,22 +846,24 @@ class TestEnsureProxy:
     @patch("ralph.start_proxy")
     @patch("ralph.subprocess.run")
     @patch("ralph.time.sleep")
-    def test_stops_stale_container_before_starting(self, mock_sleep, mock_run, mock_start, mock_health):
+    @patch("ralph.time.time", return_value=1700000000.0)
+    def test_stops_stale_container_before_starting(self, mock_time, mock_sleep, mock_run, mock_start, mock_health):
         # docker inspect succeeds (stale container exists)
         mock_run.side_effect = [
             MagicMock(returncode=0, stdout="true\n"),  # inspect
-            MagicMock(returncode=0),  # docker logs
             MagicMock(returncode=0),  # stop
-            MagicMock(returncode=0),  # rm
+            MagicMock(returncode=0, stdout=""),  # ps (no old renamed containers)
+            MagicMock(returncode=0),  # rename
         ]
 
         ralph.ensure_proxy("claude", 18080, "/fake/dotfiles")
 
-        # Verify stop and rm were called
-        stop_call = mock_run.call_args_list[2]
+        # Verify stop and rename were called (no rm)
+        stop_call = mock_run.call_args_list[1]
         assert stop_call[0][0] == ["docker", "stop", "agent-loop-proxy-claude"]
-        rm_call = mock_run.call_args_list[3]
-        assert rm_call[0][0] == ["docker", "rm", "agent-loop-proxy-claude"]
+        rename_call = mock_run.call_args_list[3]
+        assert rename_call[0][0] == ["docker", "rename", "agent-loop-proxy-claude",
+                                     "agent-loop-proxy-claude-1700000000"]
         mock_start.assert_called_once()
 
     @patch("ralph.stop_proxy")
@@ -2633,22 +2635,33 @@ class TestSelftest:
 # ---------------------------------------------------------------------------
 
 class TestEnsureProxyStaleCleanup:
+    @patch("ralph.time.time", return_value=1700000000.0)
     @patch("ralph.proxy_health_check", side_effect=[False] + [True])
     @patch("ralph.start_proxy")
     @patch("ralph.subprocess.run")
     @patch("ralph.time.sleep")
-    def test_logs_and_removes_stale_container(self, mock_sleep, mock_run,
-                                               mock_start, mock_health):
-        """Stale proxy is logged, stopped, removed, then a new one starts."""
+    def test_renames_stale_container_and_cleans_old(self, mock_sleep, mock_run,
+                                                     mock_start, mock_health,
+                                                     mock_time):
+        """Stale proxy is stopped, old renamed containers removed, then renamed."""
         mock_run.side_effect = [
-            MagicMock(returncode=0, stdout="true\n"),  # inspect (stale exists)
-            MagicMock(returncode=0),                    # docker logs
-            MagicMock(returncode=0),                    # stop
-            MagicMock(returncode=0),                    # rm
+            MagicMock(returncode=0, stdout="true\n"),   # inspect (stale exists)
+            MagicMock(returncode=0),                     # stop
+            MagicMock(returncode=0,                      # ps (one old renamed)
+                      stdout="agent-loop-proxy-claude-1699999000\n"),
+            MagicMock(returncode=0),                     # rm old renamed
+            MagicMock(returncode=0),                     # rename
         ]
 
         result = ralph.ensure_proxy("claude", 18080, "/fake/dotfiles")
         assert result == 18080
+        # Old renamed container was cleaned up
+        rm_call = mock_run.call_args_list[3]
+        assert rm_call[0][0] == ["docker", "rm", "agent-loop-proxy-claude-1699999000"]
+        # Current container was renamed
+        rename_call = mock_run.call_args_list[4]
+        assert rename_call[0][0] == ["docker", "rename", "agent-loop-proxy-claude",
+                                     "agent-loop-proxy-claude-1700000000"]
         mock_start.assert_called_once_with("claude", 18080, "/fake/dotfiles")
 
 

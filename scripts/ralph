@@ -825,19 +825,29 @@ def ensure_proxy(agent, port, dotfiles_dir):
         check=False,
     )
     if result.returncode == 0:
-        # Container exists but health check failed — replace it
+        # Container exists but health check failed — rename to free the
+        # name, preserving the stopped container and its logs for debugging.
+        # Remove any previously renamed containers first so they don't pile up.
         print(f"ralph: stopping stale proxy container {name}...")
-        print(f"ralph: proxy logs from dead container:", file=sys.stderr)
-        subprocess.run(
-            ["docker", "logs", "--tail", "20", name],
-            check=False,
-        )
         subprocess.run(
             ["docker", "stop", name],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False,
         )
+        old = subprocess.run(
+            ["docker", "ps", "-a", "--filter", f"name={name}-",
+             "--format", "{{.Names}}"],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
+            check=False,
+        )
+        for old_name in old.stdout.splitlines():
+            subprocess.run(
+                ["docker", "rm", old_name],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                check=False,
+            )
+        stale_name = f"{name}-{int(time.time())}"
         subprocess.run(
-            ["docker", "rm", name],
+            ["docker", "rename", name, stale_name],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False,
         )
 
