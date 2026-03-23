@@ -1389,38 +1389,51 @@ def process_issue(issue_number, git, sandbox, gh, agent, push, model,
         "ANTHROPIC_CUSTOM_MODEL_OPTION": model_id,
     }
 
-    while True:
-        # Record HEAD before
-        head_before = git.output("rev-parse", "HEAD", cwd=work_dir) or "none"
+    try:
+        while True:
+            # Record HEAD before
+            head_before = git.output("rev-parse", "HEAD", cwd=work_dir) or "none"
 
-        # Run iteration
-        print(f"ralph: starting iteration (sandbox={sandbox_name}, issue=#{issue_number}, model={model})")
-        rc, body = sandbox.run_iteration(sandbox_name, body, model, env_vars)
-        if rc != 0:
-            print(f"ralph: iteration failed for issue #{issue_number}", file=sys.stderr)
+            # Run iteration
+            print(f"ralph: starting iteration (sandbox={sandbox_name}, issue=#{issue_number}, model={model})")
+            rc, body = sandbox.run_iteration(sandbox_name, body, model, env_vars)
+            if rc != 0:
+                print(f"ralph: iteration failed for issue #{issue_number}", file=sys.stderr)
+                gh.issue_edit(issue_number, repo,
+                              remove_label="status:in-progress",
+                              add_label="status:needs-attention")
+                return 1
+
+            # Check if work was done
+            head_after = git.output("rev-parse", "HEAD", cwd=work_dir) or "none"
+
+            if head_before == head_after:
+                print(f"ralph: no commit made, marking issue #{issue_number} done")
+                gh.issue_edit(issue_number, repo,
+                              remove_label="status:in-progress",
+                              add_label="status:done")
+                unblock_ready_specs(repo, gh)
+                break
+
+            # Update issue body from spec
+            gh.issue_edit(issue_number, repo, body=body)
+            print(f"ralph: iteration complete, updated issue #{issue_number}")
+
+            # Optional push (from host)
+            if push:
+                git.run("push", cwd=work_dir, check=False)
+    except KeyboardInterrupt:
+        print(f"\nralph: interrupted, restoring issue #{issue_number} to ready")
+        prev_handler = signal.signal(signal.SIGINT, signal.SIG_IGN)
+        try:
             gh.issue_edit(issue_number, repo,
                           remove_label="status:in-progress",
-                          add_label="status:needs-attention")
-            return 1
-
-        # Check if work was done
-        head_after = git.output("rev-parse", "HEAD", cwd=work_dir) or "none"
-
-        if head_before == head_after:
-            print(f"ralph: no commit made, marking issue #{issue_number} done")
-            gh.issue_edit(issue_number, repo,
-                          remove_label="status:in-progress",
-                          add_label="status:done")
-            unblock_ready_specs(repo, gh)
-            break
-
-        # Update issue body from spec
-        gh.issue_edit(issue_number, repo, body=body)
-        print(f"ralph: iteration complete, updated issue #{issue_number}")
-
-        # Optional push (from host)
-        if push:
-            git.run("push", cwd=work_dir, check=False)
+                          add_label="status:ready")
+        except Exception:
+            pass
+        finally:
+            signal.signal(signal.SIGINT, prev_handler)
+        raise
 
     return 0
 
@@ -1437,74 +1450,66 @@ def poll_loop(git, sandbox, gh, agent, push, model, git_user, git_email,
     if timeout > 0:
         deadline = time.time() + timeout
 
-    # Signal handling
-    interrupted = [False]
-
-    def handle_signal(signum, frame):
-        interrupted[0] = True
-
-    signal.signal(signal.SIGINT, handle_signal)
-    signal.signal(signal.SIGTERM, handle_signal)
-
     last_was_idle = False
 
-    while not interrupted[0]:
-        # Check deadline
-        if deadline > 0 and time.time() >= deadline:
-            if last_was_idle:
-                sys.stdout.write("\n")
-            print("ralph: poll timeout reached")
-            break
+    try:
+        while True:
+            # Check deadline
+            if deadline > 0 and time.time() >= deadline:
+                if last_was_idle:
+                    sys.stdout.write("\n")
+                print("ralph: poll timeout reached")
+                break
 
-        # Unblock specs
-        unblock_ready_specs(repo, gh)
+            # Unblock specs
+            unblock_ready_specs(repo, gh)
 
-        # Fetch ready issues
-        try:
-            numbers = gh.issue_list(repo, ["spec", "status:ready"], author="@me")
-        except Exception:
-            if last_was_idle:
-                sys.stdout.write("\n")
-            print(f"ralph: failed to list issues from {repo}", file=sys.stderr)
-            last_was_idle = False
-            time.sleep(interval)
-            continue
+            # Fetch ready issues
+            try:
+                numbers = gh.issue_list(repo, ["spec", "status:ready"], author="@me")
+            except Exception:
+                if last_was_idle:
+                    sys.stdout.write("\n")
+                print(f"ralph: failed to list issues from {repo}", file=sys.stderr)
+                last_was_idle = False
+                time.sleep(interval)
+                continue
 
-        if numbers:
-            if last_was_idle:
-                sys.stdout.write("\n")
-            last_was_idle = False
-            for num in numbers:
-                print(f"ralph: found ready issue #{num}")
-                try:
-                    process_issue(num, git, sandbox, gh, agent, push, model,
-                                  git_user, git_email, proxy_port)
-                except Exception as exc:
-                    print(f"ralph: unexpected error processing issue #{num}: {exc}",
-                          file=sys.stderr)
+            if numbers:
+                if last_was_idle:
+                    sys.stdout.write("\n")
+                last_was_idle = False
+                for num in numbers:
+                    print(f"ralph: found ready issue #{num}")
                     try:
-                        gh.issue_edit(num, repo,
-                                      remove_label="status:in-progress",
-                                      add_label="status:needs-attention")
-                    except Exception:
-                        pass
-        else:
-            timestamp = time.strftime("%H:%M:%S")
-            sys.stdout.write(f"\rralph: no ready issues found (last checked at {timestamp})\033[K")
-            sys.stdout.flush()
-            last_was_idle = True
+                        process_issue(num, git, sandbox, gh, agent, push, model,
+                                      git_user, git_email, proxy_port)
+                    except Exception as exc:
+                        print(f"ralph: unexpected error processing issue #{num}: {exc}",
+                              file=sys.stderr)
+                        try:
+                            gh.issue_edit(num, repo,
+                                          remove_label="status:in-progress",
+                                          add_label="status:needs-attention")
+                        except Exception:
+                            pass
+            else:
+                timestamp = time.strftime("%H:%M:%S")
+                sys.stdout.write(f"\rralph: no ready issues found (last checked at {timestamp})\033[K")
+                sys.stdout.flush()
+                last_was_idle = True
 
-        # Check deadline before sleeping
-        if deadline > 0 and time.time() >= deadline:
-            if last_was_idle:
-                sys.stdout.write("\n")
-            print("ralph: poll timeout reached")
-            break
+            # Check deadline before sleeping
+            if deadline > 0 and time.time() >= deadline:
+                if last_was_idle:
+                    sys.stdout.write("\n")
+                print("ralph: poll timeout reached")
+                break
 
-        time.sleep(interval)
-
-    if interrupted[0]:
-        sys.stdout.write("\n")
+            time.sleep(interval)
+    except KeyboardInterrupt:
+        if last_was_idle:
+            sys.stdout.write("\n")
         print("ralph: poll interrupted")
 
 
@@ -1766,4 +1771,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        sys.exit(130)

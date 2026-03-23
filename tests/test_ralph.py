@@ -2088,11 +2088,10 @@ class TestEnsureProxyDockerWaitTimeout:
 class TestPollLoopExceptionHandling:
     @patch("ralph.time.sleep")
     @patch("ralph.time.time")
-    @patch("ralph.signal.signal")
     @patch("ralph.unblock_ready_specs")
     @patch("ralph.resolve_repo", return_value="owner/repo")
     def test_exception_marks_needs_attention_and_logs(self, mock_repo,
-                                                      mock_unblock, mock_signal,
+                                                      mock_unblock,
                                                       mock_time, mock_sleep,
                                                       capsys):
         """When process_issue raises, issue is labeled needs-attention."""
@@ -2121,11 +2120,10 @@ class TestPollLoopExceptionHandling:
 
     @patch("ralph.time.sleep")
     @patch("ralph.time.time")
-    @patch("ralph.signal.signal")
     @patch("ralph.unblock_ready_specs")
     @patch("ralph.resolve_repo", return_value="owner/repo")
     def test_exception_in_label_update_does_not_crash(self, mock_repo,
-                                                       mock_unblock, mock_signal,
+                                                       mock_unblock,
                                                        mock_time, mock_sleep,
                                                        capsys):
         """If the needs-attention label update itself fails, the loop continues."""
