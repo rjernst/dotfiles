@@ -1696,7 +1696,7 @@ class TestProcessIssueSandbox:
         sandbox.check_in_sync.assert_called_once_with(
             "agent-loop-claude-my-branch", "/work/my-branch", git)
         sandbox.reset_to_host.assert_called_once_with(
-            "agent-loop-claude-my-branch", "/work/my-branch")
+            "agent-loop-claude-my-branch", "/work/my-branch", git)
 
     @patch("ralph.unblock_ready_specs")
     @patch("ralph.ensure_worktree", return_value="/work/my-branch")

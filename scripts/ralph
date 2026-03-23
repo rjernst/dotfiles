@@ -265,42 +265,32 @@ class Sandbox:
         return bool(host_tree and sandbox_tree and host_tree == sandbox_tree)
 
     @staticmethod
-    def reset_to_host(sandbox_name, work_dir):
-        """Reset sandbox workspace to match host worktree content.
+    def reset_to_host(sandbox_name, work_dir, git):
+        """Reset sandbox git state to match host worktree.
 
-        Removes all tracked files from the sandbox, copies the host's
-        files in via tar, and commits the result.
+        Finds the sandbox commit whose tree matches the host HEAD and
+        hard-resets to it. Returns True if the sandbox is now in sync.
         """
-        # Remove all tracked files from sandbox workspace
-        subprocess.run(
-            ["docker", "sandbox", "exec", sandbox_name,
-             "git", "rm", "-rf", "--quiet", "."],
-            check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        )
-
-        # Copy host worktree files into sandbox
-        tar_host = subprocess.Popen(
-            ["tar", "-C", work_dir, "--exclude=.git", "-cf", "-", "."],
-            stdout=subprocess.PIPE,
-        )
-        tar_sandbox = subprocess.run(
-            ["docker", "sandbox", "exec", "-i", sandbox_name,
-             "tar", "-C", "/home/agent/workspace", "-xf", "-"],
-            stdin=tar_host.stdout, check=False,
-        )
-        tar_host.wait()
-
-        if tar_sandbox.returncode != 0 or tar_host.returncode != 0:
+        host_tree = git.output("rev-parse", "HEAD^{tree}", cwd=work_dir)
+        if not host_tree:
             return False
 
-        # Stage and commit
-        subprocess.run(
-            ["docker", "sandbox", "exec", sandbox_name, "git", "add", "-A"],
-            check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        )
+        # Walk sandbox history looking for a commit with the matching tree
+        log = Sandbox.exec_output(
+            sandbox_name, "git", "log", "--format=%H %T")
+        target = None
+        for line in log.splitlines():
+            parts = line.split()
+            if len(parts) == 2 and parts[1] == host_tree:
+                target = parts[0]
+                break
+
+        if not target:
+            return False
+
         result = subprocess.run(
             ["docker", "sandbox", "exec", sandbox_name,
-             "git", "commit", "-m", "Reset to host state"],
+             "git", "reset", "--hard", target],
             check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
         return result.returncode == 0
@@ -1489,7 +1479,7 @@ def process_issue(issue_number, git, sandbox, gh, agent, push, model,
     # Ensure sandbox content matches host worktree
     if not sandbox.check_in_sync(sandbox_name, work_dir, git):
         print("ralph: sandbox out of sync with host, resetting...")
-        if sandbox.reset_to_host(sandbox_name, work_dir):
+        if sandbox.reset_to_host(sandbox_name, work_dir, git):
             print("ralph: sandbox reset to match host")
         else:
             print("ralph: reset failed, recreating sandbox...")
