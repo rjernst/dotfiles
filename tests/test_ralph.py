@@ -1667,6 +1667,80 @@ class TestEnsureWorktree:
 
 
 # ---------------------------------------------------------------------------
+# try_fast_forward
+# ---------------------------------------------------------------------------
+
+def _mock_git_for_ff(*, remotes="origin",
+                     symbolic_ref="refs/remotes/origin/main",
+                     fetch_ok=True, merge_ok=True):
+    """Build a MagicMock Git instance for try_fast_forward tests."""
+    git = MagicMock()
+
+    def output_side_effect(*args, **kwargs):
+        if args[0] == "remote":
+            return remotes
+        if args[0] == "symbolic-ref":
+            return symbolic_ref
+        return ""
+    git.output.side_effect = output_side_effect
+
+    def run_side_effect(*args, **kwargs):
+        if args[0] == "fetch":
+            return MagicMock(returncode=0 if fetch_ok else 1)
+        if args[0] == "merge":
+            return MagicMock(returncode=0 if merge_ok else 1)
+        return MagicMock(returncode=0)
+    git.run.side_effect = run_side_effect
+
+    return git
+
+
+class TestTryFastForward:
+    def test_fast_forwards_to_main(self):
+        git = _mock_git_for_ff()
+        result = ralph.try_fast_forward(git, "/work/my-branch")
+        assert result == "origin/main"
+        git.run.assert_any_call("fetch", "origin", "main",
+                                cwd="/work/my-branch", check=False)
+        git.run.assert_any_call("merge", "--ff-only", "origin/main",
+                                cwd="/work/my-branch", check=False)
+
+    def test_uses_explicit_base(self):
+        git = _mock_git_for_ff()
+        result = ralph.try_fast_forward(git, "/work/feat", base="8.x")
+        assert result == "origin/8.x"
+        git.run.assert_any_call("fetch", "origin", "8.x",
+                                cwd="/work/feat", check=False)
+
+    def test_prefers_upstream(self):
+        git = _mock_git_for_ff(remotes="origin\nupstream",
+                               symbolic_ref="refs/remotes/upstream/main")
+        result = ralph.try_fast_forward(git, "/work/feat")
+        assert result == "upstream/main"
+
+    def test_returns_none_when_no_remote(self):
+        git = _mock_git_for_ff(remotes="")
+        result = ralph.try_fast_forward(git, "/work/feat")
+        assert result is None
+
+    def test_returns_none_when_fetch_fails(self):
+        git = _mock_git_for_ff(fetch_ok=False)
+        result = ralph.try_fast_forward(git, "/work/feat")
+        assert result is None
+
+    def test_returns_none_when_not_ff(self):
+        """Branch has diverged — merge --ff-only fails, returns None."""
+        git = _mock_git_for_ff(merge_ok=False)
+        result = ralph.try_fast_forward(git, "/work/feat")
+        assert result is None
+
+    def test_returns_none_when_no_default_branch_detected(self):
+        git = _mock_git_for_ff(symbolic_ref="")
+        result = ralph.try_fast_forward(git, "/work/feat")
+        assert result is None
+
+
+# ---------------------------------------------------------------------------
 # process_issue (sandbox-based, mocked)
 # ---------------------------------------------------------------------------
 
