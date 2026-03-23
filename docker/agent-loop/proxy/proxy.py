@@ -13,6 +13,7 @@ Environment variables:
 
 import http.server
 import os
+import socket
 import sys
 import threading
 import urllib.error
@@ -52,6 +53,16 @@ class IdleShutdown:
     def _shutdown(self):
         print(f"proxy: idle for {self.timeout}s, shutting down", file=sys.stderr)
         self.server.shutdown()
+
+
+class DualStackHTTPServer(http.server.HTTPServer):
+    """HTTPServer that accepts both IPv4 and IPv6 connections."""
+
+    address_family = socket.AF_INET6
+
+    def server_bind(self):
+        self.socket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+        super().server_bind()
 
 
 class ProxyHandler(http.server.BaseHTTPRequestHandler):
@@ -161,7 +172,7 @@ def main():
     ProxyHandler.real_token = token
     ProxyHandler.target = target
 
-    server = http.server.HTTPServer(("0.0.0.0", port), ProxyHandler)
+    server = DualStackHTTPServer(("::", port), ProxyHandler)
 
     if idle_timeout > 0:
         idle = IdleShutdown(idle_timeout, server)
