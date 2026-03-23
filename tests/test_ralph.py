@@ -921,9 +921,9 @@ class TestSandboxContentHash:
         h2 = ralph.Sandbox.content_hash(df, "sha256:bbb")
         assert h1 != h2
 
-    def test_length_is_12(self):
+    def test_length_is_8(self):
         h = ralph.Sandbox.content_hash("FROM a", "d")
-        assert len(h) == 12
+        assert len(h) == 8
 
 
 # ---------------------------------------------------------------------------
@@ -932,12 +932,251 @@ class TestSandboxContentHash:
 
 class TestSandboxImageTag:
     def test_format(self):
-        tag = ralph.Sandbox.image_tag("claude", "abc123def456")
-        assert tag == "agent-loop-sandbox-claude:vabc123def456"
+        tag = ralph.Sandbox.image_tag("claude", "abc123de")
+        assert tag == "agent-loop-sandbox-claude:vabc123de"
 
     def test_custom_agent(self):
         tag = ralph.Sandbox.image_tag("codex", "xyz")
         assert tag == "agent-loop-sandbox-codex:vxyz"
+
+
+# ---------------------------------------------------------------------------
+# Sandbox.parse_dependencies
+# ---------------------------------------------------------------------------
+
+class TestSandboxParseDependencies:
+    def test_basic_package_list(self):
+        content = "openjdk-21-jdk\npython3-venv\nnodejs"
+        assert ralph.Sandbox.parse_dependencies(content) == [
+            "openjdk-21-jdk", "python3-venv", "nodejs"
+        ]
+
+    def test_comment_only_lines_skipped(self):
+        content = "# This is a comment\npkg1\n# Another comment\npkg2"
+        assert ralph.Sandbox.parse_dependencies(content) == ["pkg1", "pkg2"]
+
+    def test_inline_comments_stripped(self):
+        content = "pkg1 # this is a comment\npkg2 # another"
+        assert ralph.Sandbox.parse_dependencies(content) == ["pkg1", "pkg2"]
+
+    def test_blank_lines_skipped(self):
+        content = "pkg1\n\n\npkg2\n\npkg3"
+        assert ralph.Sandbox.parse_dependencies(content) == ["pkg1", "pkg2", "pkg3"]
+
+    def test_whitespace_handling(self):
+        content = "  pkg1  \n\tpkg2\t\n  pkg3  # comment  "
+        assert ralph.Sandbox.parse_dependencies(content) == ["pkg1", "pkg2", "pkg3"]
+
+    def test_empty_content(self):
+        assert ralph.Sandbox.parse_dependencies("") == []
+
+    def test_only_comments_and_blanks(self):
+        content = "# comment\n\n# another\n  \n"
+        assert ralph.Sandbox.parse_dependencies(content) == []
+
+
+# ---------------------------------------------------------------------------
+# Sandbox.generate_project_dockerfile
+# ---------------------------------------------------------------------------
+
+class TestSandboxGenerateProjectDockerfile:
+    def test_single_package(self):
+        result = ralph.Sandbox.generate_project_dockerfile(["openjdk-21-jdk"])
+        assert "apt-get install -y --no-install-recommends" in result
+        assert "openjdk-21-jdk" in result
+
+    def test_multiple_packages_joined(self):
+        result = ralph.Sandbox.generate_project_dockerfile(["pkg1", "pkg2", "pkg3"])
+        assert "'pkg1' 'pkg2' 'pkg3'" in result
+
+    def test_packages_are_shell_quoted(self):
+        result = ralph.Sandbox.generate_project_dockerfile(["pkg; rm -rf /"])
+        assert "\"pkg; rm -rf /\"" not in result
+        assert "'pkg; rm -rf /'" in result
+
+    def test_contains_arg_and_from(self):
+        result = ralph.Sandbox.generate_project_dockerfile(["pkg1"])
+        assert "ARG BASE_IMAGE" in result
+        assert "FROM ${BASE_IMAGE}" in result
+
+    def test_user_switching(self):
+        result = ralph.Sandbox.generate_project_dockerfile(["pkg1"])
+        lines = result.splitlines()
+        assert "USER root" in lines
+        assert "USER agent" in lines
+        assert lines.index("USER root") < lines.index("USER agent")
+
+    def test_apt_cleanup(self):
+        result = ralph.Sandbox.generate_project_dockerfile(["pkg1"])
+        assert "rm -rf /var/lib/apt/lists/*" in result
+
+    def test_no_install_recommends(self):
+        result = ralph.Sandbox.generate_project_dockerfile(["pkg1"])
+        assert "--no-install-recommends" in result
+
+
+# ---------------------------------------------------------------------------
+# Sandbox.find_project_config
+# ---------------------------------------------------------------------------
+
+class TestSandboxFindProjectConfig:
+    def test_returns_none_when_no_agent_loop_dir(self, tmp_path):
+        result = ralph.Sandbox.find_project_config(str(tmp_path))
+        assert result is None
+
+    def test_returns_none_when_agent_loop_empty(self, tmp_path):
+        (tmp_path / ".agent-loop").mkdir()
+        result = ralph.Sandbox.find_project_config(str(tmp_path))
+        assert result is None
+
+    def test_prefers_dockerfile_over_dependencies(self, tmp_path):
+        al = tmp_path / ".agent-loop"
+        al.mkdir()
+        (al / "dependencies").write_text("pkg1\n")
+        (al / "Dockerfile.sandbox").write_text("FROM base\n")
+        config_type, path = ralph.Sandbox.find_project_config(str(tmp_path))
+        assert config_type == "dockerfile"
+        assert path == str(al / "Dockerfile.sandbox")
+
+    def test_returns_dependencies_when_no_dockerfile(self, tmp_path):
+        al = tmp_path / ".agent-loop"
+        al.mkdir()
+        (al / "dependencies").write_text("pkg1\n")
+        config_type, path = ralph.Sandbox.find_project_config(str(tmp_path))
+        assert config_type == "dependencies"
+        assert path == str(al / "dependencies")
+
+    def test_returns_dockerfile_when_no_dependencies(self, tmp_path):
+        al = tmp_path / ".agent-loop"
+        al.mkdir()
+        (al / "Dockerfile.sandbox").write_text("FROM base\n")
+        config_type, path = ralph.Sandbox.find_project_config(str(tmp_path))
+        assert config_type == "dockerfile"
+        assert path == str(al / "Dockerfile.sandbox")
+
+
+# ---------------------------------------------------------------------------
+# Sandbox.project_image_tag
+# ---------------------------------------------------------------------------
+
+class TestSandboxProjectImageTag:
+    def test_includes_agent_and_project_in_tag(self):
+        tag = ralph.Sandbox.project_image_tag("claude", "myproject", "base:v1", "content")
+        assert tag.startswith("agent-loop-sandbox-claude-myproject:v")
+
+    def test_hash_is_8_chars(self):
+        tag = ralph.Sandbox.project_image_tag("claude", "proj", "base:v1", "content")
+        chash = tag.split(":v")[1]
+        assert len(chash) == 8
+
+    def test_different_content_produces_different_hash(self):
+        tag1 = ralph.Sandbox.project_image_tag("claude", "proj", "base:v1", "content-a")
+        tag2 = ralph.Sandbox.project_image_tag("claude", "proj", "base:v1", "content-b")
+        assert tag1 != tag2
+
+    def test_same_content_produces_same_hash(self):
+        tag1 = ralph.Sandbox.project_image_tag("claude", "proj", "base:v1", "content")
+        tag2 = ralph.Sandbox.project_image_tag("claude", "proj", "base:v1", "content")
+        assert tag1 == tag2
+
+    def test_different_base_tag_produces_different_hash(self):
+        tag1 = ralph.Sandbox.project_image_tag("claude", "proj", "base:v1", "content")
+        tag2 = ralph.Sandbox.project_image_tag("claude", "proj", "base:v2", "content")
+        assert tag1 != tag2
+
+
+# ---------------------------------------------------------------------------
+# Sandbox.ensure_project_image
+# ---------------------------------------------------------------------------
+
+class TestSandboxEnsureProjectImage:
+    @staticmethod
+    def _make_sandbox(tmp_path):
+        agent_dir = tmp_path / "docker" / "agent-loop" / "claude"
+        agent_dir.mkdir(parents=True, exist_ok=True)
+        (agent_dir / "Dockerfile").write_text("FROM base:latest\nRUN echo hi")
+        return ralph.Sandbox(str(tmp_path))
+
+    def test_returns_base_tag_when_no_project_config(self, tmp_path):
+        sb = self._make_sandbox(tmp_path)
+        result = sb.ensure_project_image("claude", "base:v1", str(tmp_path))
+        assert result == "base:v1"
+
+    @patch("ralph.subprocess.run")
+    def test_builds_when_tag_missing_with_dependencies(self, mock_run, tmp_path):
+        sb = self._make_sandbox(tmp_path)
+        al = tmp_path / ".agent-loop"
+        al.mkdir()
+        (al / "dependencies").write_text("pkg1\npkg2\n")
+        # image_exists returns False (tag not cached)
+        mock_run.return_value = MagicMock(returncode=1)
+        tag = sb.ensure_project_image("claude", "base:v1", str(tmp_path))
+        assert tag.startswith("agent-loop-sandbox-claude-")
+        build_calls = [c for c in mock_run.call_args_list
+                       if c[0][0][1] == "build"]
+        assert len(build_calls) == 1
+        # Verify --build-arg BASE_IMAGE passed
+        build_cmd = build_calls[0][0][0]
+        assert "--build-arg" in build_cmd
+        assert "BASE_IMAGE=base:v1" in build_cmd
+
+    @patch("ralph.subprocess.run")
+    def test_builds_with_dockerfile_sandbox(self, mock_run, tmp_path):
+        sb = self._make_sandbox(tmp_path)
+        al = tmp_path / ".agent-loop"
+        al.mkdir()
+        (al / "Dockerfile.sandbox").write_text(
+            "ARG BASE_IMAGE\nFROM ${BASE_IMAGE}\nRUN echo custom\n")
+        mock_run.return_value = MagicMock(returncode=1)
+        tag = sb.ensure_project_image("claude", "base:v1", str(tmp_path))
+        assert tag.startswith("agent-loop-sandbox-claude-")
+        build_calls = [c for c in mock_run.call_args_list
+                       if c[0][0][1] == "build"]
+        assert len(build_calls) == 1
+        build_cmd = build_calls[0][0][0]
+        # Uses -f Dockerfile.sandbox with .agent-loop/ as context
+        assert "-f" in build_cmd
+        assert "Dockerfile.sandbox" in build_cmd
+        assert str(al) in build_cmd
+
+    @patch("ralph.subprocess.run")
+    def test_skips_build_when_tag_exists(self, mock_run, tmp_path):
+        sb = self._make_sandbox(tmp_path)
+        al = tmp_path / ".agent-loop"
+        al.mkdir()
+        (al / "dependencies").write_text("pkg1\n")
+        # image_exists returns True (tag cached)
+        mock_run.return_value = MagicMock(returncode=0)
+        tag = sb.ensure_project_image("claude", "base:v1", str(tmp_path))
+        assert tag.startswith("agent-loop-sandbox-claude-")
+        build_calls = [c for c in mock_run.call_args_list
+                       if c[0][0][1] == "build"]
+        assert len(build_calls) == 0
+
+    @patch("ralph.subprocess.run")
+    def test_force_rebuild_forces_build(self, mock_run, tmp_path):
+        sb = self._make_sandbox(tmp_path)
+        al = tmp_path / ".agent-loop"
+        al.mkdir()
+        (al / "dependencies").write_text("pkg1\n")
+        mock_run.return_value = MagicMock(returncode=0)
+        sb.ensure_project_image("claude", "base:v1", str(tmp_path),
+                                force_rebuild=True)
+        build_calls = [c for c in mock_run.call_args_list
+                       if c[0][0][1] == "build"]
+        assert len(build_calls) == 1
+
+    @patch("ralph.subprocess.run")
+    def test_project_name_derived_from_dir(self, mock_run, tmp_path):
+        sb = self._make_sandbox(tmp_path)
+        project = tmp_path / "elasticsearch"
+        project.mkdir()
+        al = project / ".agent-loop"
+        al.mkdir()
+        (al / "dependencies").write_text("pkg1\n")
+        mock_run.return_value = MagicMock(returncode=1)
+        tag = sb.ensure_project_image("claude", "base:v1", str(project))
+        assert "elasticsearch" in tag
 
 
 # ---------------------------------------------------------------------------
@@ -1126,6 +1365,59 @@ class TestSandboxEnsureSandbox:
         mock_create.assert_not_called()
         mock_policy.assert_not_called()
         mock_img.assert_not_called()
+
+    @patch.object(ralph.Sandbox, "apply_network_policy")
+    @patch.object(ralph.Sandbox, "_docker_sandbox_create")
+    @patch.object(ralph.Sandbox, "ensure_project_image",
+                  return_value="agent-loop-sandbox-claude-myproj:vdef12345")
+    @patch.object(ralph.Sandbox, "ensure_image",
+                  return_value="agent-loop-sandbox-claude:vabc")
+    @patch.object(ralph.Sandbox, "sandbox_exists", return_value=False)
+    def test_calls_ensure_project_image_when_project_dir(
+            self, mock_exists, mock_img, mock_proj, mock_create, mock_policy):
+        sb = ralph.Sandbox("/dotfiles")
+        sb.ensure_sandbox("claude", "fix-auth", "/work/fix-auth",
+                          project_dir="/repo/root")
+        mock_proj.assert_called_once_with(
+            "claude", "agent-loop-sandbox-claude:vabc", "/repo/root",
+            force_rebuild=False)
+        mock_create.assert_called_once_with(
+            "agent-loop-claude-fix-auth",
+            "agent-loop-sandbox-claude-myproj:vdef12345",
+            "/work/fix-auth")
+
+    @patch.object(ralph.Sandbox, "apply_network_policy")
+    @patch.object(ralph.Sandbox, "_docker_sandbox_create")
+    @patch.object(ralph.Sandbox, "ensure_image",
+                  return_value="agent-loop-sandbox-claude:vabc")
+    @patch.object(ralph.Sandbox, "sandbox_exists", return_value=False)
+    def test_skips_project_image_when_no_project_dir(
+            self, mock_exists, mock_img, mock_create, mock_policy):
+        sb = ralph.Sandbox("/dotfiles")
+        with patch.object(ralph.Sandbox, "ensure_project_image") as mock_proj:
+            sb.ensure_sandbox("claude", "fix-auth", "/work/fix-auth")
+            mock_proj.assert_not_called()
+        mock_create.assert_called_once_with(
+            "agent-loop-claude-fix-auth",
+            "agent-loop-sandbox-claude:vabc",
+            "/work/fix-auth")
+
+    @patch.object(ralph.Sandbox, "apply_network_policy")
+    @patch.object(ralph.Sandbox, "_docker_sandbox_create")
+    @patch.object(ralph.Sandbox, "ensure_project_image",
+                  return_value="agent-loop-sandbox-claude-myproj:vdef12345")
+    @patch.object(ralph.Sandbox, "ensure_image",
+                  return_value="agent-loop-sandbox-claude:vabc")
+    @patch.object(ralph.Sandbox, "sandbox_exists", return_value=False)
+    def test_force_rebuild_passed_through(
+            self, mock_exists, mock_img, mock_proj, mock_create, mock_policy):
+        sb = ralph.Sandbox("/dotfiles")
+        sb.ensure_sandbox("claude", "fix-auth", "/work/fix-auth",
+                          project_dir="/repo/root", force_rebuild=True)
+        mock_img.assert_called_once_with("claude", force_rebuild=True)
+        mock_proj.assert_called_once_with(
+            "claude", "agent-loop-sandbox-claude:vabc", "/repo/root",
+            force_rebuild=True)
 
 
 # ---------------------------------------------------------------------------
@@ -1805,6 +2097,7 @@ class TestProcessIssueSandbox:
     @patch("ralph.resolve_repo", return_value="owner/repo")
     def test_uses_ensure_sandbox_and_run_iteration(self, mock_repo, mock_wt, mock_unblock):
         git = MagicMock()
+        git.output.return_value = "/repo/root"
 
         sandbox = MagicMock()
         sandbox.ensure_sandbox.return_value = "agent-loop-claude-my-branch"
@@ -1822,7 +2115,8 @@ class TestProcessIssueSandbox:
         assert result == 0
 
         sandbox.ensure_sandbox.assert_called_once_with(
-            "claude", "my-branch", "/work/my-branch")
+            "claude", "my-branch", "/work/my-branch",
+            project_dir="/repo/root", force_rebuild=False)
         sandbox.setup_git_config.assert_called_once_with(
             "agent-loop-claude-my-branch", "user", "user@test.com")
         sandbox.run_iteration.assert_called_once()
@@ -1884,6 +2178,7 @@ class TestProcessIssueSandbox:
     @patch("ralph.resolve_repo", return_value="owner/repo")
     def test_agent_codex_uses_correct_names(self, mock_repo, mock_wt):
         git = MagicMock()
+        git.output.return_value = "/repo/root"
 
         sandbox = MagicMock()
         sandbox.ensure_sandbox.return_value = "agent-loop-codex-my-branch"
@@ -1899,7 +2194,32 @@ class TestProcessIssueSandbox:
             "user", "user@test.com", 18080)
 
         sandbox.ensure_sandbox.assert_called_once_with(
-            "codex", "my-branch", "/work/my-branch")
+            "codex", "my-branch", "/work/my-branch",
+            project_dir="/repo/root", force_rebuild=False)
+
+    @patch("ralph.unblock_ready_specs")
+    @patch("ralph.ensure_worktree", return_value="/work/my-branch")
+    @patch("ralph.resolve_repo", return_value="owner/repo")
+    def test_rebuild_flag_passed_to_ensure_sandbox(self, mock_repo, mock_wt, mock_unblock):
+        git = MagicMock()
+        git.output.return_value = "/repo/root"
+
+        sandbox = MagicMock()
+        sandbox.ensure_sandbox.return_value = "agent-loop-claude-my-branch"
+        sandbox.run_iteration.return_value = (0, "spec")
+        sandbox.exec_output.return_value = "abc123"
+
+        gh = MagicMock()
+        gh.issue_view_title.return_value = "[my-branch] Test Issue"
+        gh.issue_view_body.return_value = "---\nbranch: my-branch\n---\nSpec"
+
+        ralph.process_issue(
+            42, git, sandbox, gh, "claude", False, "sonnet",
+            "user", "user@test.com", 18080, rebuild=True)
+
+        sandbox.ensure_sandbox.assert_called_once_with(
+            "claude", "my-branch", "/work/my-branch",
+            project_dir="/repo/root", force_rebuild=True)
 
 
 # ---------------------------------------------------------------------------
@@ -1912,9 +2232,8 @@ class TestMainSandboxFlags:
     @patch("ralph.ensure_token", return_value="sk-test")
     @patch("ralph.ensure_proxy", return_value=18080)
     @patch("ralph.Git")
-    @patch.object(ralph.Sandbox, "ensure_image")
     @patch("ralph.check_dependencies_prereq")
-    def test_agent_flag_passed_through(self, mock_prereq, mock_img,
+    def test_agent_flag_passed_through(self, mock_prereq,
                                        mock_git_cls, mock_proxy,
                                        mock_token, mock_process):
         mock_git_cls.return_value = MagicMock(
@@ -1923,41 +2242,40 @@ class TestMainSandboxFlags:
             ralph.main()
         assert exc_info.value.code == 0
 
-        # Verify ensure_image called with agent "codex"
-        mock_img.assert_called_once_with("codex", force_rebuild=False)
-
         # Verify ensure_token called with agent "codex"
         mock_token.assert_called_once_with("codex")
 
-        # Verify process_issue called with agent "codex" and proxy_port
+        # Verify process_issue called with agent "codex", proxy_port, and rebuild
         call_args = mock_process.call_args[0]
+        call_kwargs = mock_process.call_args[1]
         assert call_args[4] == "codex"  # agent parameter
         assert call_args[9] == 18080  # proxy_port (not an oauth token string)
+        assert call_kwargs.get("rebuild") is False
 
     @patch("ralph.sys.argv", ["ralph", "--issue", "42", "--rebuild"])
     @patch("ralph.process_issue", return_value=0)
     @patch("ralph.ensure_token", return_value="sk-test")
     @patch("ralph.ensure_proxy", return_value=18080)
     @patch("ralph.Git")
-    @patch.object(ralph.Sandbox, "ensure_image")
     @patch("ralph.check_dependencies_prereq")
-    def test_rebuild_forces_image_rebuild(self, mock_prereq, mock_img,
+    def test_rebuild_forces_image_rebuild(self, mock_prereq,
                                           mock_git_cls, mock_proxy,
                                           mock_token, mock_process):
         mock_git_cls.return_value = MagicMock(
             output=MagicMock(return_value="user"))
         with pytest.raises(SystemExit):
             ralph.main()
-        mock_img.assert_called_once_with("claude", force_rebuild=True)
+        # Rebuild is now deferred — passed through process_issue to ensure_sandbox
+        call_kwargs = mock_process.call_args[1]
+        assert call_kwargs.get("rebuild") is True
 
     @patch("ralph.sys.argv", ["ralph", "--issue", "42"])
     @patch("ralph.process_issue", return_value=0)
     @patch("ralph.ensure_token", return_value="sk-test")
     @patch("ralph.ensure_proxy", return_value=18080)
     @patch("ralph.Git")
-    @patch.object(ralph.Sandbox, "ensure_image")
     @patch("ralph.check_dependencies_prereq")
-    def test_starts_proxy_before_processing(self, mock_prereq, mock_img,
+    def test_starts_proxy_before_processing(self, mock_prereq,
                                             mock_git_cls, mock_proxy,
                                             mock_token, mock_process):
         mock_git_cls.return_value = MagicMock(
@@ -1969,9 +2287,8 @@ class TestMainSandboxFlags:
     @patch("ralph.sys.argv", ["ralph", "--issue", "42"])
     @patch("ralph.process_issue", return_value=0)
     @patch("ralph.Git")
-    @patch.object(ralph.Sandbox, "ensure_image")
     @patch("ralph.check_dependencies_prereq")
-    def test_ensure_token_called_before_proxy(self, mock_prereq, mock_img,
+    def test_ensure_token_called_before_proxy(self, mock_prereq,
                                               mock_git_cls, mock_process):
         mock_git_cls.return_value = MagicMock(
             output=MagicMock(return_value="user"))
@@ -2181,6 +2498,134 @@ class TestSelftest:
         with pytest.raises(SystemExit) as exc_info:
             ralph.main()
         assert exc_info.value.code == 2
+
+    @patch("ralph.Sandbox.remove_sandbox")
+    @patch("ralph.stop_proxy")
+    @patch("ralph.subprocess.run")
+    @patch("ralph.Sandbox.apply_network_policy")
+    @patch("ralph.Sandbox._docker_sandbox_create")
+    @patch("ralph.Sandbox.ensure_project_image",
+           return_value="agent-loop-sandbox-claude-myproject:vdeadbeef")
+    @patch("ralph.Sandbox.find_project_config",
+           return_value=("dependencies", "/proj/.agent-loop/dependencies"))
+    @patch("ralph.Sandbox.ensure_image", return_value="agent-loop-sandbox-claude:vabc")
+    @patch("ralph.proxy_health_check", return_value=True)
+    @patch("ralph.ensure_proxy")
+    @patch("ralph.read_token_from_keychain")
+    @patch("ralph.time.time", return_value=1700000000.0)
+    def test_project_image_check_with_dependencies(
+            self, mock_time, mock_read, mock_ensure_proxy, mock_health,
+            mock_img, mock_find_config, mock_proj_img, mock_create,
+            mock_policy, mock_run, mock_stop, mock_remove, capsys):
+        mock_read.return_value = {"accessToken": "sk-test", "expiresAt": self.FUTURE_MS}
+        mock_run.side_effect = [
+            MagicMock(returncode=0, stdout="ok", stderr=""),
+            MagicMock(returncode=0, stdout="ok", stderr=""),
+            MagicMock(returncode=28, stdout="", stderr=""),
+        ]
+
+        rc = ralph.selftest("claude", "/fake/dotfiles")
+        assert rc == 0
+
+        captured = capsys.readouterr()
+        assert "PASS: build project image" in captured.out
+        assert "agent-loop-sandbox-claude-myproject:vdeadbeef" in captured.out
+        assert "all 9 checks passed" in captured.out
+
+    @patch("ralph.Sandbox.remove_sandbox")
+    @patch("ralph.stop_proxy")
+    @patch("ralph.subprocess.run")
+    @patch("ralph.Sandbox.apply_network_policy")
+    @patch("ralph.Sandbox._docker_sandbox_create")
+    @patch("ralph.Sandbox.ensure_project_image",
+           return_value="agent-loop-sandbox-claude-myproject:vdeadbeef")
+    @patch("ralph.Sandbox.find_project_config",
+           return_value=("dockerfile", "/proj/.agent-loop/Dockerfile.sandbox"))
+    @patch("ralph.Sandbox.ensure_image", return_value="agent-loop-sandbox-claude:vabc")
+    @patch("ralph.proxy_health_check", return_value=True)
+    @patch("ralph.ensure_proxy")
+    @patch("ralph.read_token_from_keychain")
+    @patch("ralph.time.time", return_value=1700000000.0)
+    def test_project_image_check_with_dockerfile(
+            self, mock_time, mock_read, mock_ensure_proxy, mock_health,
+            mock_img, mock_find_config, mock_proj_img, mock_create,
+            mock_policy, mock_run, mock_stop, mock_remove, capsys):
+        mock_read.return_value = {"accessToken": "sk-test", "expiresAt": self.FUTURE_MS}
+        mock_run.side_effect = [
+            MagicMock(returncode=0, stdout="ok", stderr=""),
+            MagicMock(returncode=0, stdout="ok", stderr=""),
+            MagicMock(returncode=28, stdout="", stderr=""),
+        ]
+
+        rc = ralph.selftest("claude", "/fake/dotfiles")
+        assert rc == 0
+
+        captured = capsys.readouterr()
+        assert "PASS: build project image" in captured.out
+        assert "all 9 checks passed" in captured.out
+
+    @patch("ralph.Sandbox.remove_sandbox")
+    @patch("ralph.stop_proxy")
+    @patch("ralph.subprocess.run")
+    @patch("ralph.Sandbox.apply_network_policy")
+    @patch("ralph.Sandbox._docker_sandbox_create")
+    @patch("ralph.Sandbox.find_project_config", return_value=None)
+    @patch("ralph.Sandbox.ensure_image", return_value="agent-loop-sandbox-claude:vabc")
+    @patch("ralph.proxy_health_check", return_value=True)
+    @patch("ralph.ensure_proxy")
+    @patch("ralph.read_token_from_keychain")
+    @patch("ralph.time.time", return_value=1700000000.0)
+    def test_project_image_skipped_when_no_config(
+            self, mock_time, mock_read, mock_ensure_proxy, mock_health,
+            mock_img, mock_find_config, mock_create, mock_policy,
+            mock_run, mock_stop, mock_remove, capsys):
+        mock_read.return_value = {"accessToken": "sk-test", "expiresAt": self.FUTURE_MS}
+        mock_run.side_effect = [
+            MagicMock(returncode=0, stdout="ok", stderr=""),
+            MagicMock(returncode=0, stdout="ok", stderr=""),
+            MagicMock(returncode=28, stdout="", stderr=""),
+        ]
+
+        rc = ralph.selftest("claude", "/fake/dotfiles")
+        assert rc == 0
+
+        captured = capsys.readouterr()
+        assert "build project image" not in captured.out
+        assert "all 8 checks passed" in captured.out
+
+    @patch("ralph.Sandbox.remove_sandbox")
+    @patch("ralph.stop_proxy")
+    @patch("ralph.subprocess.run")
+    @patch("ralph.Sandbox.apply_network_policy")
+    @patch("ralph.Sandbox._docker_sandbox_create")
+    @patch("ralph.Sandbox.ensure_project_image",
+           side_effect=RuntimeError("project build failed"))
+    @patch("ralph.Sandbox.find_project_config",
+           return_value=("dependencies", "/proj/.agent-loop/dependencies"))
+    @patch("ralph.Sandbox.ensure_image", return_value="agent-loop-sandbox-claude:vabc")
+    @patch("ralph.proxy_health_check", return_value=True)
+    @patch("ralph.ensure_proxy")
+    @patch("ralph.read_token_from_keychain")
+    @patch("ralph.time.time", return_value=1700000000.0)
+    def test_project_image_build_failure_reported(
+            self, mock_time, mock_read, mock_ensure_proxy, mock_health,
+            mock_img, mock_find_config, mock_proj_img, mock_create,
+            mock_policy, mock_run, mock_stop, mock_remove, capsys):
+        mock_read.return_value = {"accessToken": "sk-test", "expiresAt": self.FUTURE_MS}
+        mock_run.side_effect = [
+            MagicMock(returncode=0, stdout="ok", stderr=""),
+            MagicMock(returncode=0, stdout="ok", stderr=""),
+            MagicMock(returncode=28, stdout="", stderr=""),
+        ]
+
+        rc = ralph.selftest("claude", "/fake/dotfiles")
+        assert rc == 1
+
+        captured = capsys.readouterr()
+        assert "FAIL: build project image" in captured.out
+        assert "project build failed" in captured.out
+        assert "selftest aborted" in captured.out
+        mock_create.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
