@@ -1671,12 +1671,12 @@ class TestProcessIssueSandbox:
     @patch("ralph.resolve_repo", return_value="owner/repo")
     def test_uses_ensure_sandbox_and_run_iteration(self, mock_repo, mock_wt, mock_unblock):
         git = MagicMock()
-        # HEAD doesn't change = spec complete
-        git.output.return_value = "abc123"
 
         sandbox = MagicMock()
         sandbox.ensure_sandbox.return_value = "agent-loop-claude-my-branch"
         sandbox.run_iteration.return_value = (0, "updated spec")
+        # HEAD doesn't change = spec complete
+        sandbox.exec_output.return_value = "abc123"
 
         gh = MagicMock()
         gh.issue_view_title.return_value = "[my-branch] Test Issue"
@@ -1703,11 +1703,11 @@ class TestProcessIssueSandbox:
     @patch("ralph.resolve_repo", return_value="owner/repo")
     def test_iteration_failure_marks_needs_attention(self, mock_repo, mock_wt):
         git = MagicMock()
-        git.output.return_value = "abc123"
 
         sandbox = MagicMock()
         sandbox.ensure_sandbox.return_value = "agent-loop-claude-my-branch"
         sandbox.run_iteration.return_value = (1, "spec")
+        sandbox.exec_output.return_value = "abc123"
 
         gh = MagicMock()
         gh.issue_view_title.return_value = "[my-branch] Test Issue"
@@ -1728,13 +1728,13 @@ class TestProcessIssueSandbox:
     @patch("ralph.resolve_repo", return_value="owner/repo")
     def test_pushes_after_iteration_when_flag_set(self, mock_repo, mock_wt, mock_unblock):
         git = MagicMock()
-        # First call returns "abc", second returns "def" (new commit),
-        # third returns "def" (no new commit = done)
-        git.output.side_effect = ["abc", "def", "def", "def"]
 
         sandbox = MagicMock()
         sandbox.ensure_sandbox.return_value = "agent-loop-claude-my-branch"
         sandbox.run_iteration.return_value = (0, "updated spec")
+        # First call returns "abc", second returns "def" (new commit),
+        # third returns "def" (no new commit = done)
+        sandbox.exec_output.side_effect = ["abc", "def", "def", "def"]
 
         gh = MagicMock()
         gh.issue_view_title.return_value = "[my-branch] Test Issue"
@@ -1750,11 +1750,11 @@ class TestProcessIssueSandbox:
     @patch("ralph.resolve_repo", return_value="owner/repo")
     def test_agent_codex_uses_correct_names(self, mock_repo, mock_wt):
         git = MagicMock()
-        git.output.return_value = "abc123"
 
         sandbox = MagicMock()
         sandbox.ensure_sandbox.return_value = "agent-loop-codex-my-branch"
         sandbox.run_iteration.return_value = (0, "spec")
+        sandbox.exec_output.return_value = "abc123"
 
         gh = MagicMock()
         gh.issue_view_title.return_value = "[my-branch] Test Issue"

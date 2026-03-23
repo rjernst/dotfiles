@@ -245,6 +245,47 @@ class Sandbox:
         )
 
     @staticmethod
+    def exec_output(sandbox_name, *cmd):
+        """Run a command inside the sandbox and return its stdout (stripped)."""
+        result = subprocess.run(
+            ["docker", "sandbox", "exec", sandbox_name] + list(cmd),
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False,
+        )
+        return result.stdout.strip() if result.returncode == 0 else ""
+
+    @staticmethod
+    def sync_to_host(sandbox_name, head_before, head_after, work_dir):
+        """Sync commits from sandbox to host worktree via format-patch/am.
+
+        Docker sandbox copies the workspace into an independent git repo,
+        so commits must be extracted and replayed onto the host.
+        """
+        patch_proc = subprocess.run(
+            ["docker", "sandbox", "exec", sandbox_name,
+             "git", "format-patch", "--stdout", f"{head_before}..{head_after}"],
+            stdout=subprocess.PIPE, text=True, check=False,
+        )
+        if patch_proc.returncode != 0 or not patch_proc.stdout:
+            print("ralph: warning: failed to extract patches from sandbox", file=sys.stderr)
+            return False
+
+        am_proc = subprocess.run(
+            ["git", "am"],
+            input=patch_proc.stdout, text=True, cwd=work_dir, check=False,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        if am_proc.returncode != 0:
+            print(f"ralph: warning: failed to apply patches to host: {am_proc.stderr.strip()}", file=sys.stderr)
+            subprocess.run(
+                ["git", "am", "--abort"], cwd=work_dir, check=False,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+            return False
+
+        print(f"ralph: synced commits to {work_dir}")
+        return True
+
+    @staticmethod
     def apply_network_policy(name):
         """Apply deny-by-default network policy with allowed hosts."""
         subprocess.run(
@@ -1391,8 +1432,10 @@ def process_issue(issue_number, git, sandbox, gh, agent, push, model,
 
     try:
         while True:
-            # Record HEAD before
-            head_before = git.output("rev-parse", "HEAD", cwd=work_dir) or "none"
+            # Record HEAD before — must check inside sandbox because docker
+            # sandbox copies the worktree into /home/agent/workspace with its
+            # own .git; commits there are invisible to the host
+            head_before = sandbox.exec_output(sandbox_name, "git", "rev-parse", "HEAD") or "none"
 
             # Run iteration
             print(f"ralph: starting iteration (sandbox={sandbox_name}, issue=#{issue_number}, model={model})")
@@ -1405,7 +1448,7 @@ def process_issue(issue_number, git, sandbox, gh, agent, push, model,
                 return 1
 
             # Check if work was done
-            head_after = git.output("rev-parse", "HEAD", cwd=work_dir) or "none"
+            head_after = sandbox.exec_output(sandbox_name, "git", "rev-parse", "HEAD") or "none"
 
             if head_before == head_after:
                 print(f"ralph: no commit made, marking issue #{issue_number} done")
@@ -1415,11 +1458,14 @@ def process_issue(issue_number, git, sandbox, gh, agent, push, model,
                 unblock_ready_specs(repo, gh)
                 break
 
+            # Sync commits from sandbox to host worktree
+            sandbox.sync_to_host(sandbox_name, head_before, head_after, work_dir)
+
             # Update issue body from spec
             gh.issue_edit(issue_number, repo, body=body)
             print(f"ralph: iteration complete, updated issue #{issue_number}")
 
-            # Optional push (from host)
+            # Optional push (from host, after sync)
             if push:
                 git.run("push", cwd=work_dir, check=False)
     except KeyboardInterrupt:
