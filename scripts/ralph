@@ -641,14 +641,8 @@ class Sandbox:
                     " — run: ralph store-token")
 
         # 2. Proxy running
-        try:
-            resp = urllib.request.urlopen(
-                f"http://localhost:{proxy_port}/health", timeout=3)
-            if resp.status != 200:
-                failures.append(
-                    f"proxy health check returned status {resp.status}"
-                    " — ensure the credential proxy is running")
-        except Exception:
+        healthy, _ = proxy_health_check(proxy_port)
+        if not healthy:
             failures.append(
                 f"proxy not reachable at http://localhost:{proxy_port}/health"
                 " — start the credential proxy")
@@ -691,20 +685,6 @@ class Sandbox:
 DEFAULT_PROXY_PORTS = {"claude": 18080}
 DEFAULT_PROXY_PORT = 18080
 
-def compute_proxy_tag(dotfiles_dir):
-    """Compute a content-addressed image tag for the proxy.
-
-    Hashes the Dockerfile and proxy.py so any code change triggers a rebuild.
-    """
-    proxy_dir = os.path.join(dotfiles_dir, "docker", "agent-loop", "proxy")
-    h = hashlib.sha256()
-    for name in sorted(os.listdir(proxy_dir)):
-        path = os.path.join(proxy_dir, name)
-        if os.path.isfile(path):
-            with open(path, "rb") as f:
-                h.update(f.read())
-    return f"agent-loop-proxy:v{h.hexdigest()[:12]}"
-
 # Map short model aliases to full model IDs for ANTHROPIC_CUSTOM_MODEL_OPTION.
 MODEL_ALIASES = {
     "opus": "claude-opus-4-6",
@@ -713,9 +693,26 @@ MODEL_ALIASES = {
 }
 
 
-def proxy_container_name(agent):
-    """Return the Docker container name for the proxy."""
-    return f"agent-loop-proxy-{agent}"
+def proxy_script_path(dotfiles_dir):
+    """Return the path to proxy.py."""
+    return os.path.join(dotfiles_dir, "docker", "agent-loop", "proxy", "proxy.py")
+
+
+def compute_proxy_version(dotfiles_dir):
+    """Hash proxy.py source and return a 12-char hex version string."""
+    path = proxy_script_path(dotfiles_dir)
+    with open(path, "rb") as f:
+        return hashlib.sha256(f.read()).hexdigest()[:12]
+
+
+def proxy_pid_file(agent):
+    """Return the PID file path for the proxy."""
+    return f"/tmp/ralph-proxy-{agent}.pid"
+
+
+def proxy_log_file(agent):
+    """Return the log file path for the proxy."""
+    return f"/tmp/ralph-proxy-{agent}.log"
 
 
 def proxy_port_for_agent(agent):
@@ -726,23 +723,30 @@ def proxy_port_for_agent(agent):
 def proxy_health_check(port):
     """Check if the proxy is healthy at the given port.
 
-    Returns True if the health endpoint responds 200 with expected body.
+    Returns (healthy, version) where version is the v=<hash> string
+    from the health response, or None if unhealthy.
     """
     try:
         resp = urllib.request.urlopen(
             f"http://localhost:{port}/health", timeout=3)
-        return resp.status == 200
+        if resp.status != 200:
+            return False, None
+        body = resp.read().decode().strip()
+        # Parse "agent-loop-proxy ok v=<hash>"
+        m = re.search(r'v=([a-f0-9]+)', body)
+        version = m.group(1) if m else None
+        return True, version
     except Exception:
-        return False
+        return False, None
 
 
 def start_proxy(agent, port, dotfiles_dir):
-    """Start the credential injection proxy container.
+    """Start the credential injection proxy as a native subprocess.
 
-    Reads the token from Keychain and pipes it to the proxy container via stdin.
-    The container persists after stop so logs remain available for debugging.
+    Reads the token from Keychain and pipes it via stdin.
+    Stderr goes to a log file for debugging.
 
-    Returns the container name.
+    Returns the subprocess.Popen object.
     """
     token_data = read_token_from_keychain(agent)
     if token_data is None:
@@ -757,111 +761,75 @@ def start_proxy(agent, port, dotfiles_dir):
         sys.exit(1)
 
     token = token_data["accessToken"]
-    name = proxy_container_name(agent)
+    script = proxy_script_path(dotfiles_dir)
+    pid_file = proxy_pid_file(agent)
+    log_file = proxy_log_file(agent)
 
-    # Build the proxy image if needed (content-addressed tag)
-    proxy_dir = os.path.join(dotfiles_dir, "docker", "agent-loop", "proxy")
-    tag = compute_proxy_tag(dotfiles_dir)
-    result = subprocess.run(
-        ["docker", "image", "inspect", tag],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False,
-    )
-    if result.returncode != 0:
-        print(f"ralph: building proxy image {tag}...")
-        subprocess.run(
-            ["docker", "build", "-t", tag, proxy_dir], check=True)
-
-    print(f"ralph: starting proxy container {name} on port {port}...")
+    print(f"ralph: starting proxy on port {port}...")
+    log_fh = open(log_file, "a")
     proc = subprocess.Popen(
-        ["docker", "run", "-i",
-         "--name", name,
-         "-p", f"{port}:18080",
-         tag],
+        ["python3", script],
         stdin=subprocess.PIPE,
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=log_fh,
+        env={**os.environ,
+             "LISTEN_PORT": str(port),
+             "PID_FILE": pid_file},
     )
     proc.stdin.write((token + "\n").encode())
     proc.stdin.close()
 
-    return name
+    return proc
 
 
 def stop_proxy(agent):
-    """Stop the proxy container for the given agent."""
-    name = proxy_container_name(agent)
-    subprocess.run(
-        ["docker", "stop", name],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False,
-    )
+    """Stop the proxy for the given agent via SIGTERM to its PID."""
+    pid_file = proxy_pid_file(agent)
+    try:
+        with open(pid_file) as f:
+            pid = int(f.read().strip())
+        os.kill(pid, signal.SIGTERM)
+    except (FileNotFoundError, ValueError, ProcessLookupError, OSError):
+        pass
 
 
 def ensure_proxy(agent, port, dotfiles_dir):
     """Ensure the proxy is running and healthy.
 
-    If a proxy container is already running and healthy, reuse it.
-    Otherwise, stop any stale container and start a new one.
+    If a proxy is already running and healthy, reuse it (even if outdated —
+    the idle timeout will retire it naturally). Otherwise start a new one.
 
     Returns the proxy port.
     """
-    name = proxy_container_name(agent)
-
-    # Check if a healthy proxy is running on the current image
-    if proxy_health_check(port):
-        tag = compute_proxy_tag(dotfiles_dir)
-        result = subprocess.run(
-            ["docker", "inspect", "--format", "{{.Config.Image}}", name],
-            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
-            check=False,
-        )
-        if result.returncode == 0 and result.stdout.strip() == tag:
+    healthy, version = proxy_health_check(port)
+    if healthy:
+        current = compute_proxy_version(dotfiles_dir)
+        if version == current:
             print(f"ralph: reusing healthy proxy on port {port}")
-            return port
-        print(f"ralph: proxy image outdated, replacing...")
-
-    # Stop any stale container with the same name
-    result = subprocess.run(
-        ["docker", "inspect", "--format", "{{.State.Running}}", name],
-        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
-        check=False,
-    )
-    if result.returncode == 0:
-        # Container exists but health check failed — rename to free the
-        # name, preserving the stopped container and its logs for debugging.
-        # Remove any previously renamed containers first so they don't pile up.
-        print(f"ralph: stopping stale proxy container {name}...")
-        subprocess.run(
-            ["docker", "stop", name],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False,
-        )
-        old = subprocess.run(
-            ["docker", "ps", "-a", "--filter", f"name={name}-",
-             "--format", "{{.Names}}"],
-            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
-            check=False,
-        )
-        for old_name in old.stdout.splitlines():
-            subprocess.run(
-                ["docker", "rm", old_name],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                check=False,
-            )
-        stale_name = f"{name}-{int(time.time())}"
-        subprocess.run(
-            ["docker", "rename", name, stale_name],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False,
-        )
+        else:
+            print(f"ralph: reusing proxy on port {port} "
+                  f"(outdated v={version}, current v={current})")
+        return port
 
     start_proxy(agent, port, dotfiles_dir)
 
     # Wait for health check
     for _ in range(10):
         time.sleep(0.5)
-        if proxy_health_check(port):
+        healthy, _ = proxy_health_check(port)
+        if healthy:
             return port
 
     print("ralph: proxy failed to become healthy", file=sys.stderr)
-    name = proxy_container_name(agent)
-    subprocess.run(["docker", "logs", "--tail", "20", name], check=False)
+    log = proxy_log_file(agent)
+    if os.path.isfile(log):
+        try:
+            with open(log) as f:
+                lines = f.readlines()
+            for line in lines[-20:]:
+                print(line, end="", file=sys.stderr)
+        except OSError:
+            pass
     stop_proxy(agent)
     sys.exit(1)
 
@@ -881,7 +849,8 @@ def selftest(agent, dotfiles_dir):
     sandbox_name = f"agent-loop-selftest-{agent}"
     sandbox = Sandbox(dotfiles_dir)
     checks = []
-    proxy_started = False
+    proxy_existed_before = proxy_health_check(port)[0]
+    proxy_running = False
     sandbox_created = False
 
     def report(name, passed, detail=""):
@@ -912,10 +881,10 @@ def selftest(agent, dotfiles_dir):
 
         # 2. Start proxy and verify health
         ensure_proxy(agent, port, dotfiles_dir)
-        proxy_started = True
-        healthy = proxy_health_check(port)
+        proxy_running = True
+        healthy, version = proxy_health_check(port)
         report("proxy health", healthy,
-               f"http://localhost:{port}/health" if healthy
+               f"http://localhost:{port}/health (v={version})" if healthy
                else "proxy not reachable after start")
         if not healthy:
             print("ralph: selftest aborted — proxy required for remaining checks")
@@ -1007,7 +976,7 @@ def selftest(agent, dotfiles_dir):
         if sandbox_created:
             print(f"ralph: cleaning up test sandbox {sandbox_name}...")
             Sandbox.remove_sandbox(sandbox_name)
-        if proxy_started:
+        if proxy_running and not proxy_existed_before:
             stop_proxy(agent)
 
     # 10. Report summary

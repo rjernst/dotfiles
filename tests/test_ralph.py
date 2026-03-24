@@ -683,14 +683,6 @@ class TestTokenRoundTrip:
 # Proxy lifecycle
 # ---------------------------------------------------------------------------
 
-class TestProxyContainerName:
-    def test_default_agent(self):
-        assert ralph.proxy_container_name("claude") == "agent-loop-proxy-claude"
-
-    def test_custom_agent(self):
-        assert ralph.proxy_container_name("codex") == "agent-loop-proxy-codex"
-
-
 class TestProxyPortForAgent:
     def test_claude_default(self):
         assert ralph.proxy_port_for_agent("claude") == 18080
@@ -701,78 +693,66 @@ class TestProxyPortForAgent:
 
 class TestProxyHealthCheck:
     @patch("ralph.urllib.request.urlopen")
-    def test_returns_true_on_200(self, mock_urlopen):
+    def test_returns_healthy_with_version(self, mock_urlopen):
         mock_resp = MagicMock()
         mock_resp.status = 200
+        mock_resp.read.return_value = b"agent-loop-proxy ok v=abc123def456"
         mock_urlopen.return_value = mock_resp
-        assert ralph.proxy_health_check(18080) is True
+        healthy, version = ralph.proxy_health_check(18080)
+        assert healthy is True
+        assert version == "abc123def456"
 
     @patch("ralph.urllib.request.urlopen")
-    def test_returns_false_on_non_200(self, mock_urlopen):
+    def test_returns_healthy_none_version_on_old_format(self, mock_urlopen):
+        mock_resp = MagicMock()
+        mock_resp.status = 200
+        mock_resp.read.return_value = b"agent-loop-proxy ok"
+        mock_urlopen.return_value = mock_resp
+        healthy, version = ralph.proxy_health_check(18080)
+        assert healthy is True
+        assert version is None
+
+    @patch("ralph.urllib.request.urlopen")
+    def test_returns_unhealthy_on_non_200(self, mock_urlopen):
         mock_resp = MagicMock()
         mock_resp.status = 500
         mock_urlopen.return_value = mock_resp
-        assert ralph.proxy_health_check(18080) is False
+        healthy, version = ralph.proxy_health_check(18080)
+        assert healthy is False
+        assert version is None
 
     @patch("ralph.urllib.request.urlopen", side_effect=Exception("connection refused"))
-    def test_returns_false_on_connection_error(self, mock_urlopen):
-        assert ralph.proxy_health_check(18080) is False
+    def test_returns_unhealthy_on_connection_error(self, mock_urlopen):
+        healthy, version = ralph.proxy_health_check(18080)
+        assert healthy is False
+        assert version is None
 
 
 class TestStartProxy:
-    @patch("ralph.compute_proxy_tag", return_value="agent-loop-proxy:vfake123")
+    @patch("builtins.open", MagicMock())
     @patch("ralph.subprocess.Popen")
-    @patch("ralph.subprocess.run")
     @patch("ralph.read_token_from_keychain")
     @patch("ralph.time.time", return_value=1700000000.0)
-    def test_constructs_correct_docker_run_command(self, mock_time, mock_read, mock_run, mock_popen, mock_tag):
+    def test_launches_python3_with_proxy_script(self, mock_time, mock_read, mock_popen):
         future_ms = 1700000000000 + 30 * 86400 * 1000
         mock_read.return_value = {"accessToken": "sk-test-token", "expiresAt": future_ms}
-        # Image inspect succeeds
-        mock_run.return_value = MagicMock(returncode=0)
-        # Popen mock with stdin
         mock_proc = MagicMock()
         mock_popen.return_value = mock_proc
 
         result = ralph.start_proxy("claude", 18080, "/fake/dotfiles")
-        assert result == "agent-loop-proxy-claude"
+        assert result is mock_proc
 
-        # Verify docker run call (via Popen, no -d flag)
+        # Verify python3 proxy.py command
         cmd = mock_popen.call_args[0][0]
-        assert cmd[:3] == ["docker", "run", "-i"]
-        assert "--rm" not in cmd
-        assert "-d" not in cmd
-        assert "--name" in cmd
-        name_idx = cmd.index("--name")
-        assert cmd[name_idx + 1] == "agent-loop-proxy-claude"
-        assert "-p" in cmd
-        p_idx = cmd.index("-p")
-        assert cmd[p_idx + 1] == "18080:18080"
-        assert cmd[-1].startswith("agent-loop-proxy:v")
+        assert cmd[0] == "python3"
+        assert cmd[1].endswith("proxy.py")
+        # Verify env vars
+        env = mock_popen.call_args[1]["env"]
+        assert env["LISTEN_PORT"] == "18080"
+        assert "PID_FILE" in env
         # Verify token piped via stdin
         mock_proc.stdin.write.assert_called_once_with(b"sk-test-token\n")
         mock_proc.stdin.close.assert_called_once()
-
-    @patch("ralph.compute_proxy_tag", return_value="agent-loop-proxy:vfake123")
-    @patch("ralph.subprocess.Popen")
-    @patch("ralph.subprocess.run")
-    @patch("ralph.read_token_from_keychain")
-    @patch("ralph.time.time", return_value=1700000000.0)
-    def test_builds_image_when_missing(self, mock_time, mock_read, mock_run, mock_popen, mock_tag):
-        future_ms = 1700000000000 + 30 * 86400 * 1000
-        mock_read.return_value = {"accessToken": "sk-test", "expiresAt": future_ms}
-        mock_run.side_effect = [
-            MagicMock(returncode=1),  # image inspect — not found
-            MagicMock(returncode=0),  # docker build
-        ]
-        mock_popen.return_value = MagicMock()
-
-        ralph.start_proxy("claude", 18080, "/fake/dotfiles")
-
-        build_call = mock_run.call_args_list[1]
-        cmd = build_call[0][0]
-        assert cmd[0:2] == ["docker", "build"]
-        assert any(c.startswith("agent-loop-proxy:v") for c in cmd)
 
     @patch("ralph.read_token_from_keychain", return_value=None)
     def test_exits_when_no_token(self, mock_read):
@@ -789,91 +769,67 @@ class TestStartProxy:
             ralph.start_proxy("claude", 18080, "/fake/dotfiles")
         assert exc_info.value.code == 1
 
-    @patch("ralph.compute_proxy_tag", return_value="agent-loop-proxy:vfake123")
-    @patch("ralph.subprocess.Popen")
-    @patch("ralph.subprocess.run")
+    @patch("builtins.open", MagicMock())
+    @patch("ralph.subprocess.Popen", side_effect=OSError("python3 not found"))
     @patch("ralph.read_token_from_keychain")
     @patch("ralph.time.time", return_value=1700000000.0)
-    def test_popen_failure_raises(self, mock_time, mock_read, mock_run, mock_popen, mock_tag):
+    def test_popen_failure_raises(self, mock_time, mock_read, mock_popen):
         future_ms = 1700000000000 + 30 * 86400 * 1000
         mock_read.return_value = {"accessToken": "sk-test", "expiresAt": future_ms}
-        mock_run.return_value = MagicMock(returncode=0)  # image inspect
-        mock_popen.side_effect = OSError("docker not available")
         with pytest.raises(OSError):
             ralph.start_proxy("claude", 18080, "/fake/dotfiles")
 
 
 class TestStopProxy:
-    @patch("ralph.subprocess.run")
-    def test_calls_docker_stop(self, mock_run):
+    @patch("ralph.os.kill")
+    @patch("builtins.open", MagicMock(return_value=io.StringIO("12345")))
+    def test_sends_sigterm_to_pid(self, mock_kill):
         ralph.stop_proxy("claude")
-        mock_run.assert_called_once_with(
-            ["docker", "stop", "agent-loop-proxy-claude"],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False,
-        )
+        mock_kill.assert_called_once_with(12345, ralph.signal.SIGTERM)
 
-    @patch("ralph.subprocess.run")
-    def test_uses_correct_agent_name(self, mock_run):
-        ralph.stop_proxy("codex")
-        cmd = mock_run.call_args[0][0]
-        assert cmd[-1] == "agent-loop-proxy-codex"
+    def test_no_error_when_pid_file_missing(self):
+        # Should silently handle missing PID file
+        ralph.stop_proxy("nonexistent-agent-999")
+
+    @patch("ralph.os.kill", side_effect=ProcessLookupError)
+    @patch("builtins.open", MagicMock(return_value=io.StringIO("99999")))
+    def test_no_error_when_process_gone(self, mock_kill):
+        # Should silently handle already-dead process
+        ralph.stop_proxy("claude")
 
 
 class TestEnsureProxy:
-    @patch("ralph.compute_proxy_tag", return_value="agent-loop-proxy:vfake123")
-    @patch("ralph.subprocess.run")
-    @patch("ralph.proxy_health_check", return_value=True)
-    def test_reuses_healthy_proxy(self, mock_health, mock_run, mock_tag):
-        # docker inspect returns matching image tag
-        mock_run.return_value = MagicMock(returncode=0, stdout="agent-loop-proxy:vfake123\n")
+    @patch("ralph.compute_proxy_version", return_value="abc123def456")
+    @patch("ralph.proxy_health_check", return_value=(True, "abc123def456"))
+    def test_reuses_healthy_current_proxy(self, mock_health, mock_version):
         result = ralph.ensure_proxy("claude", 18080, "/fake/dotfiles")
         assert result == 18080
         mock_health.assert_called_once_with(18080)
 
-    @patch("ralph.proxy_health_check", side_effect=[False] + [True])
-    @patch("ralph.start_proxy")
-    @patch("ralph.subprocess.run")
-    @patch("ralph.time.sleep")
-    def test_starts_new_when_none_running(self, mock_sleep, mock_run, mock_start, mock_health):
-        # docker inspect fails (no container exists)
-        mock_run.return_value = MagicMock(returncode=1)
+    @patch("ralph.compute_proxy_version", return_value="newversion123")
+    @patch("ralph.proxy_health_check", return_value=(True, "oldversion456"))
+    def test_reuses_outdated_proxy_with_warning(self, mock_health, mock_version, capsys):
+        result = ralph.ensure_proxy("claude", 18080, "/fake/dotfiles")
+        assert result == 18080
+        captured = capsys.readouterr()
+        assert "outdated" in captured.out
 
+    @patch("ralph.proxy_health_check", side_effect=[(False, None)] + [(True, "abc123")])
+    @patch("ralph.start_proxy")
+    @patch("ralph.time.sleep")
+    def test_starts_new_when_none_running(self, mock_sleep, mock_start, mock_health):
         result = ralph.ensure_proxy("claude", 18080, "/fake/dotfiles")
         assert result == 18080
         mock_start.assert_called_once_with("claude", 18080, "/fake/dotfiles")
 
-    @patch("ralph.proxy_health_check", side_effect=[False] + [True])
-    @patch("ralph.start_proxy")
-    @patch("ralph.subprocess.run")
-    @patch("ralph.time.sleep")
-    @patch("ralph.time.time", return_value=1700000000.0)
-    def test_stops_stale_container_before_starting(self, mock_time, mock_sleep, mock_run, mock_start, mock_health):
-        # docker inspect succeeds (stale container exists)
-        mock_run.side_effect = [
-            MagicMock(returncode=0, stdout="true\n"),  # inspect
-            MagicMock(returncode=0),  # stop
-            MagicMock(returncode=0, stdout=""),  # ps (no old renamed containers)
-            MagicMock(returncode=0),  # rename
-        ]
-
-        ralph.ensure_proxy("claude", 18080, "/fake/dotfiles")
-
-        # Verify stop and rename were called (no rm)
-        stop_call = mock_run.call_args_list[1]
-        assert stop_call[0][0] == ["docker", "stop", "agent-loop-proxy-claude"]
-        rename_call = mock_run.call_args_list[3]
-        assert rename_call[0][0] == ["docker", "rename", "agent-loop-proxy-claude",
-                                     "agent-loop-proxy-claude-1700000000"]
-        mock_start.assert_called_once()
-
+    @patch("ralph.os.path.isfile", return_value=False)
     @patch("ralph.stop_proxy")
-    @patch("ralph.proxy_health_check", return_value=False)
+    @patch("ralph.proxy_health_check", return_value=(False, None))
     @patch("ralph.start_proxy")
-    @patch("ralph.subprocess.run")
     @patch("ralph.time.sleep")
-    def test_exits_when_proxy_fails_to_become_healthy(self, mock_sleep, mock_run, mock_start, mock_health, mock_stop):
-        mock_run.return_value = MagicMock(returncode=1)  # no stale container
-
+    def test_exits_when_proxy_fails_to_become_healthy(self, mock_sleep, mock_start,
+                                                       mock_health, mock_stop,
+                                                       mock_isfile):
         with pytest.raises(SystemExit) as exc_info:
             ralph.ensure_proxy("claude", 18080, "/fake/dotfiles")
         assert exc_info.value.code == 1
@@ -1561,24 +1517,22 @@ class TestSandboxPreflightCheck:
         return fn
 
     @patch("ralph.subprocess.run")
-    @patch("ralph.urllib.request.urlopen")
+    @patch("ralph.proxy_health_check", return_value=(True, "abc123"))
     @patch("ralph.read_token_from_keychain")
     @patch("ralph.time.time", return_value=1700000000.0)
-    def test_all_checks_pass(self, mock_time, mock_read, mock_urlopen, mock_run):
+    def test_all_checks_pass(self, mock_time, mock_read, mock_health, mock_run):
         future_ms = 1700000000000 + 30 * 86400 * 1000
         mock_read.return_value = {"accessToken": "sk-test", "expiresAt": future_ms}
-        mock_urlopen.return_value = MagicMock(status=200)
         mock_run.side_effect = self._run_side_effect(echo_rc=0, curl_rc=28)
         sb = ralph.Sandbox("/dotfiles")
         failures = sb.preflight_check(self.SANDBOX_NAME, "claude", 8080)
         assert failures == []
 
     @patch("ralph.subprocess.run")
-    @patch("ralph.urllib.request.urlopen")
+    @patch("ralph.proxy_health_check", return_value=(True, "abc123"))
     @patch("ralph.read_token_from_keychain", return_value=None)
     @patch("ralph.time.time", return_value=1700000000.0)
-    def test_token_missing_returns_error(self, mock_time, mock_read, mock_urlopen, mock_run):
-        mock_urlopen.return_value = MagicMock(status=200)
+    def test_token_missing_returns_error(self, mock_time, mock_read, mock_health, mock_run):
         mock_run.side_effect = self._run_side_effect(echo_rc=0, curl_rc=28)
         sb = ralph.Sandbox("/dotfiles")
         failures = sb.preflight_check(self.SANDBOX_NAME, "claude", 8080)
@@ -1587,13 +1541,12 @@ class TestSandboxPreflightCheck:
         assert "ralph store-token" in failures[0]
 
     @patch("ralph.subprocess.run")
-    @patch("ralph.urllib.request.urlopen")
+    @patch("ralph.proxy_health_check", return_value=(True, "abc123"))
     @patch("ralph.read_token_from_keychain")
     @patch("ralph.time.time", return_value=1700000000.0)
-    def test_token_expired_returns_error(self, mock_time, mock_read, mock_urlopen, mock_run):
+    def test_token_expired_returns_error(self, mock_time, mock_read, mock_health, mock_run):
         past_ms = 1700000000000 - 86400 * 1000
         mock_read.return_value = {"accessToken": "sk-test", "expiresAt": past_ms}
-        mock_urlopen.return_value = MagicMock(status=200)
         mock_run.side_effect = self._run_side_effect(echo_rc=0, curl_rc=28)
         sb = ralph.Sandbox("/dotfiles")
         failures = sb.preflight_check(self.SANDBOX_NAME, "claude", 8080)
@@ -1602,13 +1555,12 @@ class TestSandboxPreflightCheck:
         assert "ralph store-token" in failures[0]
 
     @patch("ralph.subprocess.run")
-    @patch("ralph.urllib.request.urlopen")
+    @patch("ralph.proxy_health_check", return_value=(False, None))
     @patch("ralph.read_token_from_keychain")
     @patch("ralph.time.time", return_value=1700000000.0)
-    def test_proxy_down_returns_error(self, mock_time, mock_read, mock_urlopen, mock_run):
+    def test_proxy_down_returns_error(self, mock_time, mock_read, mock_health, mock_run):
         future_ms = 1700000000000 + 30 * 86400 * 1000
         mock_read.return_value = {"accessToken": "sk-test", "expiresAt": future_ms}
-        mock_urlopen.side_effect = Exception("Connection refused")
         mock_run.side_effect = self._run_side_effect(echo_rc=0, curl_rc=28)
         sb = ralph.Sandbox("/dotfiles")
         failures = sb.preflight_check(self.SANDBOX_NAME, "claude", 8080)
@@ -1617,13 +1569,12 @@ class TestSandboxPreflightCheck:
         assert "start the credential proxy" in failures[0]
 
     @patch("ralph.subprocess.run")
-    @patch("ralph.urllib.request.urlopen")
+    @patch("ralph.proxy_health_check", return_value=(True, "abc123"))
     @patch("ralph.read_token_from_keychain")
     @patch("ralph.time.time", return_value=1700000000.0)
-    def test_sandbox_unresponsive_returns_error(self, mock_time, mock_read, mock_urlopen, mock_run):
+    def test_sandbox_unresponsive_returns_error(self, mock_time, mock_read, mock_health, mock_run):
         future_ms = 1700000000000 + 30 * 86400 * 1000
         mock_read.return_value = {"accessToken": "sk-test", "expiresAt": future_ms}
-        mock_urlopen.return_value = MagicMock(status=200)
         mock_run.side_effect = self._run_side_effect(echo_rc=1, curl_rc=28)
         sb = ralph.Sandbox("/dotfiles")
         failures = sb.preflight_check(self.SANDBOX_NAME, "claude", 8080)
@@ -1632,14 +1583,13 @@ class TestSandboxPreflightCheck:
         assert f"docker sandbox rm {self.SANDBOX_NAME}" in failures[0]
 
     @patch("ralph.subprocess.run")
-    @patch("ralph.urllib.request.urlopen")
+    @patch("ralph.proxy_health_check", return_value=(True, "abc123"))
     @patch("ralph.read_token_from_keychain")
     @patch("ralph.time.time", return_value=1700000000.0)
-    def test_sandbox_unresponsive_skips_network_check(self, mock_time, mock_read, mock_urlopen, mock_run):
+    def test_sandbox_unresponsive_skips_network_check(self, mock_time, mock_read, mock_health, mock_run):
         """When sandbox is unresponsive, network policy check is skipped."""
         future_ms = 1700000000000 + 30 * 86400 * 1000
         mock_read.return_value = {"accessToken": "sk-test", "expiresAt": future_ms}
-        mock_urlopen.return_value = MagicMock(status=200)
         mock_run.side_effect = self._run_side_effect(echo_rc=1, curl_rc=0)
         sb = ralph.Sandbox("/dotfiles")
         failures = sb.preflight_check(self.SANDBOX_NAME, "claude", 8080)
@@ -1651,13 +1601,12 @@ class TestSandboxPreflightCheck:
         assert len(curl_calls) == 0
 
     @patch("ralph.subprocess.run")
-    @patch("ralph.urllib.request.urlopen")
+    @patch("ralph.proxy_health_check", return_value=(True, "abc123"))
     @patch("ralph.read_token_from_keychain")
     @patch("ralph.time.time", return_value=1700000000.0)
-    def test_network_policy_not_applied_returns_error(self, mock_time, mock_read, mock_urlopen, mock_run):
+    def test_network_policy_not_applied_returns_error(self, mock_time, mock_read, mock_health, mock_run):
         future_ms = 1700000000000 + 30 * 86400 * 1000
         mock_read.return_value = {"accessToken": "sk-test", "expiresAt": future_ms}
-        mock_urlopen.return_value = MagicMock(status=200)
         # echo succeeds, curl also succeeds (google.com reachable = bad)
         mock_run.side_effect = self._run_side_effect(echo_rc=0, curl_rc=0)
         sb = ralph.Sandbox("/dotfiles")
@@ -1667,10 +1616,10 @@ class TestSandboxPreflightCheck:
         assert "outbound requests should be blocked" in failures[0]
 
     @patch("ralph.subprocess.run")
-    @patch("ralph.urllib.request.urlopen", side_effect=Exception("refused"))
+    @patch("ralph.proxy_health_check", return_value=(False, None))
     @patch("ralph.read_token_from_keychain", return_value=None)
     @patch("ralph.time.time", return_value=1700000000.0)
-    def test_multiple_failures_collected(self, mock_time, mock_read, mock_urlopen, mock_run):
+    def test_multiple_failures_collected(self, mock_time, mock_read, mock_health, mock_run):
         """All failures are collected, not just the first one."""
         mock_run.side_effect = self._run_side_effect(echo_rc=1, curl_rc=28)
         sb = ralph.Sandbox("/dotfiles")
@@ -2320,13 +2269,15 @@ class TestSelftest:
 
     FUTURE_MS = 1700000000000 + 30 * 86400 * 1000  # 30 days from now
 
+    # proxy_health_check returns (False, None) for the initial
+    # proxy_existed_before check, then (True, "v123") after ensure_proxy.
     @patch("ralph.Sandbox.remove_sandbox")
     @patch("ralph.stop_proxy")
     @patch("ralph.subprocess.run")
     @patch("ralph.Sandbox.apply_network_policy")
     @patch("ralph.Sandbox._docker_sandbox_create")
     @patch("ralph.Sandbox.ensure_image", return_value="agent-loop-sandbox-claude:vabc")
-    @patch("ralph.proxy_health_check", return_value=True)
+    @patch("ralph.proxy_health_check", side_effect=[(False, None), (True, "abc123")])
     @patch("ralph.ensure_proxy")
     @patch("ralph.read_token_from_keychain")
     @patch("ralph.time.time", return_value=1700000000.0)
@@ -2354,19 +2305,53 @@ class TestSelftest:
         assert "PASS: claude auth via proxy" in captured.out
         assert "PASS: network isolation" in captured.out
         assert "all 8 checks passed" in captured.out
+        # Proxy was not running before selftest, so it should be stopped
+        mock_stop.assert_called_once_with("claude")
 
+    @patch("ralph.Sandbox.remove_sandbox")
+    @patch("ralph.stop_proxy")
+    @patch("ralph.subprocess.run")
+    @patch("ralph.Sandbox.apply_network_policy")
+    @patch("ralph.Sandbox._docker_sandbox_create")
+    @patch("ralph.Sandbox.ensure_image", return_value="agent-loop-sandbox-claude:vabc")
+    @patch("ralph.proxy_health_check", return_value=(True, "abc123"))
+    @patch("ralph.ensure_proxy")
+    @patch("ralph.read_token_from_keychain")
+    @patch("ralph.time.time", return_value=1700000000.0)
+    def test_does_not_stop_preexisting_proxy(self, mock_time, mock_read,
+                                              mock_ensure_proxy, mock_health,
+                                              mock_img, mock_create,
+                                              mock_policy, mock_run,
+                                              mock_stop, mock_remove, capsys):
+        """When proxy was already running before selftest, don't stop it."""
+        mock_read.return_value = {"accessToken": "sk-test", "expiresAt": self.FUTURE_MS}
+        mock_run.side_effect = [
+            MagicMock(returncode=0, stdout="ok", stderr=""),
+            MagicMock(returncode=0, stdout="ok", stderr=""),
+            MagicMock(returncode=28, stdout="", stderr=""),
+        ]
+
+        rc = ralph.selftest("claude", "/fake/dotfiles")
+        assert rc == 0
+        # Proxy existed before, so stop_proxy should NOT be called
+        mock_stop.assert_not_called()
+
+    @patch("ralph.proxy_health_check", return_value=(False, None))
     @patch("ralph.read_token_from_keychain", return_value=None)
     @patch("ralph.time.time", return_value=1700000000.0)
-    def test_missing_token_aborts_early(self, mock_time, mock_read, capsys):
+    def test_missing_token_aborts_early(self, mock_time, mock_read,
+                                        mock_health, capsys):
         rc = ralph.selftest("claude", "/fake/dotfiles")
         assert rc == 1
         captured = capsys.readouterr()
         assert "FAIL: check token" in captured.out
         assert "selftest aborted" in captured.out
 
+    @patch("ralph.proxy_health_check", return_value=(False, None))
     @patch("ralph.read_token_from_keychain")
     @patch("ralph.time.time", return_value=1700000000.0)
-    def test_expired_token_aborts_early(self, mock_time, mock_read, capsys):
+    def test_expired_token_aborts_early(self, mock_time, mock_read,
+                                        mock_health, capsys):
         past_ms = 1700000000000 - 86400 * 1000
         mock_read.return_value = {"accessToken": "sk-old", "expiresAt": past_ms}
         rc = ralph.selftest("claude", "/fake/dotfiles")
@@ -2381,7 +2366,7 @@ class TestSelftest:
     @patch("ralph.Sandbox.apply_network_policy")
     @patch("ralph.Sandbox._docker_sandbox_create")
     @patch("ralph.Sandbox.ensure_image", return_value="agent-loop-sandbox-claude:vabc")
-    @patch("ralph.proxy_health_check", return_value=True)
+    @patch("ralph.proxy_health_check", side_effect=[(False, None), (True, "abc123")])
     @patch("ralph.ensure_proxy")
     @patch("ralph.read_token_from_keychain")
     @patch("ralph.time.time", return_value=1700000000.0)
@@ -2409,7 +2394,7 @@ class TestSelftest:
     @patch("ralph.Sandbox.apply_network_policy")
     @patch("ralph.Sandbox._docker_sandbox_create")
     @patch("ralph.Sandbox.ensure_image", return_value="agent-loop-sandbox-claude:vabc")
-    @patch("ralph.proxy_health_check", return_value=True)
+    @patch("ralph.proxy_health_check", side_effect=[(False, None), (True, "abc123")])
     @patch("ralph.ensure_proxy")
     @patch("ralph.read_token_from_keychain")
     @patch("ralph.time.time", return_value=1700000000.0)
@@ -2436,7 +2421,7 @@ class TestSelftest:
     @patch("ralph.Sandbox.remove_sandbox")
     @patch("ralph.stop_proxy")
     @patch("ralph.Sandbox.ensure_image", side_effect=RuntimeError("build failed"))
-    @patch("ralph.proxy_health_check", return_value=True)
+    @patch("ralph.proxy_health_check", side_effect=[(False, None), (True, "abc123")])
     @patch("ralph.ensure_proxy")
     @patch("ralph.read_token_from_keychain")
     @patch("ralph.time.time", return_value=1700000000.0)
@@ -2449,7 +2434,7 @@ class TestSelftest:
         captured = capsys.readouterr()
         assert "FAIL: build image" in captured.out
         assert "selftest aborted" in captured.out
-        # Proxy should still be stopped (was started)
+        # Proxy should still be stopped (was started, didn't exist before)
         mock_stop.assert_called_once_with("claude")
 
     @patch("ralph.Sandbox.remove_sandbox")
@@ -2458,7 +2443,7 @@ class TestSelftest:
     @patch("ralph.Sandbox._docker_sandbox_create",
            side_effect=subprocess.CalledProcessError(1, "docker"))
     @patch("ralph.Sandbox.ensure_image", return_value="agent-loop-sandbox-claude:vabc")
-    @patch("ralph.proxy_health_check", return_value=True)
+    @patch("ralph.proxy_health_check", side_effect=[(False, None), (True, "abc123")])
     @patch("ralph.ensure_proxy")
     @patch("ralph.read_token_from_keychain")
     @patch("ralph.time.time", return_value=1700000000.0)
@@ -2472,9 +2457,7 @@ class TestSelftest:
         captured = capsys.readouterr()
         assert "FAIL: create sandbox" in captured.out
         assert "selftest aborted" in captured.out
-        # Sandbox was never created, so remove_sandbox for cleanup shouldn't
-        # be called (only the pre-cleanup remove_sandbox at the start was called)
-        # But proxy should be stopped
+        # Proxy should be stopped (didn't exist before)
         mock_stop.assert_called_once_with("claude")
 
     @patch("ralph.selftest", return_value=0)
@@ -2511,7 +2494,7 @@ class TestSelftest:
     @patch("ralph.Sandbox.find_project_config",
            return_value=("dependencies", "/proj/.agent-loop/dependencies"))
     @patch("ralph.Sandbox.ensure_image", return_value="agent-loop-sandbox-claude:vabc")
-    @patch("ralph.proxy_health_check", return_value=True)
+    @patch("ralph.proxy_health_check", side_effect=[(False, None), (True, "abc123")])
     @patch("ralph.ensure_proxy")
     @patch("ralph.read_token_from_keychain")
     @patch("ralph.time.time", return_value=1700000000.0)
@@ -2544,7 +2527,7 @@ class TestSelftest:
     @patch("ralph.Sandbox.find_project_config",
            return_value=("dockerfile", "/proj/.agent-loop/Dockerfile.sandbox"))
     @patch("ralph.Sandbox.ensure_image", return_value="agent-loop-sandbox-claude:vabc")
-    @patch("ralph.proxy_health_check", return_value=True)
+    @patch("ralph.proxy_health_check", side_effect=[(False, None), (True, "abc123")])
     @patch("ralph.ensure_proxy")
     @patch("ralph.read_token_from_keychain")
     @patch("ralph.time.time", return_value=1700000000.0)
@@ -2573,7 +2556,7 @@ class TestSelftest:
     @patch("ralph.Sandbox._docker_sandbox_create")
     @patch("ralph.Sandbox.find_project_config", return_value=None)
     @patch("ralph.Sandbox.ensure_image", return_value="agent-loop-sandbox-claude:vabc")
-    @patch("ralph.proxy_health_check", return_value=True)
+    @patch("ralph.proxy_health_check", side_effect=[(False, None), (True, "abc123")])
     @patch("ralph.ensure_proxy")
     @patch("ralph.read_token_from_keychain")
     @patch("ralph.time.time", return_value=1700000000.0)
@@ -2605,7 +2588,7 @@ class TestSelftest:
     @patch("ralph.Sandbox.find_project_config",
            return_value=("dependencies", "/proj/.agent-loop/dependencies"))
     @patch("ralph.Sandbox.ensure_image", return_value="agent-loop-sandbox-claude:vabc")
-    @patch("ralph.proxy_health_check", return_value=True)
+    @patch("ralph.proxy_health_check", side_effect=[(False, None), (True, "abc123")])
     @patch("ralph.ensure_proxy")
     @patch("ralph.read_token_from_keychain")
     @patch("ralph.time.time", return_value=1700000000.0)
@@ -2628,41 +2611,6 @@ class TestSelftest:
         assert "project build failed" in captured.out
         assert "selftest aborted" in captured.out
         mock_create.assert_not_called()
-
-
-# ---------------------------------------------------------------------------
-# ensure_proxy — docker wait timeout
-# ---------------------------------------------------------------------------
-
-class TestEnsureProxyStaleCleanup:
-    @patch("ralph.time.time", return_value=1700000000.0)
-    @patch("ralph.proxy_health_check", side_effect=[False] + [True])
-    @patch("ralph.start_proxy")
-    @patch("ralph.subprocess.run")
-    @patch("ralph.time.sleep")
-    def test_renames_stale_container_and_cleans_old(self, mock_sleep, mock_run,
-                                                     mock_start, mock_health,
-                                                     mock_time):
-        """Stale proxy is stopped, old renamed containers removed, then renamed."""
-        mock_run.side_effect = [
-            MagicMock(returncode=0, stdout="true\n"),   # inspect (stale exists)
-            MagicMock(returncode=0),                     # stop
-            MagicMock(returncode=0,                      # ps (one old renamed)
-                      stdout="agent-loop-proxy-claude-1699999000\n"),
-            MagicMock(returncode=0),                     # rm old renamed
-            MagicMock(returncode=0),                     # rename
-        ]
-
-        result = ralph.ensure_proxy("claude", 18080, "/fake/dotfiles")
-        assert result == 18080
-        # Old renamed container was cleaned up
-        rm_call = mock_run.call_args_list[3]
-        assert rm_call[0][0] == ["docker", "rm", "agent-loop-proxy-claude-1699999000"]
-        # Current container was renamed
-        rename_call = mock_run.call_args_list[4]
-        assert rename_call[0][0] == ["docker", "rename", "agent-loop-proxy-claude",
-                                     "agent-loop-proxy-claude-1700000000"]
-        mock_start.assert_called_once_with("claude", 18080, "/fake/dotfiles")
 
 
 # ---------------------------------------------------------------------------

@@ -11,8 +11,10 @@ Environment variables:
   IDLE_TIMEOUT  — seconds of inactivity before self-shutdown (default: 300, 0=disabled)
 """
 
+import hashlib
 import http.server
 import os
+import signal
 import socket
 import sys
 import threading
@@ -21,6 +23,13 @@ import urllib.request
 
 # Headers that should not be copied from the client request to upstream.
 _STRIP_HEADERS = frozenset(["host", "content-length", "transfer-encoding"])
+
+
+def compute_version_hash():
+    """Hash this script's source and return a 12-char hex version string."""
+    path = os.path.realpath(__file__)
+    with open(path, "rb") as f:
+        return hashlib.sha256(f.read()).hexdigest()[:12]
 
 
 def read_token():
@@ -72,6 +81,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
     real_token = None
     target = None
     idle_shutdown = None
+    version_hash = None
 
     # Suppress default stderr request logging — we do our own.
     def log_message(self, fmt, *args):
@@ -83,7 +93,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         if self.idle_shutdown:
             self.idle_shutdown.reset()
         if self.path == "/health":
-            body = b"agent-loop-proxy ok"
+            body = f"agent-loop-proxy ok v={self.version_hash}".encode()
             self.send_response(200)
             self.send_header("Content-Type", "text/plain")
             self.send_header("Content-Length", str(len(body)))
@@ -168,20 +178,37 @@ def main():
     port = int(os.environ.get("LISTEN_PORT", "18080"))
     target = os.environ.get("TARGET", "https://api.anthropic.com")
     idle_timeout = int(os.environ.get("IDLE_TIMEOUT", "300"))
+    pid_file = os.environ.get("PID_FILE", "")
 
+    version = compute_version_hash()
     ProxyHandler.real_token = token
     ProxyHandler.target = target
+    ProxyHandler.version_hash = version
 
     server = DualStackHTTPServer(("::", port), ProxyHandler)
+
+    # Write PID file after port bind succeeds (port bind is the mutex).
+    if pid_file:
+        with open(pid_file, "w") as f:
+            f.write(str(os.getpid()))
+
+    def _cleanup_and_exit(signum, frame):
+        """Graceful shutdown on SIGTERM."""
+        print("proxy: received SIGTERM, shutting down", file=sys.stderr)
+        server.shutdown()
+
+    signal.signal(signal.SIGTERM, _cleanup_and_exit)
 
     if idle_timeout > 0:
         idle = IdleShutdown(idle_timeout, server)
         ProxyHandler.idle_shutdown = idle
         idle.reset()
-        print(f"proxy: listening on :{port}, target={target}, idle_timeout={idle_timeout}s",
+        print(f"proxy: listening on :{port}, target={target}, "
+              f"idle_timeout={idle_timeout}s, v={version}",
               file=sys.stderr)
     else:
-        print(f"proxy: listening on :{port}, target={target}", file=sys.stderr)
+        print(f"proxy: listening on :{port}, target={target}, v={version}",
+              file=sys.stderr)
 
     try:
         server.serve_forever()
@@ -189,6 +216,11 @@ def main():
         pass
     finally:
         server.server_close()
+        if pid_file:
+            try:
+                os.unlink(pid_file)
+            except OSError:
+                pass
 
 
 if __name__ == "__main__":

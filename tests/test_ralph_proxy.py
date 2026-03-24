@@ -4,6 +4,7 @@ import http.client
 import http.server
 import io
 import os
+import re
 import sys
 import threading
 import urllib.error
@@ -53,10 +54,11 @@ class TestReadToken:
 # patches only affect the proxy's internal upstream calls.
 # ---------------------------------------------------------------------------
 
-def _start_proxy_server(token, target):
+def _start_proxy_server(token, target, version_hash="testhash1234"):
     """Start a proxy server on an ephemeral port and return (server, port)."""
     proxy.ProxyHandler.real_token = token
     proxy.ProxyHandler.target = target
+    proxy.ProxyHandler.version_hash = version_hash
 
     server = http.server.HTTPServer(("127.0.0.1", 0), proxy.ProxyHandler)
     port = server.server_address[1]
@@ -88,13 +90,24 @@ class _FakeResponse:
 # Health endpoint
 # ---------------------------------------------------------------------------
 
+class TestVersionHash:
+    def test_returns_12_char_hex(self):
+        h = proxy.compute_version_hash()
+        assert len(h) == 12
+        assert re.fullmatch(r'[a-f0-9]{12}', h)
+
+    def test_deterministic(self):
+        assert proxy.compute_version_hash() == proxy.compute_version_hash()
+
+
 class TestHealthEndpoint:
-    def test_returns_200_with_body(self):
-        server, port = _start_proxy_server("test-token", "http://unused")
+    def test_returns_200_with_version(self):
+        server, port = _start_proxy_server("test-token", "http://unused",
+                                           version_hash="abc123def456")
         try:
             resp, data = _http_request(port, "GET", "/health")
             assert resp.status == 200
-            assert data == b"agent-loop-proxy ok"
+            assert data == b"agent-loop-proxy ok v=abc123def456"
         finally:
             server.shutdown()
 
