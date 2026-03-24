@@ -413,9 +413,14 @@ class Sandbox:
         Docker sandbox copies the workspace into an independent git repo,
         so commits must be extracted and replayed onto the host.
         """
+        # When head_before is empty (first commit in sandbox), use --root
+        if head_before:
+            range_args = [f"{head_before}..{head_after}"]
+        else:
+            range_args = ["--root", head_after]
         patch_proc = subprocess.run(
             ["docker", "sandbox", "exec", sandbox_name,
-             "git", "format-patch", "--stdout", f"{head_before}..{head_after}"],
+             "git", "format-patch", "--stdout"] + range_args,
             stdout=subprocess.PIPE, text=True, check=False,
         )
         if patch_proc.returncode != 0 or not patch_proc.stdout:
@@ -1693,7 +1698,7 @@ def process_issue(issue_number, git, sandbox, gh, agent, push, model,
             # Record HEAD before — must check inside sandbox because docker
             # sandbox copies the worktree into /home/agent/workspace with its
             # own .git; commits there are invisible to the host
-            head_before = sandbox.exec_output(sandbox_name, "git", "rev-parse", "HEAD") or "none"
+            head_before = sandbox.exec_output(sandbox_name, "git", "rev-parse", "HEAD")
 
             # Run iteration
             print(f"ralph: starting iteration (sandbox={sandbox_name}, issue=#{issue_number}, model={model})")
@@ -1706,7 +1711,7 @@ def process_issue(issue_number, git, sandbox, gh, agent, push, model,
                 return 1
 
             # Check if work was done
-            head_after = sandbox.exec_output(sandbox_name, "git", "rev-parse", "HEAD") or "none"
+            head_after = sandbox.exec_output(sandbox_name, "git", "rev-parse", "HEAD")
 
             if head_before == head_after:
                 print(f"ralph: no commit made, marking issue #{issue_number} done")
@@ -1717,7 +1722,13 @@ def process_issue(issue_number, git, sandbox, gh, agent, push, model,
                 break
 
             # Sync commits from sandbox to host worktree
-            sandbox.sync_to_host(sandbox_name, head_before, head_after, work_dir)
+            if not sandbox.sync_to_host(sandbox_name, head_before, head_after, work_dir):
+                print(f"ralph: sync failed, marking issue #{issue_number} needs-attention",
+                      file=sys.stderr)
+                gh.issue_edit(issue_number, repo,
+                              remove_label="status:in-progress",
+                              add_label="status:needs-attention")
+                return 1
 
             # Update issue body from spec
             gh.issue_edit(issue_number, repo, body=body)

@@ -1834,6 +1834,37 @@ def _mock_git_for_worktree(*, remotes="origin", porcelain="",
     return git
 
 
+class TestSandboxSyncToHost:
+    @patch("ralph.subprocess.run")
+    def test_uses_range_when_head_before_present(self, mock_run):
+        mock_run.side_effect = [
+            MagicMock(returncode=0, stdout="patch content"),  # format-patch
+            MagicMock(returncode=0),                           # git am
+        ]
+        result = ralph.Sandbox.sync_to_host("sandbox", "abc123", "def456", "/work")
+        assert result is True
+        cmd = mock_run.call_args_list[0][0][0]
+        assert "abc123..def456" in cmd
+
+    @patch("ralph.subprocess.run")
+    def test_uses_root_when_head_before_empty(self, mock_run):
+        mock_run.side_effect = [
+            MagicMock(returncode=0, stdout="patch content"),  # format-patch
+            MagicMock(returncode=0),                           # git am
+        ]
+        result = ralph.Sandbox.sync_to_host("sandbox", "", "def456", "/work")
+        assert result is True
+        cmd = mock_run.call_args_list[0][0][0]
+        assert "--root" in cmd
+        assert "def456" in cmd
+
+    @patch("ralph.subprocess.run")
+    def test_returns_false_on_format_patch_failure(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=1, stdout="")
+        result = ralph.Sandbox.sync_to_host("sandbox", "abc", "def", "/work")
+        assert result is False
+
+
 class TestEnsureWorktree:
     def test_returns_existing_worktree(self):
         """If a worktree already exists for the branch, return its path."""
@@ -2120,6 +2151,32 @@ class TestProcessIssueSandbox:
         sandbox.ensure_sandbox.return_value = "agent-loop-claude-my-branch"
         sandbox.run_iteration.return_value = (1, "spec")
         sandbox.exec_output.return_value = "abc123"
+
+        gh = MagicMock()
+        gh.issue_view_title.return_value = "[my-branch] Test Issue"
+        gh.issue_view_body.return_value = "---\nbranch: my-branch\n---\nSpec"
+
+        result = ralph.process_issue(
+            42, git, sandbox, gh, "claude", False, "sonnet",
+            "user", "user@test.com", 18080)
+        assert result == 1
+
+        gh.issue_edit.assert_any_call(
+            42, "owner/repo",
+            remove_label="status:in-progress",
+            add_label="status:needs-attention")
+
+    @patch("ralph.ensure_worktree", return_value="/work/my-branch")
+    @patch("ralph.resolve_repo", return_value="owner/repo")
+    def test_sync_failure_marks_needs_attention(self, mock_repo, mock_wt):
+        git = MagicMock()
+
+        sandbox = MagicMock()
+        sandbox.ensure_sandbox.return_value = "agent-loop-claude-my-branch"
+        sandbox.run_iteration.return_value = (0, "spec")
+        # HEAD changes (work was done) but sync fails
+        sandbox.exec_output.side_effect = ["abc123", "def456"]
+        sandbox.sync_to_host.return_value = False
 
         gh = MagicMock()
         gh.issue_view_title.return_value = "[my-branch] Test Issue"
