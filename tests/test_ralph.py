@@ -798,6 +798,39 @@ class TestStopProxy:
         ralph.stop_proxy("claude")
 
 
+class TestProxyKeepalive:
+    @patch("ralph.urllib.request.urlopen")
+    def test_pings_health_endpoint(self, mock_urlopen):
+        stop = ralph.start_proxy_keepalive(18080, interval=0.05)
+        try:
+            time.sleep(0.15)
+        finally:
+            stop.set()
+        assert mock_urlopen.call_count >= 2
+        url = mock_urlopen.call_args[0][0]
+        assert "localhost:18080/health" in url
+
+    @patch("ralph.urllib.request.urlopen", side_effect=Exception("refused"))
+    def test_continues_on_error(self, mock_urlopen):
+        stop = ralph.start_proxy_keepalive(18080, interval=0.05)
+        try:
+            time.sleep(0.15)
+        finally:
+            stop.set()
+        # Should have kept pinging despite errors
+        assert mock_urlopen.call_count >= 2
+
+    @patch("ralph.urllib.request.urlopen")
+    def test_stops_when_event_set(self, mock_urlopen):
+        stop = ralph.start_proxy_keepalive(18080, interval=0.05)
+        time.sleep(0.1)
+        stop.set()
+        count_at_stop = mock_urlopen.call_count
+        time.sleep(0.15)
+        # Should not have made significantly more calls after stop
+        assert mock_urlopen.call_count <= count_at_stop + 1
+
+
 class TestEnsureProxy:
     @patch("ralph.compute_proxy_version", return_value="abc123def456")
     @patch("ralph.proxy_health_check", return_value=(True, "abc123def456"))

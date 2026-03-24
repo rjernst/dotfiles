@@ -21,6 +21,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import urllib.request
 
@@ -791,6 +792,34 @@ def stop_proxy(agent):
         os.kill(pid, signal.SIGTERM)
     except (FileNotFoundError, ValueError, ProcessLookupError, OSError):
         pass
+
+
+def start_proxy_keepalive(port, interval=60):
+    """Start a background thread that pings the proxy to prevent idle shutdown.
+
+    The proxy's idle timer resets on any request. This sends periodic /health
+    requests so the proxy stays alive while ralph is running, even during long
+    gaps between API calls (e.g., while Claude Code runs tests).
+
+    NOTE: This piggybacks on /health to reset the idle timer. If we later need
+    external monitoring that shouldn't extend proxy lifetime, split this into a
+    dedicated /keepalive endpoint.
+
+    Returns an Event that can be set to stop the keepalive thread.
+    """
+    stop = threading.Event()
+
+    def _keepalive():
+        while not stop.wait(interval):
+            try:
+                urllib.request.urlopen(
+                    f"http://localhost:{port}/health", timeout=5)
+            except Exception:
+                pass
+
+    t = threading.Thread(target=_keepalive, daemon=True)
+    t.start()
+    return stop
 
 
 def ensure_proxy(agent, port, dotfiles_dir):
@@ -2024,6 +2053,7 @@ def main():
     # Start proxy (reads token from Keychain internally)
     proxy_port = proxy_port_for_agent(agent)
     ensure_proxy(agent, proxy_port, dotfiles_dir)
+    start_proxy_keepalive(proxy_port)
 
     # Git user config
     git = Git()
