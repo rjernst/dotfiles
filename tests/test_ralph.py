@@ -2704,6 +2704,44 @@ class TestSelftest:
 
 
 # ---------------------------------------------------------------------------
+# GitHub — retry logic
+# ---------------------------------------------------------------------------
+
+
+class TestGitHubRetry:
+    @patch("ralph.time.sleep")
+    @patch("ralph.subprocess.run")
+    def test_retries_on_transient_failure(self, mock_run, mock_sleep):
+        mock_run.side_effect = [
+            subprocess.CalledProcessError(1, "gh", stderr="API error"),
+            MagicMock(returncode=0, stdout='[{"number": 1}]'),
+        ]
+        gh = ralph.GitHub()
+        numbers = gh.issue_list("owner/repo", ["spec"])
+        assert numbers == [1]
+        assert mock_run.call_count == 2
+        mock_sleep.assert_called_once_with(1)
+
+    @patch("ralph.time.sleep")
+    @patch("ralph.subprocess.run")
+    def test_raises_after_max_retries(self, mock_run, mock_sleep):
+        mock_run.side_effect = subprocess.CalledProcessError(1, "gh", stderr="down")
+        gh = ralph.GitHub()
+        with pytest.raises(subprocess.CalledProcessError):
+            gh.issue_list("owner/repo", ["spec"])
+        assert mock_run.call_count == 3
+        assert mock_sleep.call_count == 3
+
+    @patch("ralph.subprocess.run")
+    def test_no_retry_on_success(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=0, stdout='[{"number": 5}]')
+        gh = ralph.GitHub()
+        numbers = gh.issue_list("owner/repo", ["spec"])
+        assert numbers == [5]
+        assert mock_run.call_count == 1
+
+
+# ---------------------------------------------------------------------------
 # poll_loop — exception handling
 # ---------------------------------------------------------------------------
 
