@@ -2281,6 +2281,118 @@ class TestProcessIssueSandbox:
             "claude", "my-branch", "/work/my-branch",
             project_dir="/repo/root", force_rebuild=True)
 
+    @patch("ralph.unblock_ready_specs")
+    @patch("ralph.ensure_worktree", return_value="/work/my-branch")
+    @patch("ralph.resolve_repo", return_value="owner/repo")
+    def test_stores_issue_number_in_git_config(self, mock_repo, mock_wt, mock_unblock):
+        git = MagicMock()
+        git.output.return_value = "abc123"
+
+        sandbox = MagicMock()
+        sandbox.ensure_sandbox.return_value = "agent-loop-claude-my-branch"
+        sandbox.run_iteration.return_value = (0, "updated spec")
+
+        gh = MagicMock()
+        gh.issue_view_title.return_value = "[my-branch] Test Issue"
+        gh.issue_view_body.return_value = "---\nbranch: my-branch\n---\nSpec"
+
+        ralph.process_issue(
+            42, git, sandbox, gh, "claude", False, "sonnet",
+            "user", "user@test.com", 18080)
+
+        git.run.assert_any_call(
+            "config", "branch.my-branch.issue", "42",
+            cwd="/work/my-branch", check=False)
+
+    @patch("ralph.unblock_ready_specs")
+    @patch("ralph.ensure_worktree", return_value="/work/feat/slash-branch")
+    @patch("ralph.resolve_repo", return_value="owner/repo")
+    def test_stores_issue_number_with_slashes_in_branch(self, mock_repo, mock_wt, mock_unblock):
+        git = MagicMock()
+        git.output.return_value = "abc123"
+
+        sandbox = MagicMock()
+        sandbox.ensure_sandbox.return_value = "agent-loop-claude-feat-slash-branch"
+        sandbox.run_iteration.return_value = (0, "updated spec")
+
+        gh = MagicMock()
+        gh.issue_view_title.return_value = "[feat/slash-branch] Test Issue"
+        gh.issue_view_body.return_value = "---\nbranch: feat/slash-branch\n---\nSpec"
+
+        ralph.process_issue(
+            99, git, sandbox, gh, "claude", False, "sonnet",
+            "user", "user@test.com", 18080)
+
+        git.run.assert_any_call(
+            "config", "branch.feat/slash-branch.issue", "99",
+            cwd="/work/feat/slash-branch", check=False)
+
+    @patch("ralph.ensure_worktree", return_value="/work/my-branch")
+    @patch("ralph.resolve_repo", return_value="owner/repo")
+    def test_blocked_marker_marks_needs_attention(self, mock_repo, mock_wt):
+        git = MagicMock()
+        # HEAD doesn't change = no commit made
+        git.output.return_value = "abc123"
+
+        sandbox = MagicMock()
+        sandbox.ensure_sandbox.return_value = "agent-loop-claude-my-branch"
+        spec_body = (
+            "---\nbranch: my-branch\n---\n"
+            "# Spec: Test Feature\n\n"
+            "## Implementation Plan\n\n"
+            "### Step 1: Write code [done]\n\n"
+            "### Step 2: Run tests [blocked: pytest not installed]\n"
+        )
+        sandbox.run_iteration.return_value = (0, spec_body)
+
+        gh = MagicMock()
+        gh.issue_view_title.return_value = "[my-branch] Test Issue"
+        gh.issue_view_body.return_value = "---\nbranch: my-branch\n---\nSpec"
+
+        result = ralph.process_issue(
+            42, git, sandbox, gh, "claude", False, "sonnet",
+            "user", "user@test.com", 18080)
+        assert result == 0
+
+        gh.issue_edit.assert_any_call(
+            42, "owner/repo",
+            remove_label="status:in-progress",
+            add_label="status:needs-attention")
+
+    @patch("ralph.unblock_ready_specs")
+    @patch("ralph.ensure_worktree", return_value="/work/my-branch")
+    @patch("ralph.resolve_repo", return_value="owner/repo")
+    def test_no_blocked_marker_marks_done_and_unblocks(self, mock_repo, mock_wt, mock_unblock):
+        git = MagicMock()
+        # HEAD doesn't change = no commit made
+        git.output.return_value = "abc123"
+
+        sandbox = MagicMock()
+        sandbox.ensure_sandbox.return_value = "agent-loop-claude-my-branch"
+        spec_body = (
+            "---\nbranch: my-branch\n---\n"
+            "# Spec: Test Feature\n\n"
+            "## Implementation Plan\n\n"
+            "### Step 1: Write code [done]\n\n"
+            "### Step 2: Run tests [done]\n"
+        )
+        sandbox.run_iteration.return_value = (0, spec_body)
+
+        gh = MagicMock()
+        gh.issue_view_title.return_value = "[my-branch] Test Issue"
+        gh.issue_view_body.return_value = "---\nbranch: my-branch\n---\nSpec"
+
+        result = ralph.process_issue(
+            42, git, sandbox, gh, "claude", False, "sonnet",
+            "user", "user@test.com", 18080)
+        assert result == 0
+
+        gh.issue_edit.assert_any_call(
+            42, "owner/repo",
+            remove_label="status:in-progress",
+            add_label="status:done")
+        mock_unblock.assert_called_once_with("owner/repo", gh)
+
 
 # ---------------------------------------------------------------------------
 # main() — sandbox integration
@@ -2845,3 +2957,26 @@ class TestPollLoopExceptionHandling:
             # Should not raise
             ralph.poll_loop(git, sandbox, gh, "claude", False, "sonnet",
                             "user", "user@test.com", 18080, 30, 1)
+
+
+# ---------------------------------------------------------------------------
+# ITERATION_PROMPT content
+# ---------------------------------------------------------------------------
+
+class TestIterationPrompt:
+    """Verify ITERATION_PROMPT contains required execution instructions."""
+
+    def test_contains_blocked_marker_rule(self):
+        assert "[blocked:" in ralph.Sandbox.ITERATION_PROMPT
+
+    def test_contains_run_all_checks_rule(self):
+        assert "Run all checks" in ralph.Sandbox.ITERATION_PROMPT
+
+    def test_contains_spec_maintenance_rules(self):
+        assert "Spec maintenance rules" in ralph.Sandbox.ITERATION_PROMPT
+
+    def test_contains_step_structure(self):
+        assert "Each step follows this structure" in ralph.Sandbox.ITERATION_PROMPT
+
+    def test_contains_unfulfillable_tasks_section(self):
+        assert "Unfulfillable tasks" in ralph.Sandbox.ITERATION_PROMPT

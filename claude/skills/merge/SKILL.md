@@ -28,7 +28,9 @@ Parse `git worktree list --porcelain` output. Each worktree block starts with `w
 1. Get the current branch: `git branch --show-current`
 2. Follow the [Base branch detection](#base-branch-detection) procedure.
 
-#### Step 3A: Craft commit message and merge
+#### Step 3A: Capture spec issue and craft commit message
+
+Follow the [Pre-merge: capture spec issue number](#pre-merge-capture-spec-issue-number) procedure for `<current-branch>`.
 
 Follow the [Commit message crafting](#commit-message-crafting) procedure to produce a commit message for the branch (`git log <base-branch>..<current-branch>`).
 
@@ -49,6 +51,8 @@ ta wt merge --target <base-branch> --message-file "$tmp_msg" <current-branch>
 ```
 
 Report the output. If it fails, show the error and stop.
+
+If the merge succeeds and an issue number was captured, follow the [Post-merge: close spec issue](#post-merge-close-spec-issue) procedure using the captured issue number.
 
 ---
 
@@ -96,9 +100,11 @@ If any worktree the user selects has status `wip` or `conflict`, warn them:
 
 Ask the user which branch(es) to merge. For each selected branch:
 
-1. Follow the [Commit message crafting](#commit-message-crafting) procedure (`git log <current-branch>..<selected-branch>`).
+1. Follow the [Pre-merge: capture spec issue number](#pre-merge-capture-spec-issue-number) procedure for `<selected-branch>`.
 
-2. Show the proposed message as part of the merge confirmation:
+2. Follow the [Commit message crafting](#commit-message-crafting) procedure (`git log <current-branch>..<selected-branch>`).
+
+3. Show the proposed message as part of the merge confirmation:
    ```
    Merge `<selected-branch>` into `<current-branch>` with this commit message?
 
@@ -109,12 +115,14 @@ Ask the user which branch(es) to merge. For each selected branch:
 
    If the user requests changes, revise the message and update the temp file. Repeat until approved.
 
-3. Once confirmed, run:
+4. Once confirmed, run:
    ```
    ta wt merge --target <current-branch> --message-file "$tmp_msg" <selected-branch>
    ```
 
 Report results for each merge. If a merge fails, show the error and ask whether to continue with remaining branches.
+
+After each successful merge where an issue number was captured, follow the [Post-merge: close spec issue](#post-merge-close-spec-issue) procedure using the captured issue number.
 
 ---
 
@@ -170,5 +178,41 @@ Use this procedure whenever a commit message is needed for a merge:
    <your crafted message here>
    MSG
    ```
+
+## Pre-merge: capture spec issue number
+
+Before running `ta wt merge`, read the spec issue number from the branch being merged. This must happen before the merge because `ta wt merge` removes the worktree and branch ref.
+
+```
+git config branch.<branch-to-merge>.issue
+```
+
+If no value is set, there is no associated spec issue — skip and proceed with the merge normally.
+If a value is set, hold it for use in the post-merge close procedure.
+
+## Post-merge: close spec issue
+
+After a successful merge, if a spec issue number was captured in the pre-merge step, offer to close it. This must run while the Claude session is still active — before any workspace teardown.
+
+1. Resolve the origin repo:
+   ```
+   git remote get-url origin | sed -E 's#.*github\.com[:/]##; s#\.git$##'
+   ```
+
+2. Fetch the issue labels:
+   ```
+   gh issue view <number> --repo <origin-repo> --json labels --jq '.labels[].name'
+   ```
+   Confirm the issue has both a `spec` label and a `status:done` label. If either is missing, skip silently.
+
+3. Offer to close:
+   > Spec issue #N is marked done. Close it?
+
+4. If the user confirms, close the issue:
+   ```
+   gh issue close <number> --repo <origin-repo>
+   ```
+
+5. If the user declines, skip without error.
 
 $ARGUMENTS

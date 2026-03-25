@@ -6,9 +6,7 @@ You are an AI planning agent. Your job is to collaboratively create a new featur
 - The spec must be self-contained: include every detail an autonomous agent needs (constraints, exact outputs, file locations, CLI flags, acceptance checks).
 - Tasks must be small and checkable. Each task must include: Change, Files, Acceptance, Spec update.
 - Default "done" is builds + tests pass, but define feature-specific done checks.
-- **Always include these final tasks**:
-  - A task to run all tests, checks, and formatting commands—fix any issues found
-  - A final task to create a commit with all changes
+- **Always include a final task** to run all tests, checks, and formatting commands — fix any issues found.
 
 ## Repo Resolution
 
@@ -201,21 +199,6 @@ Source issue: #<number> (or <repo>#<number> if cross-repo)
 
 ## Implementation Plan
 
-Each step follows this structure:
-1. **Implement** — Write the code
-2. **Test** — Write BATS tests
-3. **Verify** — Run tests, fix failures until all pass
-4. **Review** — Code review for bugs, edge cases, and conventions
-5. **Address feedback** — Fix review findings, re-run tests, re-review until clean
-6. **Update spec** — Mark the step `[done]` and record any decisions or deviations
-
-### Spec maintenance rules
-
-- Mark each step `[done]` when complete.
-- Record design decisions that emerged during implementation as notes under the step.
-- Minor deviations (e.g. flag name changes, reordered logic) should be noted and the spec updated to match.
-- Significant design changes (e.g. new subcommands, changed architecture, removed features) require pausing for user review before proceeding.
-
 ### Step 1: <First task name>
 
 **Files:**
@@ -234,20 +217,13 @@ Each step follows this structure:
 
 **Address feedback:** Fix all review findings. Re-run tests. Re-review if changes were substantial.
 
-### Step N-1: Run all checks
+### Step N: Run all checks
 
 **Implement:**
 1. Run the full test suite, linting, and syntax checks
-2. Fix any failures
+2. Fix any failures and commit the fixes
 
 **Verify:** All checks pass clean.
-
-### Step N: Create commit
-
-**Implement:**
-1. Stage all changes and create a commit with a descriptive message summarizing the feature.
-
-**Verify:** `git log -1` shows the commit.
 
 ---
 
@@ -277,11 +253,13 @@ gh issue create \
 For long spec bodies, write the body to a temp file and use `--body-file`:
 
 ```zsh
+tmp_spec=$(mktemp /tmp/spec-body-XXXXXX.md)
+# ... write spec body to "$tmp_spec" ...
 gh issue create \
   --repo "<origin-repo>" \
   --title "<Feature Name>" \
   --label "spec,status:ready" \
-  --body-file /tmp/spec-body.md
+  --body-file "$tmp_spec"
 ```
 
 The spec body must start with frontmatter containing at least the `branch` field:

@@ -651,7 +651,43 @@ class Sandbox:
         "Rules:\n"
         "- One task, one commit, then stop\n"
         "- Follow conventions in CLAUDE.md if it exists\n"
-        "- Search the codebase before assuming something isn't implemented"
+        "- Search the codebase before assuming something isn't implemented\n"
+        "\n"
+        "Each step follows this structure:\n"
+        "1. **Implement** — Write the code\n"
+        "2. **Test** — Write tests appropriate for the project\n"
+        "3. **Verify** — Run tests, fix failures until all pass\n"
+        "4. **Review** — Code review for bugs, edge cases, and conventions\n"
+        "5. **Address feedback** — Fix review findings, re-run tests, "
+        "re-review until clean\n"
+        "6. **Update spec** — Mark the step `[done]` and record any "
+        "decisions or deviations\n"
+        "\n"
+        "Spec maintenance rules:\n"
+        "- Mark each step `[done]` when complete.\n"
+        "- Record design decisions that emerged during implementation "
+        "as notes under the step.\n"
+        "- Minor deviations (e.g. flag name changes, reordered logic) "
+        "should be noted and the spec updated to match.\n"
+        "- Significant design changes (e.g. new subcommands, changed "
+        "architecture, removed features) require pausing for user review "
+        "before proceeding.\n"
+        "\n"
+        "Unfulfillable tasks:\n"
+        "- If a task cannot be completed because required tools or "
+        "infrastructure are unavailable (e.g., test runner not installed, "
+        "build tool missing, external service unreachable), append "
+        "`[blocked: <reason>]` to the step heading line "
+        "(e.g., `### Step 3: Run tests [blocked: pytest not installed]`) "
+        "and do NOT commit. The outer loop will detect this marker and "
+        "transition the issue to `status:needs-attention`.\n"
+        "\n"
+        "Run all checks:\n"
+        "- The 'Run all checks' step (typically the final step) must "
+        "ALWAYS execute the full test suite, linter, and syntax checks "
+        "— even if earlier steps already ran individual tests. This step "
+        "catches cross-cutting regressions. Never skip it or mark it done "
+        "without actually running the checks."
     )
 
     @staticmethod
@@ -1780,6 +1816,15 @@ def process_issue(issue_number, git, sandbox, gh, agent, push, model,
 
     # Ensure worktree
     work_dir = ensure_worktree(git, branch, base)
+
+    # Store issue number in git config for local tracking (used by /merge
+    # to find the associated spec issue when closing after merge)
+    result = git.run("config", f"branch.{branch}.issue", str(issue_number),
+                     cwd=work_dir, check=False)
+    if result.returncode != 0:
+        print(f"ralph: warning: failed to store issue number in git config "
+              f"for branch {branch}", file=sys.stderr)
+
     print(f"ralph: processing issue #{issue_number} on branch {branch}")
     print(f"ralph: using worktree at {work_dir}")
 
@@ -1848,11 +1893,17 @@ def process_issue(issue_number, git, sandbox, gh, agent, push, model,
             head_after = sandbox.exec_output(sandbox_name, "git", "rev-parse", "HEAD")
 
             if head_before == head_after:
-                print(f"ralph: no commit made, marking issue #{issue_number} done")
-                gh.issue_edit(issue_number, repo,
-                              remove_label="status:in-progress",
-                              add_label="status:done")
-                unblock_ready_specs(repo, gh)
+                if "[blocked:" in body:
+                    print(f"ralph: blocked tasks found in issue #{issue_number}, marking needs-attention")
+                    gh.issue_edit(issue_number, repo,
+                                  remove_label="status:in-progress",
+                                  add_label="status:needs-attention")
+                else:
+                    print(f"ralph: no commit made, marking issue #{issue_number} done")
+                    gh.issue_edit(issue_number, repo,
+                                  remove_label="status:in-progress",
+                                  add_label="status:done")
+                    unblock_ready_specs(repo, gh)
                 break
 
             # Sync commits from sandbox to host worktree
