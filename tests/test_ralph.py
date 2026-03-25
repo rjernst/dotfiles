@@ -1349,14 +1349,17 @@ class TestSandboxEnsureSandbox:
 
     @patch.object(ralph.Sandbox, "apply_network_policy")
     @patch.object(ralph.Sandbox, "_docker_sandbox_create")
+    @patch.object(ralph.Sandbox, "_resolve_git_common_dir", return_value="/repo/.git")
     @patch.object(ralph.Sandbox, "ensure_image", return_value="agent-loop-sandbox-claude:vabc")
     @patch.object(ralph.Sandbox, "sandbox_exists", return_value=False)
-    def test_creates_new_sandbox(self, mock_exists, mock_img, mock_create, mock_policy):
+    def test_creates_new_sandbox(self, mock_exists, mock_img, mock_resolve,
+                                 mock_create, mock_policy):
         sb = ralph.Sandbox("/dotfiles")
         name = sb.ensure_sandbox("claude", "fix-auth", "/work/fix-auth")
         assert name == "agent-loop-claude-fix-auth"
         mock_create.assert_called_once_with(
-            "agent-loop-claude-fix-auth", "agent-loop-sandbox-claude:vabc", "/work/fix-auth")
+            "agent-loop-claude-fix-auth", "agent-loop-sandbox-claude:vabc",
+            "/work/fix-auth", "/repo/.git")
         mock_policy.assert_called_once_with("agent-loop-claude-fix-auth")
 
     @patch.object(ralph.Sandbox, "sandbox_exists", return_value=True)
@@ -1378,13 +1381,15 @@ class TestSandboxEnsureSandbox:
 
     @patch.object(ralph.Sandbox, "apply_network_policy")
     @patch.object(ralph.Sandbox, "_docker_sandbox_create")
+    @patch.object(ralph.Sandbox, "_resolve_git_common_dir", return_value="/repo/.git")
     @patch.object(ralph.Sandbox, "ensure_project_image",
                   return_value="agent-loop-sandbox-claude-myproj:vdef12345")
     @patch.object(ralph.Sandbox, "ensure_image",
                   return_value="agent-loop-sandbox-claude:vabc")
     @patch.object(ralph.Sandbox, "sandbox_exists", return_value=False)
     def test_calls_ensure_project_image_when_project_dir(
-            self, mock_exists, mock_img, mock_proj, mock_create, mock_policy):
+            self, mock_exists, mock_img, mock_proj, mock_resolve,
+            mock_create, mock_policy):
         sb = ralph.Sandbox("/dotfiles")
         sb.ensure_sandbox("claude", "fix-auth", "/work/fix-auth",
                           project_dir="/repo/root")
@@ -1394,15 +1399,16 @@ class TestSandboxEnsureSandbox:
         mock_create.assert_called_once_with(
             "agent-loop-claude-fix-auth",
             "agent-loop-sandbox-claude-myproj:vdef12345",
-            "/work/fix-auth")
+            "/work/fix-auth", "/repo/.git")
 
     @patch.object(ralph.Sandbox, "apply_network_policy")
     @patch.object(ralph.Sandbox, "_docker_sandbox_create")
+    @patch.object(ralph.Sandbox, "_resolve_git_common_dir", return_value="/repo/.git")
     @patch.object(ralph.Sandbox, "ensure_image",
                   return_value="agent-loop-sandbox-claude:vabc")
     @patch.object(ralph.Sandbox, "sandbox_exists", return_value=False)
     def test_skips_project_image_when_no_project_dir(
-            self, mock_exists, mock_img, mock_create, mock_policy):
+            self, mock_exists, mock_img, mock_resolve, mock_create, mock_policy):
         sb = ralph.Sandbox("/dotfiles")
         with patch.object(ralph.Sandbox, "ensure_project_image") as mock_proj:
             sb.ensure_sandbox("claude", "fix-auth", "/work/fix-auth")
@@ -1410,17 +1416,19 @@ class TestSandboxEnsureSandbox:
         mock_create.assert_called_once_with(
             "agent-loop-claude-fix-auth",
             "agent-loop-sandbox-claude:vabc",
-            "/work/fix-auth")
+            "/work/fix-auth", "/repo/.git")
 
     @patch.object(ralph.Sandbox, "apply_network_policy")
     @patch.object(ralph.Sandbox, "_docker_sandbox_create")
+    @patch.object(ralph.Sandbox, "_resolve_git_common_dir", return_value="/repo/.git")
     @patch.object(ralph.Sandbox, "ensure_project_image",
                   return_value="agent-loop-sandbox-claude-myproj:vdef12345")
     @patch.object(ralph.Sandbox, "ensure_image",
                   return_value="agent-loop-sandbox-claude:vabc")
     @patch.object(ralph.Sandbox, "sandbox_exists", return_value=False)
     def test_force_rebuild_passed_through(
-            self, mock_exists, mock_img, mock_proj, mock_create, mock_policy):
+            self, mock_exists, mock_img, mock_proj, mock_resolve,
+            mock_create, mock_policy):
         sb = ralph.Sandbox("/dotfiles")
         sb.ensure_sandbox("claude", "fix-auth", "/work/fix-auth",
                           project_dir="/repo/root", force_rebuild=True)
@@ -1855,31 +1863,18 @@ def _mock_git_for_worktree(*, remotes="origin", porcelain="",
 
 class TestSandboxSyncToHost:
     @patch("ralph.subprocess.run")
-    def test_uses_range_when_head_before_present(self, mock_run):
-        mock_run.side_effect = [
-            MagicMock(returncode=0, stdout="patch content"),  # format-patch
-            MagicMock(returncode=0),                           # git am
-        ]
+    def test_returns_true_when_host_can_see_commit(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=0)
         result = ralph.Sandbox.sync_to_host("sandbox", "abc123", "def456", "/work")
         assert result is True
-        cmd = mock_run.call_args_list[0][0][0]
-        assert "abc123..def456" in cmd
-
-    @patch("ralph.subprocess.run")
-    def test_uses_root_when_head_before_empty(self, mock_run):
-        mock_run.side_effect = [
-            MagicMock(returncode=0, stdout="patch content"),  # format-patch
-            MagicMock(returncode=0),                           # git am
-        ]
-        result = ralph.Sandbox.sync_to_host("sandbox", "", "def456", "/work")
-        assert result is True
-        cmd = mock_run.call_args_list[0][0][0]
-        assert "--root" in cmd
+        cmd = mock_run.call_args[0][0]
+        assert "rev-parse" in cmd
+        assert "--verify" in cmd
         assert "def456" in cmd
 
     @patch("ralph.subprocess.run")
-    def test_returns_false_on_format_patch_failure(self, mock_run):
-        mock_run.return_value = MagicMock(returncode=1, stdout="")
+    def test_returns_false_when_host_cannot_see_commit(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=1)
         result = ralph.Sandbox.sync_to_host("sandbox", "abc", "def", "/work")
         assert result is False
 
@@ -2076,14 +2071,14 @@ class TestProcessIssueSandbox:
     @patch("ralph.resolve_repo", return_value="owner/repo")
     def test_resets_sandbox_when_out_of_sync(self, mock_repo, mock_wt, mock_unblock):
         git = MagicMock()
+        # All git.output calls return same value — HEAD doesn't change
+        git.output.return_value = "/repo/root"
 
         sandbox = MagicMock()
         sandbox.ensure_sandbox.return_value = "agent-loop-claude-my-branch"
         sandbox.run_iteration.return_value = (0, "updated spec")
         sandbox.check_in_sync.return_value = False
         sandbox.reset_to_host.return_value = True
-        # HEAD doesn't change = spec complete
-        sandbox.exec_output.return_value = "abc123"
 
         gh = MagicMock()
         gh.issue_view_title.return_value = "[my-branch] Test Issue"
@@ -2103,14 +2098,13 @@ class TestProcessIssueSandbox:
     @patch("ralph.resolve_repo", return_value="owner/repo")
     def test_recreates_sandbox_when_reset_fails(self, mock_repo, mock_wt, mock_unblock):
         git = MagicMock()
+        git.output.return_value = "/repo/root"
 
         sandbox = MagicMock()
         sandbox.ensure_sandbox.return_value = "agent-loop-claude-my-branch"
         sandbox.run_iteration.return_value = (0, "updated spec")
         sandbox.check_in_sync.return_value = False
         sandbox.reset_to_host.return_value = False
-        # HEAD doesn't change = spec complete
-        sandbox.exec_output.return_value = "abc123"
 
         gh = MagicMock()
         gh.issue_view_title.return_value = "[my-branch] Test Issue"
@@ -2123,6 +2117,10 @@ class TestProcessIssueSandbox:
         sandbox.remove_sandbox.assert_called_once_with("agent-loop-claude-my-branch")
         # ensure_sandbox called twice: initial + recreation
         assert sandbox.ensure_sandbox.call_count == 2
+        # Recreation should pass project_dir and force_rebuild
+        second_call = sandbox.ensure_sandbox.call_args_list[1]
+        assert second_call[1].get("project_dir") == "/repo/root"
+        assert second_call[1].get("force_rebuild") is False
         # setup_git_config called twice: initial + after recreation
         assert sandbox.setup_git_config.call_count == 2
 
@@ -2136,8 +2134,6 @@ class TestProcessIssueSandbox:
         sandbox = MagicMock()
         sandbox.ensure_sandbox.return_value = "agent-loop-claude-my-branch"
         sandbox.run_iteration.return_value = (0, "updated spec")
-        # HEAD doesn't change = spec complete
-        sandbox.exec_output.return_value = "abc123"
 
         gh = MagicMock()
         gh.issue_view_title.return_value = "[my-branch] Test Issue"
@@ -2155,8 +2151,9 @@ class TestProcessIssueSandbox:
             "agent-loop-claude-my-branch", "user", "user@test.com")
         sandbox.run_iteration.assert_called_once()
 
-        # Verify run_iteration received phantom token + proxy base URL
+        # Verify run_iteration received workdir + phantom token + proxy base URL
         call_args = sandbox.run_iteration.call_args
+        assert call_args[1].get("workdir") == "/work/my-branch"
         env_vars = call_args[1].get("env_vars") or call_args[0][3]
         assert env_vars["CLAUDE_CODE_OAUTH_TOKEN"] == "phantom"
         assert env_vars["ANTHROPIC_BASE_URL"] == "http://host.docker.internal:18080"
@@ -2165,11 +2162,11 @@ class TestProcessIssueSandbox:
     @patch("ralph.resolve_repo", return_value="owner/repo")
     def test_iteration_failure_marks_needs_attention(self, mock_repo, mock_wt):
         git = MagicMock()
+        git.output.return_value = "/repo/root"
 
         sandbox = MagicMock()
         sandbox.ensure_sandbox.return_value = "agent-loop-claude-my-branch"
         sandbox.run_iteration.return_value = (1, "spec")
-        sandbox.exec_output.return_value = "abc123"
 
         gh = MagicMock()
         gh.issue_view_title.return_value = "[my-branch] Test Issue"
@@ -2185,16 +2182,23 @@ class TestProcessIssueSandbox:
             remove_label="status:in-progress",
             add_label="status:needs-attention")
 
+    @patch("ralph.try_fast_forward", return_value=None)
     @patch("ralph.ensure_worktree", return_value="/work/my-branch")
     @patch("ralph.resolve_repo", return_value="owner/repo")
-    def test_sync_failure_marks_needs_attention(self, mock_repo, mock_wt):
+    def test_sync_failure_marks_needs_attention(self, mock_repo, mock_wt, mock_ff):
+        heads = iter(["abc123", "def456"])
+        def _git_output(*args, **kwargs):
+            if args == ("rev-parse", "--show-toplevel"):
+                return "/repo/root"
+            if args[0] == "rev-parse" and len(args) > 1 and args[1] == "HEAD":
+                return next(heads)
+            return ""
         git = MagicMock()
+        git.output.side_effect = _git_output
 
         sandbox = MagicMock()
         sandbox.ensure_sandbox.return_value = "agent-loop-claude-my-branch"
         sandbox.run_iteration.return_value = (0, "spec")
-        # HEAD changes (work was done) but sync fails
-        sandbox.exec_output.side_effect = ["abc123", "def456"]
         sandbox.sync_to_host.return_value = False
 
         gh = MagicMock()
@@ -2211,18 +2215,26 @@ class TestProcessIssueSandbox:
             remove_label="status:in-progress",
             add_label="status:needs-attention")
 
+    @patch("ralph.try_fast_forward", return_value=None)
     @patch("ralph.unblock_ready_specs")
     @patch("ralph.ensure_worktree", return_value="/work/my-branch")
     @patch("ralph.resolve_repo", return_value="owner/repo")
-    def test_pushes_after_iteration_when_flag_set(self, mock_repo, mock_wt, mock_unblock):
+    def test_pushes_after_iteration_when_flag_set(self, mock_repo, mock_wt,
+                                                  mock_unblock, mock_ff):
+        # HEAD changes on first iteration (abc→def), stays same on second (def→def)
+        heads = iter(["abc", "def", "def", "def"])
+        def _git_output(*args, **kwargs):
+            if args == ("rev-parse", "--show-toplevel"):
+                return "/repo/root"
+            if args[0] == "rev-parse" and len(args) > 1 and args[1] == "HEAD":
+                return next(heads)
+            return ""
         git = MagicMock()
+        git.output.side_effect = _git_output
 
         sandbox = MagicMock()
         sandbox.ensure_sandbox.return_value = "agent-loop-claude-my-branch"
         sandbox.run_iteration.return_value = (0, "updated spec")
-        # First call returns "abc", second returns "def" (new commit),
-        # third returns "def" (no new commit = done)
-        sandbox.exec_output.side_effect = ["abc", "def", "def", "def"]
 
         gh = MagicMock()
         gh.issue_view_title.return_value = "[my-branch] Test Issue"
@@ -2243,7 +2255,6 @@ class TestProcessIssueSandbox:
         sandbox = MagicMock()
         sandbox.ensure_sandbox.return_value = "agent-loop-codex-my-branch"
         sandbox.run_iteration.return_value = (0, "spec")
-        sandbox.exec_output.return_value = "abc123"
 
         gh = MagicMock()
         gh.issue_view_title.return_value = "[my-branch] Test Issue"
@@ -2267,7 +2278,6 @@ class TestProcessIssueSandbox:
         sandbox = MagicMock()
         sandbox.ensure_sandbox.return_value = "agent-loop-claude-my-branch"
         sandbox.run_iteration.return_value = (0, "spec")
-        sandbox.exec_output.return_value = "abc123"
 
         gh = MagicMock()
         gh.issue_view_title.return_value = "[my-branch] Test Issue"
@@ -2497,14 +2507,16 @@ class TestSelftest:
     @patch("ralph.subprocess.run")
     @patch("ralph.Sandbox.apply_network_policy")
     @patch("ralph.Sandbox._docker_sandbox_create")
+    @patch("ralph.Sandbox._resolve_git_common_dir", return_value="/fake/.git")
     @patch("ralph.Sandbox.ensure_image", return_value="agent-loop-sandbox-claude:vabc")
     @patch("ralph.proxy_health_check", side_effect=[(False, None), (True, "abc123")])
     @patch("ralph.ensure_proxy")
     @patch("ralph.read_token_from_keychain")
     @patch("ralph.time.time", return_value=1700000000.0)
     def test_all_checks_pass(self, mock_time, mock_read, mock_ensure_proxy,
-                             mock_health, mock_img, mock_create, mock_policy,
-                             mock_run, mock_stop, mock_remove, capsys):
+                             mock_health, mock_img, mock_resolve, mock_create,
+                             mock_policy, mock_run, mock_stop, mock_remove,
+                             capsys):
         mock_read.return_value = {"accessToken": "sk-test", "expiresAt": self.FUTURE_MS}
         # sandbox exec calls: proxy reachable (ok), claude (ok), curl google (blocked)
         mock_run.side_effect = [
@@ -2534,6 +2546,7 @@ class TestSelftest:
     @patch("ralph.subprocess.run")
     @patch("ralph.Sandbox.apply_network_policy")
     @patch("ralph.Sandbox._docker_sandbox_create")
+    @patch("ralph.Sandbox._resolve_git_common_dir", return_value="/fake/.git")
     @patch("ralph.Sandbox.ensure_image", return_value="agent-loop-sandbox-claude:vabc")
     @patch("ralph.proxy_health_check", return_value=(True, "abc123"))
     @patch("ralph.ensure_proxy")
@@ -2541,9 +2554,10 @@ class TestSelftest:
     @patch("ralph.time.time", return_value=1700000000.0)
     def test_does_not_stop_preexisting_proxy(self, mock_time, mock_read,
                                               mock_ensure_proxy, mock_health,
-                                              mock_img, mock_create,
-                                              mock_policy, mock_run,
-                                              mock_stop, mock_remove, capsys):
+                                              mock_img, mock_resolve,
+                                              mock_create, mock_policy,
+                                              mock_run, mock_stop,
+                                              mock_remove, capsys):
         """When proxy was already running before selftest, don't stop it."""
         mock_read.return_value = {"accessToken": "sk-test", "expiresAt": self.FUTURE_MS}
         mock_run.side_effect = [
@@ -2586,6 +2600,7 @@ class TestSelftest:
     @patch("ralph.subprocess.run")
     @patch("ralph.Sandbox.apply_network_policy")
     @patch("ralph.Sandbox._docker_sandbox_create")
+    @patch("ralph.Sandbox._resolve_git_common_dir", return_value="/fake/.git")
     @patch("ralph.Sandbox.ensure_image", return_value="agent-loop-sandbox-claude:vabc")
     @patch("ralph.proxy_health_check", side_effect=[(False, None), (True, "abc123")])
     @patch("ralph.ensure_proxy")
@@ -2593,8 +2608,9 @@ class TestSelftest:
     @patch("ralph.time.time", return_value=1700000000.0)
     def test_cleans_up_sandbox_on_failure(self, mock_time, mock_read,
                                           mock_ensure_proxy, mock_health,
-                                          mock_img, mock_create, mock_policy,
-                                          mock_run, mock_stop, mock_remove):
+                                          mock_img, mock_resolve, mock_create,
+                                          mock_policy, mock_run, mock_stop,
+                                          mock_remove):
         mock_read.return_value = {"accessToken": "sk-test", "expiresAt": self.FUTURE_MS}
         # proxy reachable fails, which causes failures but cleanup should still run
         mock_run.side_effect = [
@@ -2614,6 +2630,7 @@ class TestSelftest:
     @patch("ralph.subprocess.run")
     @patch("ralph.Sandbox.apply_network_policy")
     @patch("ralph.Sandbox._docker_sandbox_create")
+    @patch("ralph.Sandbox._resolve_git_common_dir", return_value="/fake/.git")
     @patch("ralph.Sandbox.ensure_image", return_value="agent-loop-sandbox-claude:vabc")
     @patch("ralph.proxy_health_check", side_effect=[(False, None), (True, "abc123")])
     @patch("ralph.ensure_proxy")
@@ -2621,8 +2638,9 @@ class TestSelftest:
     @patch("ralph.time.time", return_value=1700000000.0)
     def test_reports_failed_checks(self, mock_time, mock_read,
                                    mock_ensure_proxy, mock_health,
-                                   mock_img, mock_create, mock_policy,
-                                   mock_run, mock_stop, mock_remove, capsys):
+                                   mock_img, mock_resolve, mock_create,
+                                   mock_policy, mock_run, mock_stop,
+                                   mock_remove, capsys):
         mock_read.return_value = {"accessToken": "sk-test", "expiresAt": self.FUTURE_MS}
         # proxy reachable ok, claude fails, network not blocked
         mock_run.side_effect = [
@@ -2663,6 +2681,7 @@ class TestSelftest:
     @patch("ralph.Sandbox.apply_network_policy")
     @patch("ralph.Sandbox._docker_sandbox_create",
            side_effect=subprocess.CalledProcessError(1, "docker"))
+    @patch("ralph.Sandbox._resolve_git_common_dir", return_value="/fake/.git")
     @patch("ralph.Sandbox.ensure_image", return_value="agent-loop-sandbox-claude:vabc")
     @patch("ralph.proxy_health_check", side_effect=[(False, None), (True, "abc123")])
     @patch("ralph.ensure_proxy")
@@ -2670,8 +2689,9 @@ class TestSelftest:
     @patch("ralph.time.time", return_value=1700000000.0)
     def test_sandbox_create_failure_aborts(self, mock_time, mock_read,
                                           mock_ensure_proxy, mock_health,
-                                          mock_img, mock_create, mock_policy,
-                                          mock_stop, mock_remove, capsys):
+                                          mock_img, mock_resolve, mock_create,
+                                          mock_policy, mock_stop,
+                                          mock_remove, capsys):
         mock_read.return_value = {"accessToken": "sk-test", "expiresAt": self.FUTURE_MS}
         rc = ralph.selftest("claude", "/fake/dotfiles")
         assert rc == 1
@@ -2710,6 +2730,7 @@ class TestSelftest:
     @patch("ralph.subprocess.run")
     @patch("ralph.Sandbox.apply_network_policy")
     @patch("ralph.Sandbox._docker_sandbox_create")
+    @patch("ralph.Sandbox._resolve_git_common_dir", return_value="/fake/.git")
     @patch("ralph.Sandbox.ensure_project_image",
            return_value="agent-loop-sandbox-claude-myproject:vdeadbeef")
     @patch("ralph.Sandbox.find_project_config",
@@ -2721,8 +2742,9 @@ class TestSelftest:
     @patch("ralph.time.time", return_value=1700000000.0)
     def test_project_image_check_with_dependencies(
             self, mock_time, mock_read, mock_ensure_proxy, mock_health,
-            mock_img, mock_find_config, mock_proj_img, mock_create,
-            mock_policy, mock_run, mock_stop, mock_remove, capsys):
+            mock_img, mock_find_config, mock_proj_img, mock_resolve,
+            mock_create, mock_policy, mock_run, mock_stop, mock_remove,
+            capsys):
         mock_read.return_value = {"accessToken": "sk-test", "expiresAt": self.FUTURE_MS}
         mock_run.side_effect = [
             MagicMock(returncode=0, stdout="ok", stderr=""),    # curl proxy health
@@ -2743,6 +2765,7 @@ class TestSelftest:
     @patch("ralph.subprocess.run")
     @patch("ralph.Sandbox.apply_network_policy")
     @patch("ralph.Sandbox._docker_sandbox_create")
+    @patch("ralph.Sandbox._resolve_git_common_dir", return_value="/fake/.git")
     @patch("ralph.Sandbox.ensure_project_image",
            return_value="agent-loop-sandbox-claude-myproject:vdeadbeef")
     @patch("ralph.Sandbox.find_project_config",
@@ -2754,8 +2777,9 @@ class TestSelftest:
     @patch("ralph.time.time", return_value=1700000000.0)
     def test_project_image_check_with_dockerfile(
             self, mock_time, mock_read, mock_ensure_proxy, mock_health,
-            mock_img, mock_find_config, mock_proj_img, mock_create,
-            mock_policy, mock_run, mock_stop, mock_remove, capsys):
+            mock_img, mock_find_config, mock_proj_img, mock_resolve,
+            mock_create, mock_policy, mock_run, mock_stop, mock_remove,
+            capsys):
         mock_read.return_value = {"accessToken": "sk-test", "expiresAt": self.FUTURE_MS}
         mock_run.side_effect = [
             MagicMock(returncode=0, stdout="ok", stderr=""),    # curl proxy health
@@ -2775,6 +2799,7 @@ class TestSelftest:
     @patch("ralph.subprocess.run")
     @patch("ralph.Sandbox.apply_network_policy")
     @patch("ralph.Sandbox._docker_sandbox_create")
+    @patch("ralph.Sandbox._resolve_git_common_dir", return_value="/fake/.git")
     @patch("ralph.Sandbox.find_project_config", return_value=None)
     @patch("ralph.Sandbox.ensure_image", return_value="agent-loop-sandbox-claude:vabc")
     @patch("ralph.proxy_health_check", side_effect=[(False, None), (True, "abc123")])
@@ -2783,8 +2808,8 @@ class TestSelftest:
     @patch("ralph.time.time", return_value=1700000000.0)
     def test_project_image_skipped_when_no_config(
             self, mock_time, mock_read, mock_ensure_proxy, mock_health,
-            mock_img, mock_find_config, mock_create, mock_policy,
-            mock_run, mock_stop, mock_remove, capsys):
+            mock_img, mock_find_config, mock_resolve, mock_create,
+            mock_policy, mock_run, mock_stop, mock_remove, capsys):
         mock_read.return_value = {"accessToken": "sk-test", "expiresAt": self.FUTURE_MS}
         mock_run.side_effect = [
             MagicMock(returncode=0, stdout="ok", stderr=""),    # curl proxy health

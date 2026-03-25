@@ -453,100 +453,91 @@ class Sandbox:
         return False
 
     @staticmethod
-    def _docker_sandbox_create(name, tag, worktree_path):
-        """Create a new Docker sandbox."""
+    def _docker_sandbox_create(name, tag, worktree_path, git_common_dir=None):
+        """Create a new Docker sandbox.
+
+        Passes worktree_path as the primary workspace.  When git_common_dir is
+        provided (the repo's shared .git directory), it is added as a second
+        workspace so that the worktree's .git pointer resolves inside the
+        sandbox.
+        """
+        workspaces = [worktree_path]
+        if git_common_dir:
+            workspaces.append(git_common_dir)
         subprocess.run(
             ["docker", "sandbox", "create",
-             "--name", name, "-t", tag, "claude", worktree_path],
+             "--name", name, "-t", tag, "claude"] + workspaces,
             check=True,
         )
 
     @staticmethod
-    def exec_output(sandbox_name, *cmd):
+    def exec_output(sandbox_name, *cmd, workdir=None):
         """Run a command inside the sandbox and return its stdout (stripped)."""
+        base = ["docker", "sandbox", "exec"]
+        if workdir:
+            base.extend(["-w", workdir])
+        base.append(sandbox_name)
         result = subprocess.run(
-            ["docker", "sandbox", "exec", sandbox_name] + list(cmd),
+            base + list(cmd),
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False,
         )
         return result.stdout.strip() if result.returncode == 0 else ""
 
     @staticmethod
     def check_in_sync(sandbox_name, work_dir, git):
-        """Check if sandbox content matches host worktree HEAD.
+        """Check if sandbox can access the host worktree's git state.
 
-        Compares git tree hashes — same content produces the same hash
-        regardless of which repo it's in.
+        With a shared .git directory the sandbox and host see the same
+        commits, so we just verify that git resolves HEAD at the worktree
+        path inside the sandbox and it matches the host.
         """
-        host_tree = git.output("rev-parse", "HEAD^{tree}", cwd=work_dir)
-        sandbox_tree = Sandbox.exec_output(
-            sandbox_name, "git", "rev-parse", "HEAD^{tree}")
-        return bool(host_tree and sandbox_tree and host_tree == sandbox_tree)
+        host_head = git.output("rev-parse", "HEAD", cwd=work_dir)
+        sandbox_head = Sandbox.exec_output(
+            sandbox_name, "git", "rev-parse", "HEAD", workdir=work_dir)
+        return bool(host_head and sandbox_head and host_head == sandbox_head)
 
     @staticmethod
     def reset_to_host(sandbox_name, work_dir, git):
-        """Reset sandbox git state to match host worktree.
+        """Reset sandbox worktree to match host HEAD.
 
-        Finds the sandbox commit whose tree matches the host HEAD and
-        hard-resets to it. Returns True if the sandbox is now in sync.
+        With a shared .git the sandbox already sees the same commits as
+        the host.  A reset is only needed when a prior iteration left
+        uncommitted changes or a detached HEAD.
         """
-        host_tree = git.output("rev-parse", "HEAD^{tree}", cwd=work_dir)
-        if not host_tree:
+        host_head = git.output("rev-parse", "HEAD", cwd=work_dir)
+        if not host_head:
             return False
 
-        # Walk sandbox history looking for a commit with the matching tree
-        log = Sandbox.exec_output(
-            sandbox_name, "git", "log", "--format=%H %T")
-        target = None
-        for line in log.splitlines():
-            parts = line.split()
-            if len(parts) == 2 and parts[1] == host_tree:
-                target = parts[0]
-                break
-
-        if not target:
+        base = ["docker", "sandbox", "exec", "-w", work_dir, sandbox_name]
+        rc = subprocess.run(
+            base + ["git", "reset", "--hard", host_head],
+            check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        ).returncode
+        if rc != 0:
             return False
-
-        result = subprocess.run(
-            ["docker", "sandbox", "exec", sandbox_name,
-             "git", "reset", "--hard", target],
+        subprocess.run(
+            base + ["git", "clean", "-fd"],
             check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
-        return result.returncode == 0
+        return True
 
     @staticmethod
     def sync_to_host(sandbox_name, head_before, head_after, work_dir):
-        """Sync commits from sandbox to host worktree via format-patch/am.
+        """Verify sandbox commits are visible on the host.
 
-        Docker sandbox copies the workspace into an independent git repo,
-        so commits must be extracted and replayed onto the host.
+        With a shared .git directory, commits made inside the sandbox are
+        already present in the host repo — no patch extraction needed.
+        This method just confirms the host can resolve head_after.
         """
-        # When head_before is empty (first commit in sandbox), use --root
-        if head_before:
-            range_args = [f"{head_before}..{head_after}"]
-        else:
-            range_args = ["--root", head_after]
-        patch_proc = subprocess.run(
-            ["docker", "sandbox", "exec", sandbox_name,
-             "git", "format-patch", "--stdout"] + range_args,
-            stdout=subprocess.PIPE, text=True, check=False,
+        result = subprocess.run(
+            ["git", "rev-parse", "--verify", head_after],
+            cwd=work_dir, check=False,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
-        if patch_proc.returncode != 0 or not patch_proc.stdout:
-            print("ralph: error: failed to extract patches from sandbox", file=sys.stderr)
+        if result.returncode != 0:
+            print(f"ralph: error: host cannot see sandbox commit {head_after}",
+                  file=sys.stderr)
             return False
-
-        am_proc = subprocess.run(
-            ["git", "am"],
-            input=patch_proc.stdout, text=True, cwd=work_dir, check=False,
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-        )
-        if am_proc.returncode != 0:
-            print(f"ralph: error: failed to apply patches to host: {am_proc.stderr.strip()}", file=sys.stderr)
-            subprocess.run(
-                ["git", "am", "--abort"], cwd=work_dir, check=False,
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            )
-            return False
-
         print(f"ralph: synced commits to {work_dir}")
         return True
 
@@ -569,6 +560,8 @@ class Sandbox:
 
         Reuses an existing sandbox or creates a new one with network policy.
         If project_dir is provided, builds a project-level image layer.
+        The host repo's shared .git directory is mounted as a second
+        workspace so the worktree's .git pointer resolves inside the sandbox.
         Returns the sandbox name.
         """
         name = self.sandbox_name(agent, branch)
@@ -581,10 +574,27 @@ class Sandbox:
                                             force_rebuild=force_rebuild)
         else:
             tag = base_tag
+        git_common_dir = self._resolve_git_common_dir(worktree_path)
         print(f"ralph: creating sandbox {name}...")
-        self._docker_sandbox_create(name, tag, worktree_path)
+        self._docker_sandbox_create(name, tag, worktree_path, git_common_dir)
         self.apply_network_policy(name)
         return name
+
+    @staticmethod
+    def _resolve_git_common_dir(worktree_path):
+        """Resolve the shared .git directory for a worktree (or regular repo).
+
+        Returns the absolute path to the repo's .git directory, or None
+        if git rev-parse fails (e.g. not a git repo).
+        """
+        result = subprocess.run(
+            ["git", "rev-parse", "--git-common-dir"],
+            cwd=worktree_path, capture_output=True, text=True, check=False,
+        )
+        if result.returncode != 0:
+            return None
+        raw = result.stdout.strip()
+        return os.path.realpath(os.path.join(worktree_path, raw))
 
     @staticmethod
     def cleanup_sandbox(agent, branch):
@@ -709,7 +719,8 @@ class Sandbox:
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False,
         )
 
-    def run_iteration(self, sandbox_name, spec_content, model, env_vars=None):
+    def run_iteration(self, sandbox_name, spec_content, model,
+                      env_vars=None, workdir=None):
         """Run a single Claude Code iteration inside the sandbox.
 
         Writes spec content to /tmp/spec.md inside the sandbox, runs claude
@@ -731,6 +742,8 @@ class Sandbox:
 
         # Run claude with iteration prompt
         cmd = ["docker", "sandbox", "exec"]
+        if workdir:
+            cmd.extend(["-w", workdir])
         if env_vars:
             for k, v in env_vars.items():
                 cmd.extend(["-e", f"{k}={v}"])
@@ -1095,7 +1108,9 @@ def selftest(agent, dotfiles_dir):
         # 4. Create test sandbox
         try:
             Sandbox.remove_sandbox(sandbox_name)
-            sandbox._docker_sandbox_create(sandbox_name, tag, os.getcwd())
+            git_common_dir = Sandbox._resolve_git_common_dir(os.getcwd())
+            sandbox._docker_sandbox_create(sandbox_name, tag, os.getcwd(),
+                                           git_common_dir)
             sandbox_created = True
             report("create sandbox", True, sandbox_name)
         except Exception as e:
@@ -1125,6 +1140,7 @@ def selftest(agent, dotfiles_dir):
         # 7. Verify Claude auth works through proxy
         result = subprocess.run(
             ["docker", "sandbox", "exec",
+             "-w", os.getcwd(),
              "-e", "CLAUDE_CODE_OAUTH_TOKEN=phantom",
              "-e", f"ANTHROPIC_BASE_URL=http://host.docker.internal:{port}",
              "-e", f"ANTHROPIC_CUSTOM_MODEL_OPTION={MODEL_ALIASES['haiku']}",
@@ -1844,7 +1860,7 @@ def process_issue(issue_number, git, sandbox, gh, agent, push, model,
     # Configure git inside sandbox
     sandbox.setup_git_config(sandbox_name, git_user, git_email)
 
-    # Ensure sandbox content matches host worktree
+    # Ensure sandbox can access the shared git state
     if not sandbox.check_in_sync(sandbox_name, work_dir, git):
         print("ralph: sandbox out of sync with host, resetting...")
         if sandbox.reset_to_host(sandbox_name, work_dir, git):
@@ -1852,7 +1868,9 @@ def process_issue(issue_number, git, sandbox, gh, agent, push, model,
         else:
             print("ralph: reset failed, recreating sandbox...")
             sandbox.remove_sandbox(sandbox_name)
-            sandbox_name = sandbox.ensure_sandbox(agent, branch, work_dir)
+            sandbox_name = sandbox.ensure_sandbox(agent, branch, work_dir,
+                                                  project_dir=repo_root,
+                                                  force_rebuild=rebuild)
             sandbox.setup_git_config(sandbox_name, git_user, git_email)
 
     # Label in-progress
@@ -1874,14 +1892,14 @@ def process_issue(issue_number, git, sandbox, gh, agent, push, model,
 
     try:
         while True:
-            # Record HEAD before — must check inside sandbox because docker
-            # sandbox copies the worktree into /home/agent/workspace with its
-            # own .git; commits there are invisible to the host
-            head_before = sandbox.exec_output(sandbox_name, "git", "rev-parse", "HEAD")
+            # Record HEAD before iteration — shared .git means host sees
+            # the same commits as the sandbox
+            head_before = git.output("rev-parse", "HEAD", cwd=work_dir)
 
             # Run iteration
             print(f"ralph: starting iteration (sandbox={sandbox_name}, issue=#{issue_number}, model={model})")
-            rc, body = sandbox.run_iteration(sandbox_name, body, model, env_vars)
+            rc, body = sandbox.run_iteration(sandbox_name, body, model,
+                                             env_vars, workdir=work_dir)
             if rc != 0:
                 print(f"ralph: iteration failed for issue #{issue_number}", file=sys.stderr)
                 gh.issue_edit(issue_number, repo,
@@ -1890,7 +1908,7 @@ def process_issue(issue_number, git, sandbox, gh, agent, push, model,
                 return 1
 
             # Check if work was done
-            head_after = sandbox.exec_output(sandbox_name, "git", "rev-parse", "HEAD")
+            head_after = git.output("rev-parse", "HEAD", cwd=work_dir)
 
             if head_before == head_after:
                 if "[blocked:" in body:
