@@ -98,18 +98,28 @@ class Sandbox:
         """Format the image tag from agent name and content hash."""
         return f"agent-loop-sandbox-{agent}:v{chash}"
 
+    # Debian package names: lowercase alphanumerics, plus +, -, . (must start
+    # with alnum).  We also allow ':' for architecture qualifiers (e.g.
+    # "pkg:amd64") and version pinning with '='.
+    _VALID_PKG_RE = re.compile(r'^[a-z0-9][a-z0-9.+\-:]+(=[a-z0-9.+\-:~]+)?$')
+
     @staticmethod
     def parse_dependencies(content):
         """Parse a dependencies file into a list of package names.
 
         Lines starting with # are comments. Inline # comments are stripped.
         Blank lines and whitespace-only lines are skipped.
+        Raises ValueError if a package name doesn't match dpkg naming rules.
         """
         packages = []
-        for line in content.splitlines():
+        for lineno, line in enumerate(content.splitlines(), 1):
             line = line.split("#", 1)[0].strip()
-            if line:
-                packages.append(line)
+            if not line:
+                continue
+            if not Sandbox._VALID_PKG_RE.match(line):
+                raise ValueError(
+                    f"invalid package name on line {lineno}: {line!r}")
+            packages.append(line)
         return packages
 
     @staticmethod
@@ -163,8 +173,105 @@ class Sandbox:
 
         Returns the project image tag, or base_tag if no project config exists.
         """
-        assert not project_dir.endswith("/"), \
-            f"project_dir must not end with /: {project_dir}"
+        if project_dir.endswith("/"):
+            raise ValueError(
+                f"project_dir must not end with /: {project_dir}")
+        config = self.find_project_config(project_dir)
+        if config is None:
+            return base_tag
+
+        config_type, config_path = config
+        with open(config_path) as f:
+            config_content = f.read()
+
+        if config_type == "dependencies":
+            packages = self.parse_dependencies(config_content)
+            dockerfile_content = self.generate_project_dockerfile(packages)
+        else:
+            dockerfile_content = config_content
+
+        project_name = os.path.basename(project_dir)
+        tag = self.project_image_tag(agent, project_name, base_tag,
+                                     dockerfile_content)
+
+        if not force_rebuild and self.image_exists(tag):
+            print(f"ralph: using cached project image {tag}")
+            return tag
+
+        print(f"ralph: building project image {tag}...")
+        if config_type == "dockerfile":
+            context_dir = os.path.join(project_dir, ".agent-loop")
+            subprocess.run(
+                ["docker", "build", "--build-arg", f"BASE_IMAGE={base_tag}",
+                 "-t", tag, "-f", "Dockerfile.sandbox", context_dir],
+                check=True,
+            )
+        else:
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                tmp_dockerfile = os.path.join(tmp_dir, "Dockerfile")
+                with open(tmp_dockerfile, "w") as f:
+                    f.write(dockerfile_content)
+                subprocess.run(
+                    ["docker", "build", "--build-arg",
+                     f"BASE_IMAGE={base_tag}", "-t", tag, tmp_dir],
+                    check=True,
+                )
+        return tag
+
+    @staticmethod
+    def generate_project_dockerfile(packages):
+        """Generate a Dockerfile that installs the given apt packages.
+
+        Returns a Dockerfile string using ARG BASE_IMAGE / FROM ${BASE_IMAGE}
+        that installs packages via apt-get with --no-install-recommends.
+        """
+        pkg_list = " ".join(f"'{p}'" for p in packages)
+        return (
+            "ARG BASE_IMAGE\n"
+            "FROM ${BASE_IMAGE}\n"
+            "USER root\n"
+            "RUN apt-get update && apt-get install -y --no-install-recommends \\\n"
+            f"    {pkg_list} \\\n"
+            "    && rm -rf /var/lib/apt/lists/*\n"
+            "USER agent\n"
+        )
+
+    @staticmethod
+    def find_project_config(project_dir):
+        """Check for project-level sandbox config in .agent-loop/ directory.
+
+        Returns (type, path) where type is "dockerfile", "dependencies", or
+        None if neither exists. Dockerfile.sandbox takes precedence.
+        """
+        agent_loop_dir = os.path.join(project_dir, ".agent-loop")
+        dockerfile_path = os.path.join(agent_loop_dir, "Dockerfile.sandbox")
+        if os.path.isfile(dockerfile_path):
+            return ("dockerfile", dockerfile_path)
+        deps_path = os.path.join(agent_loop_dir, "dependencies")
+        if os.path.isfile(deps_path):
+            return ("dependencies", deps_path)
+        return None
+
+    @staticmethod
+    def project_image_tag(agent, project_name, base_tag, dockerfile_content):
+        """Compute a project image tag from agent, project name, and content.
+
+        Tag format: agent-loop-sandbox-{agent}-{project_name}:v{hash}
+        Hash is SHA256(base_tag + ":" + dockerfile_content)[:8].
+        """
+        combined = f"{base_tag}:{dockerfile_content}"
+        chash = hashlib.sha256(combined.encode()).hexdigest()[:8]
+        return f"agent-loop-sandbox-{agent}-{project_name}:v{chash}"
+
+    def ensure_project_image(self, agent, base_tag, project_dir,
+                             force_rebuild=False):
+        """Build a project-level image layer on top of the base image.
+
+        Returns the project image tag, or base_tag if no project config exists.
+        """
+        if project_dir.endswith("/"):
+            raise ValueError(
+                f"project_dir must not end with /: {project_dir}")
         config = self.find_project_config(project_dir)
         if config is None:
             return base_tag
@@ -945,6 +1052,9 @@ def selftest(agent, dotfiles_dir):
                 print("ralph: selftest aborted — project image "
                       "required for remaining checks")
                 return 1
+        else:
+            print("ralph: no .agent-loop/ config in cwd, "
+                  "skipping project image check")
 
         # 4. Create test sandbox
         try:

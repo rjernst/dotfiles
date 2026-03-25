@@ -965,6 +965,21 @@ class TestSandboxParseDependencies:
         content = "# comment\n\n# another\n  \n"
         assert ralph.Sandbox.parse_dependencies(content) == []
 
+    def test_rejects_shell_injection(self):
+        with pytest.raises(ValueError, match="invalid package name"):
+            ralph.Sandbox.parse_dependencies("pkg; rm -rf /")
+
+    def test_rejects_uppercase_names(self):
+        with pytest.raises(ValueError, match="invalid package name"):
+            ralph.Sandbox.parse_dependencies("BadPkg")
+
+    def test_accepts_arch_qualifier(self):
+        result = ralph.Sandbox.parse_dependencies("libc6:amd64")
+        assert result == ["libc6:amd64"]
+
+    def test_accepts_version_pinning(self):
+        result = ralph.Sandbox.parse_dependencies("openjdk-21-jdk=21.0.1+12-1")
+        assert result == ["openjdk-21-jdk=21.0.1+12-1"]
 
 # ---------------------------------------------------------------------------
 # Sandbox.generate_project_dockerfile
@@ -1169,6 +1184,10 @@ class TestSandboxEnsureProjectImage:
         tag = sb.ensure_project_image("claude", "base:v1", str(project))
         assert "elasticsearch" in tag
 
+    def test_rejects_trailing_slash(self, tmp_path):
+        sb = self._make_sandbox(tmp_path)
+        with pytest.raises(ValueError, match="must not end with /"):
+            sb.ensure_project_image("claude", "base:v1", "/some/path/")
 
 # ---------------------------------------------------------------------------
 # Sandbox._parse_docker_timestamp
@@ -2665,7 +2684,8 @@ class TestSelftest:
         assert rc == 0
 
         captured = capsys.readouterr()
-        assert "build project image" not in captured.out
+        assert "PASS: build project image" not in captured.out
+        assert "skipping project image check" in captured.out
         assert "all 8 checks passed" in captured.out
 
     @patch("ralph.Sandbox.remove_sandbox")
@@ -2701,6 +2721,32 @@ class TestSelftest:
         assert "project build failed" in captured.out
         assert "selftest aborted" in captured.out
         mock_create.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# ensure_proxy — docker wait timeout
+# ---------------------------------------------------------------------------
+
+
+class TestEnsureProxyStaleCleanup:
+    @patch("ralph.proxy_health_check",
+           side_effect=[(False, None), (True, "abc123")])
+    @patch("ralph.start_proxy")
+    @patch("ralph.subprocess.run")
+    @patch("ralph.time.sleep")
+    def test_logs_and_removes_stale_container(self, mock_sleep, mock_run,
+                                               mock_start, mock_health):
+        """Stale proxy is logged, stopped, removed, then a new one starts."""
+        mock_run.side_effect = [
+            MagicMock(returncode=0, stdout="true\n"),  # inspect (stale exists)
+            MagicMock(returncode=0),                    # docker logs
+            MagicMock(returncode=0),                    # stop
+            MagicMock(returncode=0),                    # rm
+        ]
+
+        result = ralph.ensure_proxy("claude", 18080, "/fake/dotfiles")
+        assert result == 18080
+        mock_start.assert_called_once_with("claude", 18080, "/fake/dotfiles")
 
 
 # ---------------------------------------------------------------------------
