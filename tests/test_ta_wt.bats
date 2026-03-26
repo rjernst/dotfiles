@@ -494,7 +494,9 @@ MOCK
   # Copy ta-wt to mock dir so it finds our mock ta-workspace via ${0:A:h}
   cp "$TA_WT" "$mock_dir/ta-wt"
 
-  run "$mock_dir/ta-wt" remove feat-rm-ws
+  # Set PYTHONPATH so the copied script can find dotlib
+  local dotfiles_dir="${BATS_TEST_FILENAME%/*}/.."
+  run env PYTHONPATH="$dotfiles_dir/tools/libs" "$mock_dir/ta-wt" remove feat-rm-ws
   [ "$status" -eq 0 ]
   [[ "$output" == *"removed"* ]]
 

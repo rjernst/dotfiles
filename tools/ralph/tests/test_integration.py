@@ -4,24 +4,24 @@ These tests require Docker Desktop running and a valid token stored
 in Keychain. They are skipped by default.
 
 Enable with:
-    RALPH_INTEGRATION_TESTS=1 pytest -m integration tests/test_ralph_integration.py -v
+    RALPH_INTEGRATION_TESTS=1 pytest -m integration tools/ralph/tests/test_integration.py -v
 """
 
-import os
 import subprocess
 import time
 
 import pytest
 
-from conftest import import_script
-
-ralph = import_script("ralph")
+from dotlib import DOTFILES_DIR
+from ralph.proxy import proxy_port_for_agent, ensure_proxy, stop_proxy
+from ralph.selftest import selftest
+from ralph.sandbox.docker import DockerSandbox
+from ralph.token import read_token_from_keychain
 
 # Skip entire module unless integration tests are enabled
 pytestmark = pytest.mark.integration
 
-# Resolve dotfiles dir (repo root)
-REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+REPO_ROOT = DOTFILES_DIR
 
 AGENT = "claude"
 SELFTEST_SANDBOX = f"agent-loop-selftest-{AGENT}"
@@ -42,7 +42,7 @@ def _docker_available():
 
 def _token_available(agent):
     """Check if a valid token is stored in Keychain."""
-    data = ralph.read_token_from_keychain(agent)
+    data = read_token_from_keychain(agent)
     if data is None:
         return False
     now_ms = int(time.time() * 1000)
@@ -70,31 +70,32 @@ class TestRalphIntegration:
     @pytest.fixture
     def proxy_port(self):
         """Start the proxy, yield the port, and stop on cleanup."""
-        port = ralph.proxy_port_for_agent(AGENT)
-        ralph.ensure_proxy(AGENT, port, REPO_ROOT)
+        port = proxy_port_for_agent(AGENT)
+        ensure_proxy(AGENT, port, REPO_ROOT)
         yield port
-        ralph.stop_proxy(AGENT)
+        stop_proxy(AGENT)
 
     @pytest.fixture
     def sandbox_image(self):
         """Ensure the sandbox image is built and return its tag."""
-        sandbox = ralph.Sandbox(REPO_ROOT)
+        sandbox = DockerSandbox(REPO_ROOT)
         tag = sandbox.ensure_image(AGENT)
         return tag
 
     @pytest.fixture
     def test_sandbox(self, sandbox_image):
         """Create a test sandbox and remove it after the test."""
-        sandbox = ralph.Sandbox(REPO_ROOT)
+        sandbox = DockerSandbox(REPO_ROOT)
         # Clean up any leftover sandbox from a previous failed run
-        ralph.Sandbox.remove_sandbox(SELFTEST_SANDBOX)
+        sandbox.remove_sandbox(SELFTEST_SANDBOX)
 
+        git_common_dir = DockerSandbox._resolve_git_common_dir(os.getcwd())
         sandbox._docker_sandbox_create(
-            SELFTEST_SANDBOX, sandbox_image, os.getcwd())
-        ralph.Sandbox.apply_network_policy(SELFTEST_SANDBOX)
+            SELFTEST_SANDBOX, sandbox_image, os.getcwd(), git_common_dir)
+        DockerSandbox.apply_network_policy(SELFTEST_SANDBOX)
         yield SELFTEST_SANDBOX
 
-        ralph.Sandbox.remove_sandbox(SELFTEST_SANDBOX)
+        sandbox.remove_sandbox(SELFTEST_SANDBOX)
 
     def test_image_build(self, sandbox_image):
         """Verify that the sandbox image builds successfully."""
@@ -158,5 +159,5 @@ class TestRalphIntegration:
 
     def test_selftest_command(self):
         """Verify the selftest command runs the full pipeline and passes."""
-        rc = ralph.selftest(AGENT, REPO_ROOT)
+        rc = selftest(AGENT, REPO_ROOT)
         assert rc == 0, "selftest reported failures"

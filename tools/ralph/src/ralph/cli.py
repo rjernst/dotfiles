@@ -1,0 +1,276 @@
+"""CLI argument parsing and main() dispatch."""
+
+import sys
+
+from dotlib import DOTFILES_DIR
+from dotlib.git import Git
+from ralph.github import GitHub
+from ralph.loop import process_issue, poll_loop
+from ralph.orchestration import check_dependencies_prereq
+from ralph.proxy import ensure_proxy, proxy_port_for_agent, start_proxy_keepalive
+from ralph.sandbox.docker import DockerSandbox
+from ralph.sandbox.tart import TartSandbox
+from ralph.selftest import selftest
+from ralph.token import store_token, check_token, get_token, ensure_token
+from ralph.util import parse_duration
+
+
+USAGE_TEXT = """\
+Usage: ralph <command> [options]
+
+Token commands:
+  store-token           Run claude setup-token and store in Keychain
+                        (or read from stdin when piped)
+  check-token           Check if stored token is valid
+  get-token             Print stored token to stdout
+
+Sandbox commands:
+  selftest              Smoke test the full pipeline (proxy, sandbox, auth)
+  prune-sandboxes       Remove orphaned sandboxes
+
+Issue commands:
+  --issue <number>      Execute a single GitHub Issue spec
+  --poll                Poll for status:ready issues and process them
+
+Options:
+  --agent <name>        Agent name (default: claude)
+  --interval <duration> Poll interval (default: 30s, requires --poll)
+  --timeout <duration>  Limit poll duration (e.g. 30m, 4h, 1d; requires --poll)
+  --push                Git push after each iteration
+  --rebuild             Force re-pull base image and rebuild sandbox
+  --model <model>       Claude model (default: sonnet)
+  -h, --help            Show usage"""
+
+
+def usage(exit_code=0):
+    """Print usage and exit."""
+    print(USAGE_TEXT)
+    sys.exit(exit_code)
+
+
+def main():
+    args = sys.argv[1:]
+
+    # Token management subcommands — handle before flag parsing
+    # Supports both: ralph store-token --agent codex
+    #            and: ralph --agent codex store-token
+    token_subcommands = {"store-token", "check-token", "get-token"}
+    subcmd = None
+    for a in args:
+        if a in token_subcommands:
+            subcmd = a
+            break
+
+    if subcmd is not None:
+        agent = "claude"
+        rest = [a for a in args if a != subcmd]
+        j = 0
+        while j < len(rest):
+            if rest[j] == "--agent":
+                if j + 1 >= len(rest):
+                    print("ralph: --agent requires an argument", file=sys.stderr)
+                    sys.exit(2)
+                agent = rest[j + 1]
+                j += 2
+            elif rest[j] in ("-h", "--help"):
+                usage(0)
+            else:
+                print(f"ralph: unknown option for {subcmd}: {rest[j]}", file=sys.stderr)
+                sys.exit(2)
+
+        if subcmd == "store-token":
+            store_token(agent)
+        elif subcmd == "check-token":
+            check_token(agent)
+        elif subcmd == "get-token":
+            get_token(agent)
+        sys.exit(0)
+
+    # Sandbox subcommands
+    if args and args[0] == "prune-sandboxes":
+        agent = "claude"
+        sandbox_type = "docker"
+        rest = args[1:]
+        j = 0
+        while j < len(rest):
+            if rest[j] == "--agent":
+                if j + 1 >= len(rest):
+                    print("ralph: --agent requires an argument", file=sys.stderr)
+                    sys.exit(2)
+                agent = rest[j + 1]
+                j += 2
+            elif rest[j] == "--type":
+                if j + 1 >= len(rest):
+                    print("ralph: --type requires an argument", file=sys.stderr)
+                    sys.exit(2)
+                sandbox_type = rest[j + 1]
+                if sandbox_type not in ("docker", "tart"):
+                    print(f"ralph: unknown sandbox type: {sandbox_type}",
+                          file=sys.stderr)
+                    sys.exit(2)
+                j += 2
+            elif rest[j] in ("-h", "--help"):
+                usage(0)
+            else:
+                print(f"ralph: unknown option for prune-sandboxes: {rest[j]}",
+                      file=sys.stderr)
+                sys.exit(2)
+
+        if sandbox_type == "tart":
+            sb = TartSandbox(DOTFILES_DIR)
+        else:
+            sb = DockerSandbox(DOTFILES_DIR)
+        pruned = sb.prune_sandboxes(agent)
+        if not pruned:
+            print("ralph: no orphan sandboxes found")
+        sys.exit(0)
+
+    # Selftest subcommand
+    if args and args[0] == "selftest":
+        agent = "claude"
+        sandbox_type = "docker"
+        rest = args[1:]
+        j = 0
+        while j < len(rest):
+            if rest[j] == "--agent":
+                if j + 1 >= len(rest):
+                    print("ralph: --agent requires an argument", file=sys.stderr)
+                    sys.exit(2)
+                agent = rest[j + 1]
+                j += 2
+            elif rest[j] == "--type":
+                if j + 1 >= len(rest):
+                    print("ralph: --type requires an argument", file=sys.stderr)
+                    sys.exit(2)
+                sandbox_type = rest[j + 1]
+                if sandbox_type not in ("docker", "tart"):
+                    print(f"ralph: unknown sandbox type: {sandbox_type}",
+                          file=sys.stderr)
+                    sys.exit(2)
+                j += 2
+            elif rest[j] in ("-h", "--help"):
+                usage(0)
+            else:
+                print(f"ralph: unknown option for selftest: {rest[j]}",
+                      file=sys.stderr)
+                sys.exit(2)
+
+        check_dependencies_prereq()
+        sys.exit(selftest(agent, DOTFILES_DIR, sandbox_type=sandbox_type))
+
+    # Parse arguments manually to match zsh behavior exactly
+    push = False
+    rebuild = False
+    timeout_val = 0
+    model = "sonnet"
+    issue_number = ""
+    poll = False
+    interval = 30
+    agent = "claude"
+
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg == "--push":
+            push = True
+            i += 1
+        elif arg == "--rebuild":
+            rebuild = True
+            i += 1
+        elif arg == "--issue":
+            if i + 1 >= len(args):
+                print("ralph: --issue requires an argument", file=sys.stderr)
+                sys.exit(2)
+            issue_number = args[i + 1]
+            i += 2
+        elif arg == "--poll":
+            poll = True
+            i += 1
+        elif arg == "--interval":
+            if i + 1 >= len(args):
+                print("ralph: --interval requires an argument", file=sys.stderr)
+                sys.exit(2)
+            try:
+                interval = parse_duration(args[i + 1])
+            except ValueError as e:
+                print(f"ralph: invalid duration: {e}", file=sys.stderr)
+                sys.exit(2)
+            i += 2
+        elif arg == "--model":
+            if i + 1 >= len(args):
+                print("ralph: --model requires an argument", file=sys.stderr)
+                sys.exit(2)
+            model = args[i + 1]
+            i += 2
+        elif arg == "--timeout":
+            if i + 1 >= len(args):
+                print("ralph: --timeout requires an argument", file=sys.stderr)
+                sys.exit(2)
+            try:
+                timeout_val = parse_duration(args[i + 1])
+            except ValueError as e:
+                print(f"ralph: invalid duration: {e}", file=sys.stderr)
+                sys.exit(2)
+            i += 2
+        elif arg == "--agent":
+            if i + 1 >= len(args):
+                print("ralph: --agent requires an argument", file=sys.stderr)
+                sys.exit(2)
+            agent = args[i + 1]
+            i += 2
+        elif arg in ("-h", "--help"):
+            usage(0)
+        elif arg.startswith("-"):
+            print(f"ralph: unknown option: {arg}", file=sys.stderr)
+            usage(1)
+        else:
+            print(f"ralph: unknown option: {arg}", file=sys.stderr)
+            usage(1)
+    # Validation
+    if poll and issue_number:
+        print("ralph: --poll and --issue cannot be used together", file=sys.stderr)
+        sys.exit(2)
+
+    if not poll and interval != 30:
+        print("ralph: --interval requires --poll", file=sys.stderr)
+        sys.exit(2)
+
+    if timeout_val > 0 and not poll:
+        print("ralph: --timeout requires --poll", file=sys.stderr)
+        sys.exit(2)
+
+    if not poll and not issue_number:
+        print("ralph: no mode specified. Use --issue <number> or --poll", file=sys.stderr)
+        usage(2)
+
+    # Prerequisite checks
+    check_dependencies_prereq()
+
+    # Auth — ensure valid token exists before starting proxy
+    # (auto-runs claude setup-token if missing/expired)
+    ensure_token(agent)
+
+    # Start proxy (reads token from Keychain internally)
+    proxy_port = proxy_port_for_agent(agent)
+    ensure_proxy(agent, proxy_port, DOTFILES_DIR)
+    start_proxy_keepalive(proxy_port)
+
+    # Git user config
+    git = Git()
+    git_user = git.output("config", "user.name") or "ralph"
+    git_email = git.output("config", "user.email") or "ralph@localhost"
+    gh = GitHub()
+
+    # Issue mode
+    if issue_number:
+        rc = process_issue(int(issue_number), git, DOTFILES_DIR, gh, agent,
+                           push, model, git_user, git_email, proxy_port,
+                           rebuild=rebuild)
+        sys.exit(rc)
+
+    # Poll mode
+    if poll:
+        poll_loop(git, DOTFILES_DIR, gh, agent, push, model, git_user,
+                  git_email, proxy_port, interval, timeout_val,
+                  rebuild=rebuild)
+        sys.exit(0)
