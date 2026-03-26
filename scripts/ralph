@@ -11,11 +11,13 @@ Also provides token management for the credential injection proxy:
 Usage: ralph <command> [options]
 """
 
+import atexit
 import datetime
 import hashlib
 import json
 import os
 import re
+import shlex
 import shutil
 import signal
 import subprocess
@@ -55,16 +57,265 @@ class Git:
 
 
 # ---------------------------------------------------------------------------
-# Sandbox helper (Docker sandbox-based isolation)
+# Sandbox config (.agent-loop/config.json)
 # ---------------------------------------------------------------------------
 
-class Sandbox:
+def load_sandbox_config(project_dir):
+    """Load sandbox configuration from .agent-loop/config.json.
+
+    Returns a dict with at least {"type": "docker"} as default.
+    For "tart" type, may also include: base_image (str, required),
+    cpu (int, optional), memory_gb (int, optional).
+
+    Raises ValueError for unknown sandbox types or malformed JSON.
+    """
+    config_path = os.path.join(project_dir, ".agent-loop", "config.json")
+    if not os.path.isfile(config_path):
+        return {"type": "docker"}
+    with open(config_path) as f:
+        config = json.load(f)
+    sandbox_type = config.get("type", "docker")
+    if sandbox_type not in ("docker", "tart"):
+        raise ValueError(
+            f"ralph: unknown sandbox type {sandbox_type!r} "
+            f"in {config_path} (expected 'docker' or 'tart')")
+    config["type"] = sandbox_type
+    return config
+
+
+def create_sandbox_backend(sandbox_type, dotfiles_dir, **kwargs):
+    """Factory: create the appropriate sandbox backend.
+
+    Args:
+        sandbox_type: "docker" or "tart"
+        dotfiles_dir: path to the dotfiles repository
+        **kwargs: additional config (passed through from load_sandbox_config)
+
+    Returns:
+        A SandboxBackend instance.
+
+    Raises:
+        ValueError: for unknown sandbox types
+        NotImplementedError: for backends not yet implemented
+    """
+    if sandbox_type == "docker":
+        return DockerSandbox(dotfiles_dir)
+    elif sandbox_type == "tart":
+        # Read dependencies file if a project_dir was passed through kwargs
+        config = dict(kwargs)
+        project_dir = config.pop("project_dir", None)
+        if project_dir and "dependencies_content" not in config:
+            deps_path = os.path.join(project_dir, ".agent-loop", "dependencies")
+            if os.path.isfile(deps_path):
+                with open(deps_path) as f:
+                    config["dependencies_content"] = f.read()
+        return TartSandbox(dotfiles_dir, config=config)
+    else:
+        raise ValueError(f"ralph: unknown sandbox type {sandbox_type!r}")
+
+
+# ---------------------------------------------------------------------------
+# Sandbox backend abstraction
+# ---------------------------------------------------------------------------
+
+class SandboxBackend:
+    """Base class defining the sandbox backend interface.
+
+    Subclasses (DockerSandbox, TartSandbox) implement these methods
+    for their respective isolation technologies.
+    """
+
+    ITERATION_PROMPT = (
+        "You are an AI coding agent. You will be invoked repeatedly "
+        "— once per task.\n"
+        "Read the spec file at `/tmp/spec.md` for what to build.\n"
+        "\n"
+        "Your job this iteration: implement EXACTLY ONE task, then stop.\n"
+        "\n"
+        "Steps:\n"
+        "1. Study the spec and existing codebase (especially CLAUDE.md) "
+        "to understand patterns\n"
+        "2. Check git log to see what has already been implemented\n"
+        "3. Pick the FIRST incomplete task from the spec\n"
+        "4. Implement that single task fully — no stubs or placeholders\n"
+        "5. Write tests as appropriate for the project\n"
+        "6. Run the tests\n"
+        "7. If tests pass, mark ONLY that task done in the spec file "
+        "and commit\n"
+        "8. If tests fail, fix before committing\n"
+        "\n"
+        "IMPORTANT: Do NOT implement more than one task. After committing, "
+        "stop immediately.\n"
+        "The loop will call you again for the next task.\n"
+        "If ALL tasks are already complete, just say so "
+        "— do not make any commits.\n"
+        "\n"
+        "Rules:\n"
+        "- One task, one commit, then stop\n"
+        "- Follow conventions in CLAUDE.md if it exists\n"
+        "- Search the codebase before assuming something isn't implemented\n"
+        "\n"
+        "Each step follows this structure:\n"
+        "1. **Implement** — Write the code\n"
+        "2. **Test** — Write tests appropriate for the project\n"
+        "3. **Verify** — Run tests, fix failures until all pass\n"
+        "4. **Review** — Code review for bugs, edge cases, and conventions\n"
+        "5. **Address feedback** — Fix review findings, re-run tests, "
+        "re-review until clean\n"
+        "6. **Update spec** — Mark the step `[done]` and record any "
+        "decisions or deviations\n"
+        "\n"
+        "Spec maintenance rules:\n"
+        "- Mark each step `[done]` when complete.\n"
+        "- Record design decisions that emerged during implementation "
+        "as notes under the step.\n"
+        "- Minor deviations (e.g. flag name changes, reordered logic) "
+        "should be noted and the spec updated to match.\n"
+        "- Significant design changes (e.g. new subcommands, changed "
+        "architecture, removed features) require pausing for user review "
+        "before proceeding.\n"
+        "\n"
+        "Unfulfillable tasks:\n"
+        "- If a task cannot be completed because required tools or "
+        "infrastructure are unavailable (e.g., test runner not installed, "
+        "build tool missing, external service unreachable), append "
+        "`[blocked: <reason>]` to the step heading line "
+        "(e.g., `### Step 3: Run tests [blocked: pytest not installed]`) "
+        "and do NOT commit. The outer loop will detect this marker and "
+        "transition the issue to `status:needs-attention`.\n"
+        "\n"
+        "Run all checks:\n"
+        "- The 'Run all checks' step (typically the final step) must "
+        "ALWAYS execute the full test suite, linter, and syntax checks "
+        "— even if earlier steps already ran individual tests. This step "
+        "catches cross-cutting regressions. Never skip it or mark it done "
+        "without actually running the checks."
+    )
+
+    @staticmethod
+    def sandbox_name(agent, branch):
+        """Generate sandbox name from agent and branch.
+
+        Sanitizes the branch: replaces '/' with '-', strips leading/trailing
+        hyphens, collapses consecutive hyphens, and lowercases.
+        """
+        sanitized = branch.replace("/", "-").lower()
+        sanitized = re.sub(r'-+', '-', sanitized).strip("-")
+        return f"agent-loop-{agent}-{sanitized}"
+
+    def proxy_host(self):
+        """Return the hostname for reaching the credential proxy."""
+        raise NotImplementedError
+
+    def ensure_image(self, agent, force_rebuild=False):
+        """Ensure the sandbox image is built and up-to-date. Returns image tag."""
+        raise NotImplementedError
+
+    def ensure_sandbox(self, agent, branch, worktree_path, **kwargs):
+        """Ensure a sandbox exists for the given agent and branch. Returns name."""
+        raise NotImplementedError
+
+    def setup_git_config(self, sandbox_name, user, email):
+        """Configure git user and safe directory settings inside the sandbox."""
+        raise NotImplementedError
+
+    def run_iteration(self, sandbox_name, spec_content, model, env_vars=None):
+        """Run a single iteration inside the sandbox. Returns (exit_code, updated_spec)."""
+        raise NotImplementedError
+
+    def preflight_check(self, sandbox_name, agent, proxy_port):
+        """Run pre-flight validation before starting an iteration.
+
+        Checks token validity, proxy health, and backend-specific checks.
+        Returns a list of failure messages. Empty list means all checks passed.
+        """
+        failures = []
+
+        # 1. Token valid
+        data = read_token_from_keychain(agent)
+        if data is None:
+            failures.append(
+                f"no token found for agent {agent}"
+                " — run: ralph store-token")
+        else:
+            now_ms = int(time.time() * 1000)
+            expires_at = data.get("expiresAt", 0)
+            if expires_at <= now_ms:
+                failures.append(
+                    f"token expired for agent {agent}"
+                    " — run: ralph store-token")
+
+        # 2. Proxy running
+        healthy, _ = proxy_health_check(proxy_port)
+        if not healthy:
+            failures.append(
+                f"proxy not reachable at http://localhost:{proxy_port}/health"
+                " — start the credential proxy")
+
+        # 3. Backend-specific checks
+        failures.extend(
+            self._preflight_backend_checks(sandbox_name))
+
+        return failures
+
+    def _preflight_backend_checks(self, sandbox_name):
+        """Backend-specific pre-flight checks. Override in subclasses.
+
+        Returns a list of failure messages.
+        """
+        raise NotImplementedError
+
+    def cleanup_sandbox(self, agent, branch):
+        """Remove the sandbox for a given agent and branch."""
+        raise NotImplementedError
+
+    def prune_sandboxes(self, agent):
+        """Remove orphaned sandboxes. Returns list of pruned names."""
+        raise NotImplementedError
+
+    def remove_sandbox(self, name):
+        """Remove a sandbox by name (best-effort)."""
+        raise NotImplementedError
+
+    def check_prerequisites(self):
+        """Check that required tools are available. Returns list of error messages."""
+        raise NotImplementedError
+
+    def check_in_sync(self, sandbox_name, work_dir, git):
+        """Check if sandbox content matches host worktree HEAD."""
+        raise NotImplementedError
+
+    def reset_to_host(self, sandbox_name, work_dir, git):
+        """Reset sandbox git state to match host worktree."""
+        raise NotImplementedError
+
+    def sync_to_host(self, sandbox_name, head_before, head_after, work_dir):
+        """Sync commits from sandbox to host worktree."""
+        raise NotImplementedError
+
+
+# ---------------------------------------------------------------------------
+# Docker sandbox backend
+# ---------------------------------------------------------------------------
+
+class DockerSandbox(SandboxBackend):
     """Manages Docker sandbox images for agent-loop isolation."""
 
     BASE_IMAGE_MAX_AGE_DAYS = 7
 
     def __init__(self, dotfiles_dir):
         self.dotfiles_dir = dotfiles_dir
+
+    def proxy_host(self):
+        """Return the hostname for reaching the credential proxy."""
+        return "host.docker.internal"
+
+    def check_prerequisites(self):
+        """Check that Docker is available. Returns list of error messages."""
+        errors = []
+        if not shutil.which("docker"):
+            errors.append("docker is not installed")
+        return errors
 
     def dockerfile_path(self, agent):
         """Path to the Dockerfile for the given agent."""
@@ -116,107 +367,11 @@ class Sandbox:
             line = line.split("#", 1)[0].strip()
             if not line:
                 continue
-            if not Sandbox._VALID_PKG_RE.match(line):
+            if not DockerSandbox._VALID_PKG_RE.match(line):
                 raise ValueError(
                     f"invalid package name on line {lineno}: {line!r}")
             packages.append(line)
         return packages
-
-    @staticmethod
-    def generate_project_dockerfile(packages):
-        """Generate a Dockerfile that installs the given apt packages.
-
-        Returns a Dockerfile string using ARG BASE_IMAGE / FROM ${BASE_IMAGE}
-        that installs packages via apt-get with --no-install-recommends.
-        """
-        pkg_list = " ".join(f"'{p}'" for p in packages)
-        return (
-            "ARG BASE_IMAGE\n"
-            "FROM ${BASE_IMAGE}\n"
-            "USER root\n"
-            "RUN apt-get update && apt-get install -y --no-install-recommends \\\n"
-            f"    {pkg_list} \\\n"
-            "    && rm -rf /var/lib/apt/lists/*\n"
-            "USER agent\n"
-        )
-
-    @staticmethod
-    def find_project_config(project_dir):
-        """Check for project-level sandbox config in .agent-loop/ directory.
-
-        Returns (type, path) where type is "dockerfile", "dependencies", or
-        None if neither exists. Dockerfile.sandbox takes precedence.
-        """
-        agent_loop_dir = os.path.join(project_dir, ".agent-loop")
-        dockerfile_path = os.path.join(agent_loop_dir, "Dockerfile.sandbox")
-        if os.path.isfile(dockerfile_path):
-            return ("dockerfile", dockerfile_path)
-        deps_path = os.path.join(agent_loop_dir, "dependencies")
-        if os.path.isfile(deps_path):
-            return ("dependencies", deps_path)
-        return None
-
-    @staticmethod
-    def project_image_tag(agent, project_name, base_tag, dockerfile_content):
-        """Compute a project image tag from agent, project name, and content.
-
-        Tag format: agent-loop-sandbox-{agent}-{project_name}:v{hash}
-        Hash is SHA256(base_tag + ":" + dockerfile_content)[:8].
-        """
-        combined = f"{base_tag}:{dockerfile_content}"
-        chash = hashlib.sha256(combined.encode()).hexdigest()[:8]
-        return f"agent-loop-sandbox-{agent}-{project_name}:v{chash}"
-
-    def ensure_project_image(self, agent, base_tag, project_dir,
-                             force_rebuild=False):
-        """Build a project-level image layer on top of the base image.
-
-        Returns the project image tag, or base_tag if no project config exists.
-        """
-        if project_dir.endswith("/"):
-            raise ValueError(
-                f"project_dir must not end with /: {project_dir}")
-        config = self.find_project_config(project_dir)
-        if config is None:
-            return base_tag
-
-        config_type, config_path = config
-        with open(config_path) as f:
-            config_content = f.read()
-
-        if config_type == "dependencies":
-            packages = self.parse_dependencies(config_content)
-            dockerfile_content = self.generate_project_dockerfile(packages)
-        else:
-            dockerfile_content = config_content
-
-        project_name = os.path.basename(project_dir)
-        tag = self.project_image_tag(agent, project_name, base_tag,
-                                     dockerfile_content)
-
-        if not force_rebuild and self.image_exists(tag):
-            print(f"ralph: using cached project image {tag}")
-            return tag
-
-        print(f"ralph: building project image {tag}...")
-        if config_type == "dockerfile":
-            context_dir = os.path.join(project_dir, ".agent-loop")
-            subprocess.run(
-                ["docker", "build", "--build-arg", f"BASE_IMAGE={base_tag}",
-                 "-t", tag, "-f", "Dockerfile.sandbox", context_dir],
-                check=True,
-            )
-        else:
-            with tempfile.TemporaryDirectory() as tmp_dir:
-                tmp_dockerfile = os.path.join(tmp_dir, "Dockerfile")
-                with open(tmp_dockerfile, "w") as f:
-                    f.write(dockerfile_content)
-                subprocess.run(
-                    ["docker", "build", "--build-arg",
-                     f"BASE_IMAGE={base_tag}", "-t", tag, tmp_dir],
-                    check=True,
-                )
-        return tag
 
     @staticmethod
     def generate_project_dockerfile(packages):
@@ -419,17 +574,6 @@ class Sandbox:
     # -- Sandbox lifecycle --------------------------------------------------
 
     @staticmethod
-    def sandbox_name(agent, branch):
-        """Generate sandbox name from agent and branch.
-
-        Sanitizes the branch: replaces '/' with '-', strips leading/trailing
-        hyphens, collapses consecutive hyphens, and lowercases.
-        """
-        sanitized = branch.replace("/", "-").lower()
-        sanitized = re.sub(r'-+', '-', sanitized).strip("-")
-        return f"agent-loop-{agent}-{sanitized}"
-
-    @staticmethod
     def _docker_sandbox_ls():
         """List sandboxes via 'docker sandbox ls --json'. Returns parsed JSON."""
         result = subprocess.run(
@@ -483,8 +627,7 @@ class Sandbox:
         )
         return result.stdout.strip() if result.returncode == 0 else ""
 
-    @staticmethod
-    def check_in_sync(sandbox_name, work_dir, git):
+    def check_in_sync(self, sandbox_name, work_dir, git):
         """Check if sandbox can access the host worktree's git state.
 
         With a shared .git directory the sandbox and host see the same
@@ -492,12 +635,11 @@ class Sandbox:
         path inside the sandbox and it matches the host.
         """
         host_head = git.output("rev-parse", "HEAD", cwd=work_dir)
-        sandbox_head = Sandbox.exec_output(
+        sandbox_head = self.exec_output(
             sandbox_name, "git", "rev-parse", "HEAD", workdir=work_dir)
         return bool(host_head and sandbox_head and host_head == sandbox_head)
 
-    @staticmethod
-    def reset_to_host(sandbox_name, work_dir, git):
+    def reset_to_host(self, sandbox_name, work_dir, git):
         """Reset sandbox worktree to match host HEAD.
 
         With a shared .git the sandbox already sees the same commits as
@@ -521,8 +663,7 @@ class Sandbox:
         )
         return True
 
-    @staticmethod
-    def sync_to_host(sandbox_name, head_before, head_after, work_dir):
+    def sync_to_host(self, sandbox_name, head_before, head_after, work_dir):
         """Verify sandbox commits are visible on the host.
 
         With a shared .git directory, commits made inside the sandbox are
@@ -596,10 +737,9 @@ class Sandbox:
         raw = result.stdout.strip()
         return os.path.realpath(os.path.join(worktree_path, raw))
 
-    @staticmethod
-    def cleanup_sandbox(agent, branch):
+    def cleanup_sandbox(self, agent, branch):
         """Remove the sandbox for a given agent and branch."""
-        name = Sandbox.sandbox_name(agent, branch)
+        name = self.sandbox_name(agent, branch)
         print(f"ralph: removing sandbox {name}")
         subprocess.run(
             ["docker", "sandbox", "rm", name],
@@ -633,75 +773,7 @@ class Sandbox:
 
     # -- Iteration ------------------------------------------------------------
 
-    ITERATION_PROMPT = (
-        "You are an AI coding agent. You will be invoked repeatedly "
-        "— once per task.\n"
-        "Read the spec file at `/tmp/spec.md` for what to build.\n"
-        "\n"
-        "Your job this iteration: implement EXACTLY ONE task, then stop.\n"
-        "\n"
-        "Steps:\n"
-        "1. Study the spec and existing codebase (especially CLAUDE.md) "
-        "to understand patterns\n"
-        "2. Check git log to see what has already been implemented\n"
-        "3. Pick the FIRST incomplete task from the spec\n"
-        "4. Implement that single task fully — no stubs or placeholders\n"
-        "5. Write tests as appropriate for the project\n"
-        "6. Run the tests\n"
-        "7. If tests pass, mark ONLY that task done in the spec file "
-        "and commit\n"
-        "8. If tests fail, fix before committing\n"
-        "\n"
-        "IMPORTANT: Do NOT implement more than one task. After committing, "
-        "stop immediately.\n"
-        "The loop will call you again for the next task.\n"
-        "If ALL tasks are already complete, just say so "
-        "— do not make any commits.\n"
-        "\n"
-        "Rules:\n"
-        "- One task, one commit, then stop\n"
-        "- Follow conventions in CLAUDE.md if it exists\n"
-        "- Search the codebase before assuming something isn't implemented\n"
-        "\n"
-        "Each step follows this structure:\n"
-        "1. **Implement** — Write the code\n"
-        "2. **Test** — Write tests appropriate for the project\n"
-        "3. **Verify** — Run tests, fix failures until all pass\n"
-        "4. **Review** — Code review for bugs, edge cases, and conventions\n"
-        "5. **Address feedback** — Fix review findings, re-run tests, "
-        "re-review until clean\n"
-        "6. **Update spec** — Mark the step `[done]` and record any "
-        "decisions or deviations\n"
-        "\n"
-        "Spec maintenance rules:\n"
-        "- Mark each step `[done]` when complete.\n"
-        "- Record design decisions that emerged during implementation "
-        "as notes under the step.\n"
-        "- Minor deviations (e.g. flag name changes, reordered logic) "
-        "should be noted and the spec updated to match.\n"
-        "- Significant design changes (e.g. new subcommands, changed "
-        "architecture, removed features) require pausing for user review "
-        "before proceeding.\n"
-        "\n"
-        "Unfulfillable tasks:\n"
-        "- If a task cannot be completed because required tools or "
-        "infrastructure are unavailable (e.g., test runner not installed, "
-        "build tool missing, external service unreachable), append "
-        "`[blocked: <reason>]` to the step heading line "
-        "(e.g., `### Step 3: Run tests [blocked: pytest not installed]`) "
-        "and do NOT commit. The outer loop will detect this marker and "
-        "transition the issue to `status:needs-attention`.\n"
-        "\n"
-        "Run all checks:\n"
-        "- The 'Run all checks' step (typically the final step) must "
-        "ALWAYS execute the full test suite, linter, and syntax checks "
-        "— even if earlier steps already ran individual tests. This step "
-        "catches cross-cutting regressions. Never skip it or mark it done "
-        "without actually running the checks."
-    )
-
-    @staticmethod
-    def setup_git_config(sandbox_name, user, email):
+    def setup_git_config(self, sandbox_name, user, email):
         """Configure git user and safe directory settings inside the sandbox."""
         subprocess.run(
             ["docker", "sandbox", "exec", sandbox_name,
@@ -719,12 +791,13 @@ class Sandbox:
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False,
         )
 
-    def run_iteration(self, sandbox_name, spec_content, model,
-                      env_vars=None, workdir=None):
+    def run_iteration(self, sandbox_name, spec_content, model, env_vars=None):
         """Run a single Claude Code iteration inside the sandbox.
 
         Writes spec content to /tmp/spec.md inside the sandbox, runs claude
         with the iteration prompt, then reads back the (possibly updated) spec.
+        No explicit -w flag is needed: docker sandbox exec defaults to the
+        first workspace directory passed at sandbox creation time.
 
         Returns (exit_code, updated_spec_content).
         """
@@ -742,8 +815,6 @@ class Sandbox:
 
         # Run claude with iteration prompt
         cmd = ["docker", "sandbox", "exec"]
-        if workdir:
-            cmd.extend(["-w", workdir])
         if env_vars:
             for k, v in env_vars.items():
                 cmd.extend(["-e", f"{k}={v}"])
@@ -767,8 +838,7 @@ class Sandbox:
 
     # -- Selftest --------------------------------------------------------------
 
-    @staticmethod
-    def remove_sandbox(name):
+    def remove_sandbox(self, name):
         """Remove a sandbox by name (best-effort)."""
         subprocess.run(
             ["docker", "sandbox", "rm", name],
@@ -778,38 +848,9 @@ class Sandbox:
 
     # -- Pre-flight validation ------------------------------------------------
 
-    def preflight_check(self, sandbox_name, agent, proxy_port):
-        """Run pre-flight validation before starting an iteration.
-
-        Checks token validity, proxy health, sandbox responsiveness,
-        and network policy enforcement.
-
-        Returns a list of failure messages. Empty list means all checks passed.
-        """
+    def _preflight_backend_checks(self, sandbox_name):
+        """Docker-specific pre-flight checks: sandbox responsiveness and network policy."""
         failures = []
-
-        # 1. Token valid
-        data = read_token_from_keychain(agent)
-        if data is None:
-            failures.append(
-                f"no token found for agent {agent}"
-                " — run: ralph store-token")
-        else:
-            now_ms = int(time.time() * 1000)
-            expires_at = data.get("expiresAt", 0)
-            if expires_at <= now_ms:
-                failures.append(
-                    f"token expired for agent {agent}"
-                    " — run: ralph store-token")
-
-        # 2. Proxy running
-        healthy, _ = proxy_health_check(proxy_port)
-        if not healthy:
-            failures.append(
-                f"proxy not reachable at http://localhost:{proxy_port}/health"
-                " — start the credential proxy")
-
-        # 3. Sandbox responsive
         sandbox_ok = False
         result = subprocess.run(
             ["docker", "sandbox", "exec", sandbox_name, "echo", "ok"],
@@ -823,7 +864,7 @@ class Sandbox:
         else:
             sandbox_ok = True
 
-        # 4. Network policy applied (only if sandbox is responsive)
+        # Network policy applied (only if sandbox is responsive)
         if sandbox_ok:
             result = subprocess.run(
                 ["docker", "sandbox", "exec", sandbox_name,
@@ -835,6 +876,487 @@ class Sandbox:
                 failures.append(
                     f"network policy not applied to sandbox {sandbox_name}"
                     " — outbound requests should be blocked")
+
+        return failures
+
+
+# ---------------------------------------------------------------------------
+# Tart sandbox backend
+# ---------------------------------------------------------------------------
+
+class TartSandbox(SandboxBackend):
+    """Manages Tart macOS VM sandboxes for agent-loop isolation.
+
+    Uses Tart (Virtualization.framework) to run macOS VMs on Apple Silicon.
+    Content-addressed templates cache dependency installs; per-branch VMs
+    are APFS clones of templates.
+    """
+
+    SHARED_DIR = "/Volumes/My Shared Files/workspace"
+    _vm_procs = {}
+    _vm_list_cache = (0, [])
+
+    def __init__(self, dotfiles_dir, config=None):
+        self.dotfiles_dir = dotfiles_dir
+        config = config or {}
+        self.base_image = config.get("base_image", "")
+        self.dependencies_content = config.get("dependencies_content", "")
+
+    def check_prerequisites(self):
+        """Check that tart and docker (for proxy) are available.
+
+        Returns list of error messages. Empty list means all checks passed.
+        """
+        errors = []
+        if not shutil.which("tart"):
+            errors.append(
+                "tart is not installed"
+                " (install: brew install cirruslabs/cli/tart)")
+        if not shutil.which("docker"):
+            errors.append(
+                "docker is not installed"
+                " (required for the credential proxy)")
+        return errors
+
+    def _template_name(self, agent):
+        """Compute content-addressed template VM name.
+
+        Hash is SHA256(base_image + newline + dependencies_content)[:12].
+        """
+        content = self.base_image + "\n" + self.dependencies_content
+        h = hashlib.sha256(content.encode()).hexdigest()[:12]
+        return f"agent-loop-template-{agent}-{h}"
+
+    _VM_LIST_CACHE_TTL = 2  # seconds
+
+    def _list_vms(self):
+        """List Tart VMs via 'tart list --format json'. Returns parsed list.
+
+        Caches the result for up to _VM_LIST_CACHE_TTL seconds to avoid
+        redundant subprocess calls when multiple methods query VM state
+        in quick succession.
+        """
+        now = time.monotonic()
+        cached_time, cached_result = TartSandbox._vm_list_cache
+        if now - cached_time < self._VM_LIST_CACHE_TTL:
+            return cached_result
+
+        result = subprocess.run(
+            ["tart", "list", "--format", "json"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            vms = []
+        else:
+            try:
+                vms = json.loads(result.stdout)
+            except (json.JSONDecodeError, ValueError):
+                vms = []
+        TartSandbox._vm_list_cache = (now, vms)
+        return vms
+
+    def _vm_exists(self, name):
+        """Check if a VM with the given name exists."""
+        for vm in self._list_vms():
+            if vm.get("Name") == name:
+                return True
+        return False
+
+    def _vm_state(self, name):
+        """Return the state of a VM by name, or None if not found."""
+        for vm in self._list_vms():
+            if vm.get("Name") == name:
+                return vm.get("State")
+        return None
+
+    def _running_vm_count(self):
+        """Count running macOS VMs."""
+        return sum(1 for vm in self._list_vms() if vm.get("State") == "Running")
+
+    def _check_vm_limit(self):
+        """Raise RuntimeError if at the Apple SLA VM limit (max 2)."""
+        count = self._running_vm_count()
+        if count >= 2:
+            raise RuntimeError(
+                f"ralph: cannot start VM — {count} macOS VMs already running "
+                f"(Apple SLA permits max 2). "
+                f"Stop an existing VM with: tart stop <name>")
+
+    def _wait_for_guest_agent(self, vm_name, timeout=120):
+        """Poll tart exec until guest agent responds or timeout.
+
+        Tries 'tart exec <vm> -- echo ok' every 2 seconds.
+        Raises RuntimeError on timeout.
+        """
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            result = subprocess.run(
+                ["tart", "exec", vm_name, "--", "echo", "ok"],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                check=False,
+            )
+            if result.returncode == 0:
+                return
+            time.sleep(2)
+        raise RuntimeError(
+            f"ralph: guest agent not responding on VM {vm_name} "
+            f"after {timeout}s timeout")
+
+    def ensure_image(self, agent, force_rebuild=False):
+        """Ensure template VM is built and cached. Returns template name.
+
+        Clones from base image and optionally installs dependencies.
+        """
+        template = self._template_name(agent)
+
+        # Check cache
+        if not force_rebuild and self._vm_exists(template):
+            print(f"ralph: using cached template {template}")
+            return template
+
+        # Force rebuild: delete old template first
+        if force_rebuild and self._vm_exists(template):
+            print(f"ralph: deleting old template {template}")
+            subprocess.run(
+                ["tart", "delete", template],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                check=False,
+            )
+
+        # Clone base image
+        print(f"ralph: cloning base image {self.base_image} → {template}")
+        subprocess.run(
+            ["tart", "clone", self.base_image, template], check=True)
+
+        # Install dependencies if any
+        if self.dependencies_content.strip():
+            self._check_vm_limit()
+            print(f"ralph: installing dependencies in template {template}")
+            vm_proc = subprocess.Popen(
+                ["tart", "run", template, "--no-graphics"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+            try:
+                self._wait_for_guest_agent(template)
+                subprocess.run(
+                    ["tart", "exec", "-i", template, "--", "bash", "-e"],
+                    input=self.dependencies_content, text=True, check=True,
+                )
+            finally:
+                subprocess.run(
+                    ["tart", "stop", template],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    check=False,
+                )
+                vm_proc.wait()
+
+        return template
+
+    # -- Sandbox lifecycle ----------------------------------------------------
+
+    _atexit_registered = False
+
+    @staticmethod
+    def exec_output(sandbox_name, *cmd):
+        """Run a command inside the VM and return its stdout (stripped)."""
+        result = subprocess.run(
+            ["tart", "exec", sandbox_name, "--"] + list(cmd),
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False,
+        )
+        return result.stdout.strip() if result.returncode == 0 else ""
+
+    def ensure_sandbox(self, agent, branch, worktree_path, **kwargs):
+        """Ensure a per-branch VM exists and is running. Returns VM name.
+
+        Clones from the template. If the VM exists but is stopped, deletes
+        and recreates. Reuses a running VM. Registers an atexit handler
+        (once) to stop all tracked VMs on exit.
+        """
+        name = self.sandbox_name(agent, branch)
+        state = self._vm_state(name)
+
+        if state == "Running":
+            print(f"ralph: reusing running VM {name}")
+            return name
+
+        if state is not None:
+            # Exists but stopped — delete and recreate
+            print(f"ralph: deleting stopped VM {name}")
+            subprocess.run(
+                ["tart", "delete", name],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                check=False,
+            )
+
+        self._check_vm_limit()
+
+        template = self.ensure_image(agent,
+                                     force_rebuild=kwargs.get("force_rebuild", False))
+        print(f"ralph: cloning VM {name} from template {template}")
+        subprocess.run(["tart", "clone", template, name], check=True)
+
+        # Start headless with directory sharing
+        print(f"ralph: starting VM {name}")
+        vm_proc = subprocess.Popen(
+            ["tart", "run", name, "--no-graphics",
+             f"--dir=workspace:{worktree_path}"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        self._vm_procs[name] = vm_proc
+
+        # Register atexit handler once to stop all tracked VMs
+        if not TartSandbox._atexit_registered:
+            atexit.register(TartSandbox._atexit_stop_all)
+            TartSandbox._atexit_registered = True
+
+        self._wait_for_guest_agent(name)
+        return name
+
+    @staticmethod
+    def _atexit_stop_all():
+        """Stop all tracked VMs on interpreter exit (best-effort).
+
+        Iterates the class-level _vm_procs dict, stops each VM, waits for
+        each Popen process, then clears the dict. Errors are suppressed
+        since this runs during interpreter shutdown.
+        """
+        for name, proc in list(TartSandbox._vm_procs.items()):
+            try:
+                subprocess.run(
+                    ["tart", "stop", name],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    check=False,
+                )
+            except Exception:
+                pass
+            try:
+                proc.wait(timeout=10)
+            except Exception:
+                pass
+        TartSandbox._vm_procs.clear()
+
+    def setup_git_config(self, sandbox_name, user, email):
+        """Configure git user and safe directory settings inside the VM."""
+        subprocess.run(
+            ["tart", "exec", sandbox_name, "--",
+             "git", "config", "--global", "user.name", user],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False,
+        )
+        subprocess.run(
+            ["tart", "exec", sandbox_name, "--",
+             "git", "config", "--global", "user.email", email],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False,
+        )
+        subprocess.run(
+            ["tart", "exec", sandbox_name, "--",
+             "git", "config", "--global", "--add", "safe.directory", "*"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False,
+        )
+
+    def run_iteration(self, sandbox_name, spec_content, model, env_vars=None):
+        """Run a single Claude Code iteration inside the VM.
+
+        Writes spec to /tmp/spec.md via tart exec, runs claude with env vars,
+        then reads back the (possibly updated) spec.
+
+        Returns (exit_code, updated_spec_content).
+        """
+        spec_path = "/tmp/spec.md"
+
+        # Write spec into VM
+        write_proc = subprocess.run(
+            ["tart", "exec", "-i", sandbox_name, "--", "tee", spec_path],
+            input=spec_content, text=True, check=False,
+            stdout=subprocess.DEVNULL,
+        )
+        if write_proc.returncode != 0:
+            return write_proc.returncode, spec_content
+
+        # Build claude command with env vars, shell-escaped
+        env_prefix = ""
+        if env_vars:
+            parts = [f"{k}={shlex.quote(v)}" for k, v in env_vars.items()]
+            env_prefix = "env " + " ".join(parts) + " "
+        claude_cmd = (
+            f"cd '{self.SHARED_DIR}' && "
+            f"{env_prefix}claude "
+            f"-p {shlex.quote(self.ITERATION_PROMPT)} "
+            f"--model {shlex.quote(model)} "
+            f"--dangerously-skip-permissions "
+            f"--effort high"
+        )
+        rc = subprocess.run(
+            ["tart", "exec", sandbox_name, "--", "bash", "-c", claude_cmd],
+            check=False,
+        ).returncode
+
+        # Read back (possibly updated) spec
+        read_proc = subprocess.run(
+            ["tart", "exec", sandbox_name, "--", "cat", spec_path],
+            stdout=subprocess.PIPE, text=True, check=False,
+        )
+        updated = read_proc.stdout if read_proc.returncode == 0 else spec_content
+
+        return rc, updated
+
+    def proxy_host(self):
+        """Return the host IP reachable from inside the Tart VM.
+
+        Tries to discover the gateway from inside a running VM, falls back
+        to ipconfig on the host, then to the well-known Tart NAT gateway.
+        Caches the result after first discovery.
+        """
+        if hasattr(self, "_cached_proxy_host"):
+            return self._cached_proxy_host
+
+        # Try to get gateway from a running VM
+        for name, proc in self._vm_procs.items():
+            if proc.poll() is None:  # still running
+                gw = self.exec_output(
+                    name, "route", "-n", "get", "default")
+                for line in gw.splitlines():
+                    line = line.strip()
+                    if line.startswith("gateway:"):
+                        ip = line.split(":", 1)[1].strip()
+                        if ip:
+                            self._cached_proxy_host = ip
+                            return ip
+                break
+
+        # Fallback: ipconfig on host
+        result = subprocess.run(
+            ["ipconfig", "getifaddr", "en0"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            check=False,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            self._cached_proxy_host = result.stdout.strip()
+            return self._cached_proxy_host
+
+        # Final fallback
+        self._cached_proxy_host = "192.168.64.1"
+        return self._cached_proxy_host
+
+    def check_in_sync(self, sandbox_name, work_dir, git):
+        """Check if VM content matches host worktree HEAD.
+
+        Tart uses VirtioFS shared directories, so the VM and host share
+        the same filesystem. Always returns True.
+        """
+        return True
+
+    def reset_to_host(self, sandbox_name, work_dir, git):
+        """Reset VM git state to match host worktree.
+
+        Tart uses VirtioFS shared directories — no-op since files are shared.
+        """
+        return True
+
+    def sync_to_host(self, sandbox_name, head_before, head_after, work_dir):
+        """Sync commits from VM to host worktree.
+
+        Tart uses VirtioFS shared directories, so commits made inside the VM
+        are immediately visible on the host. Verify the commit exists.
+        """
+        result = subprocess.run(
+            ["git", "rev-parse", "--verify", head_after],
+            cwd=work_dir, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        if result.returncode == 0:
+            print(f"ralph: commit {head_after[:8]} visible on host (shared filesystem)")
+            return True
+        print("ralph: error: commit not visible on host despite shared filesystem",
+              file=sys.stderr)
+        return False
+
+    def cleanup_sandbox(self, agent, branch):
+        """Stop and delete the VM for a given agent and branch."""
+        name = self.sandbox_name(agent, branch)
+        print(f"ralph: stopping VM {name}")
+        subprocess.run(
+            ["tart", "stop", name],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        # Wait for the Popen process if we're tracking it
+        proc = self._vm_procs.pop(name, None)
+        if proc is not None:
+            proc.wait()
+        print(f"ralph: deleting VM {name}")
+        subprocess.run(
+            ["tart", "delete", name],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            check=False,
+        )
+
+    def remove_sandbox(self, name):
+        """Remove a VM by name (best-effort)."""
+        subprocess.run(
+            ["tart", "stop", name],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        proc = self._vm_procs.pop(name, None)
+        if proc is not None:
+            proc.wait()
+        subprocess.run(
+            ["tart", "delete", name],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            check=False,
+        )
+
+    def prune_sandboxes(self, agent):
+        """Remove orphaned VMs whose workspace worktree paths no longer exist.
+
+        Looks for VMs matching the agent-loop-{agent}-* prefix (excluding
+        templates). Returns list of pruned VM names.
+        """
+        prefix = f"agent-loop-{agent}-"
+        template_prefix = f"agent-loop-template-{agent}-"
+        pruned = []
+        for vm in self._list_vms():
+            name = vm.get("Name", "")
+            if not name.startswith(prefix):
+                continue
+            if name.startswith(template_prefix):
+                continue
+            # VM is an agent-loop sandbox — check if we can determine its worktree
+            # Since Tart VMs don't track workspace path in metadata, we consider
+            # non-running VMs as orphans eligible for pruning
+            state = vm.get("State", "")
+            if state == "Running":
+                continue
+            print(f"ralph: pruning orphan VM {name}")
+            subprocess.run(
+                ["tart", "stop", name],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                check=False,
+            )
+            subprocess.run(
+                ["tart", "delete", name],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                check=False,
+            )
+            pruned.append(name)
+        return pruned
+
+    def _preflight_backend_checks(self, sandbox_name):
+        """Tart-specific pre-flight checks: VM responsiveness."""
+        failures = []
+        result = subprocess.run(
+            ["tart", "exec", sandbox_name, "--", "echo", "ok"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            failures.append(
+                f"VM {sandbox_name} is not responding"
+                f" — try: tart stop {sandbox_name} && tart delete {sandbox_name}")
+        else:
+            # Log note about network isolation
+            print("ralph: note: Tart VMs do not have network isolation enabled")
 
         return failures
 
@@ -1030,18 +1552,21 @@ def ensure_proxy(agent, port, dotfiles_dir):
 # Selftest
 # ---------------------------------------------------------------------------
 
-def selftest(agent, dotfiles_dir):
+def selftest(agent, dotfiles_dir, sandbox_type="docker"):
     """Run a full pipeline smoke test without executing a real spec.
+
+    Args:
+        agent: agent name (e.g. "claude")
+        dotfiles_dir: path to the dotfiles repository
+        sandbox_type: "docker" or "tart"
 
     Returns 0 if all checks pass, 1 if any fail.
     """
     port = proxy_port_for_agent(agent)
     sandbox_name = f"agent-loop-selftest-{agent}"
-    sandbox = Sandbox(dotfiles_dir)
     checks = []
     proxy_existed_before = proxy_health_check(port)[0]
     proxy_running = False
-    sandbox_created = False
 
     def report(name, passed, detail=""):
         status = "PASS" if passed else "FAIL"
@@ -1051,9 +1576,16 @@ def selftest(agent, dotfiles_dir):
         print(msg)
         checks.append(passed)
 
+    if sandbox_type == "tart":
+        sandbox = TartSandbox(dotfiles_dir, config={
+            "base_image": "ghcr.io/cirruslabs/macos-sequoia-xcode:latest",
+        })
+    else:
+        sandbox = DockerSandbox(dotfiles_dir)
+
     try:
         # 1. Check token
-        print("ralph: selftest starting...")
+        print(f"ralph: selftest starting ({sandbox_type})...")
         token_data = read_token_from_keychain(agent)
         if token_data is None:
             report("check token", False, "no token found — run: ralph store-token")
@@ -1069,6 +1601,15 @@ def selftest(agent, dotfiles_dir):
         remaining_days = int((expires_at - now_ms) / MS_PER_DAY)
         report("check token", True, f"expires in {remaining_days} days")
 
+        # 1b. Check prerequisites
+        prereq_errors = sandbox.check_prerequisites()
+        if prereq_errors:
+            for err in prereq_errors:
+                report("prerequisites", False, err)
+            print("ralph: selftest aborted — prerequisites not met")
+            return 1
+        report("prerequisites", True, sandbox_type)
+
         # 2. Start proxy and verify health
         ensure_proxy(agent, port, dotfiles_dir)
         proxy_running = True
@@ -1080,102 +1621,23 @@ def selftest(agent, dotfiles_dir):
             print("ralph: selftest aborted — proxy required for remaining checks")
             return 1
 
-        # 3. Build/ensure image
-        try:
-            tag = sandbox.ensure_image(agent)
-            report("build image", True, tag)
-        except Exception as e:
-            report("build image", False, str(e))
-            print("ralph: selftest aborted — image required for remaining checks")
-            return 1
-
-        # 3b. Build project image (if project config exists in cwd)
-        project_config = Sandbox.find_project_config(os.getcwd())
-        if project_config is not None:
-            try:
-                tag = sandbox.ensure_project_image(
-                    agent, tag, os.getcwd())
-                report("build project image", True, tag)
-            except Exception as e:
-                report("build project image", False, str(e))
-                print("ralph: selftest aborted — project image "
-                      "required for remaining checks")
-                return 1
+        if sandbox_type == "tart":
+            _selftest_tart(sandbox, agent, sandbox_name, port, report)
         else:
-            print("ralph: no .agent-loop/ config in cwd, "
-                  "skipping project image check")
+            _selftest_docker(sandbox, agent, sandbox_name, port, report)
 
-        # 4. Create test sandbox
-        try:
-            Sandbox.remove_sandbox(sandbox_name)
-            git_common_dir = Sandbox._resolve_git_common_dir(os.getcwd())
-            sandbox._docker_sandbox_create(sandbox_name, tag, os.getcwd(),
-                                           git_common_dir)
-            sandbox_created = True
-            report("create sandbox", True, sandbox_name)
-        except Exception as e:
-            report("create sandbox", False, str(e))
-            print("ralph: selftest aborted — sandbox required for remaining checks")
-            return 1
-
-        # 5. Apply network policy
-        try:
-            Sandbox.apply_network_policy(sandbox_name)
-            report("network policy", True)
-        except Exception as e:
-            report("network policy", False, str(e))
-
-        # 6. Verify proxy reachable from sandbox
-        result = subprocess.run(
-            ["docker", "sandbox", "exec", sandbox_name,
-             "curl", "-sf", "--max-time", "5",
-             f"http://host.docker.internal:{port}/health"],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-            check=False,
-        )
-        report("proxy reachable from sandbox", result.returncode == 0,
-               "via host.docker.internal" if result.returncode == 0
-               else f"curl exit code {result.returncode}")
-
-        # 7. Verify Claude auth works through proxy
-        result = subprocess.run(
-            ["docker", "sandbox", "exec",
-             "-w", os.getcwd(),
-             "-e", "CLAUDE_CODE_OAUTH_TOKEN=phantom",
-             "-e", f"ANTHROPIC_BASE_URL=http://host.docker.internal:{port}",
-             "-e", f"ANTHROPIC_CUSTOM_MODEL_OPTION={MODEL_ALIASES['haiku']}",
-             sandbox_name,
-             "claude", "-p", "say ok", "--model", "haiku"],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-            check=False, timeout=60,
-        )
-        report("claude auth via proxy", result.returncode == 0,
-               "response received" if result.returncode == 0
-               else f"exit code {result.returncode}")
-
-        # 8. Verify network isolation (google.com should be blocked)
-        result = subprocess.run(
-            ["docker", "sandbox", "exec", sandbox_name,
-             "curl", "-s", "--max-time", "5", "https://google.com"],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-            check=False,
-        )
-        blocked = result.returncode != 0
-        report("network isolation", blocked,
-               "outbound blocked" if blocked
-               else "outbound NOT blocked — network policy ineffective")
-
+    except _SelftestAbort:
+        pass  # already reported; fall through to cleanup + summary
     except subprocess.TimeoutExpired:
         report("timeout", False, "a check timed out")
     finally:
-        # 9. Cleanup
-        if sandbox_created:
-            print(f"ralph: cleaning up test sandbox {sandbox_name}...")
-            Sandbox.remove_sandbox(sandbox_name)
+        # Always attempt cleanup — remove_sandbox is best-effort/idempotent
+        print(f"ralph: cleaning up test sandbox {sandbox_name}...")
+        sandbox.remove_sandbox(sandbox_name)
         if proxy_running and not proxy_existed_before:
             stop_proxy(agent)
 
-    # 10. Report summary
+    # Report summary
     passed = sum(1 for c in checks if c)
     total = len(checks)
     if all(checks):
@@ -1185,6 +1647,170 @@ def selftest(agent, dotfiles_dir):
         failed = total - passed
         print(f"ralph: selftest complete — {failed}/{total} checks failed")
         return 1
+
+
+def _selftest_docker(sandbox, agent, sandbox_name, port, report):
+    """Docker-specific selftest checks."""
+    # 3. Build/ensure image
+    try:
+        tag = sandbox.ensure_image(agent)
+        report("build image", True, tag)
+    except Exception as e:
+        report("build image", False, str(e))
+        print("ralph: selftest aborted — image required for remaining checks")
+        raise _SelftestAbort()
+
+    # 3b. Build project image (if project config exists in cwd)
+    project_config = DockerSandbox.find_project_config(os.getcwd())
+    if project_config is not None:
+        try:
+            tag = sandbox.ensure_project_image(
+                agent, tag, os.getcwd())
+            report("build project image", True, tag)
+        except Exception as e:
+            report("build project image", False, str(e))
+            print("ralph: selftest aborted — project image "
+                  "required for remaining checks")
+            raise _SelftestAbort()
+    else:
+        print("ralph: no .agent-loop/ config in cwd, "
+              "skipping project image check")
+
+    # 4. Create test sandbox
+    try:
+        sandbox.remove_sandbox(sandbox_name)
+        git_common_dir = DockerSandbox._resolve_git_common_dir(os.getcwd())
+        sandbox._docker_sandbox_create(sandbox_name, tag, os.getcwd(),
+                                       git_common_dir)
+        report("create sandbox", True, sandbox_name)
+    except Exception as e:
+        report("create sandbox", False, str(e))
+        print("ralph: selftest aborted — sandbox required for remaining checks")
+        raise _SelftestAbort()
+
+    # 5. Apply network policy
+    try:
+        DockerSandbox.apply_network_policy(sandbox_name)
+        report("network policy", True)
+    except Exception as e:
+        report("network policy", False, str(e))
+
+    # 6. Verify proxy reachable from sandbox
+    result = subprocess.run(
+        ["docker", "sandbox", "exec", sandbox_name,
+         "curl", "-sf", "--max-time", "5",
+         f"http://host.docker.internal:{port}/health"],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        check=False,
+    )
+    report("proxy reachable from sandbox", result.returncode == 0,
+           "via host.docker.internal" if result.returncode == 0
+           else f"curl exit code {result.returncode}")
+
+    # 7. Verify Claude auth works through proxy
+    result = subprocess.run(
+        ["docker", "sandbox", "exec",
+         "-e", "CLAUDE_CODE_OAUTH_TOKEN=phantom",
+         "-e", f"ANTHROPIC_BASE_URL=http://host.docker.internal:{port}",
+         "-e", f"ANTHROPIC_CUSTOM_MODEL_OPTION={MODEL_ALIASES['haiku']}",
+         sandbox_name,
+         "claude", "-p", "say ok", "--model", "haiku"],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        check=False, timeout=60,
+    )
+    report("claude auth via proxy", result.returncode == 0,
+           "response received" if result.returncode == 0
+           else f"exit code {result.returncode}")
+
+    # 8. Verify network isolation (google.com should be blocked)
+    result = subprocess.run(
+        ["docker", "sandbox", "exec", sandbox_name,
+         "curl", "-s", "--max-time", "5", "https://google.com"],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        check=False,
+    )
+    blocked = result.returncode != 0
+    report("network isolation", blocked,
+           "outbound blocked" if blocked
+           else "outbound NOT blocked — network policy ineffective")
+
+
+def _selftest_tart(sandbox, agent, sandbox_name, port, report):
+    """Tart-specific selftest checks."""
+    # 3. Build template
+    try:
+        template = sandbox.ensure_image(agent)
+        report("build template", True, template)
+    except Exception as e:
+        report("build template", False, str(e))
+        print("ralph: selftest aborted — template required for remaining checks")
+        raise _SelftestAbort()
+
+    # 4. Create test VM
+    try:
+        sandbox.remove_sandbox(sandbox_name)
+        # Clone template and start VM
+        subprocess.run(
+            ["tart", "clone", template, sandbox_name],
+            check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+        )
+        proc = subprocess.Popen(
+            ["tart", "run", sandbox_name, "--no-graphics"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        sandbox._vm_procs[sandbox_name] = proc
+        report("create test VM", True, sandbox_name)
+    except Exception as e:
+        report("create test VM", False, str(e))
+        print("ralph: selftest aborted — VM required for remaining checks")
+        raise _SelftestAbort()
+
+    # 5. Verify tart exec works (wait for guest agent)
+    try:
+        sandbox._wait_for_guest_agent(sandbox_name)
+        report("tart exec", True, "guest agent responsive")
+    except Exception as e:
+        report("tart exec", False, str(e))
+        print("ralph: selftest aborted — guest agent required for remaining checks")
+        raise _SelftestAbort()
+
+    # 6. Verify proxy reachable from VM via host IP
+    proxy_host = sandbox.proxy_host()
+    result = subprocess.run(
+        ["tart", "exec", sandbox_name, "--",
+         "curl", "-sf", "--max-time", "5",
+         f"http://{proxy_host}:{port}/health"],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        check=False,
+    )
+    report("proxy reachable from VM", result.returncode == 0,
+           f"via {proxy_host}" if result.returncode == 0
+           else f"curl exit code {result.returncode}")
+
+    # 7. Verify Claude auth via proxy
+    proxy_url = f"http://{proxy_host}:{port}"
+    claude_cmd = (
+        f"CLAUDE_CODE_OAUTH_TOKEN=phantom"
+        f" ANTHROPIC_BASE_URL={proxy_url}"
+        f" ANTHROPIC_CUSTOM_MODEL_OPTION={MODEL_ALIASES['haiku']}"
+        f" claude -p 'say ok' --model haiku"
+    )
+    result = subprocess.run(
+        ["tart", "exec", sandbox_name, "--", "bash", "-c", claude_cmd],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        check=False, timeout=60,
+    )
+    report("claude auth via proxy", result.returncode == 0,
+           "response received" if result.returncode == 0
+           else f"exit code {result.returncode}")
+
+    # 8. Note: no network isolation for Tart VMs
+    print("ralph: note: Tart VMs do not have network isolation — skipping check")
+
+
+class _SelftestAbort(Exception):
+    """Raised to abort selftest early while preserving cleanup."""
+    pass
 
 
 # ---------------------------------------------------------------------------
@@ -1785,7 +2411,7 @@ def check_dependencies_prereq():
         sys.exit(1)
 
 
-def process_issue(issue_number, git, sandbox, gh, agent, push, model,
+def process_issue(issue_number, git, dotfiles_dir, gh, agent, push, model,
                   git_user, git_email, proxy_port, rebuild=False):
     """Process a single GitHub Issue spec."""
     repo = resolve_repo(git)
@@ -1852,6 +2478,12 @@ def process_issue(issue_number, git, sandbox, gh, agent, push, model,
     # Resolve project root for project-level sandbox dependencies
     repo_root = git.output("rev-parse", "--show-toplevel")
 
+    # Create sandbox backend based on project config
+    config = load_sandbox_config(repo_root)
+    config["project_dir"] = repo_root
+    sandbox_type = config.pop("type")
+    sandbox = create_sandbox_backend(sandbox_type, dotfiles_dir, **config)
+
     # Ensure sandbox
     sandbox_name = sandbox.ensure_sandbox(agent, branch, work_dir,
                                           project_dir=repo_root,
@@ -1886,7 +2518,7 @@ def process_issue(issue_number, git, sandbox, gh, agent, push, model,
     model_id = MODEL_ALIASES.get(model, model)
     env_vars = {
         "CLAUDE_CODE_OAUTH_TOKEN": "phantom",
-        "ANTHROPIC_BASE_URL": f"http://host.docker.internal:{proxy_port}",
+        "ANTHROPIC_BASE_URL": f"http://{sandbox.proxy_host()}:{proxy_port}",
         "ANTHROPIC_CUSTOM_MODEL_OPTION": model_id,
     }
 
@@ -1899,7 +2531,7 @@ def process_issue(issue_number, git, sandbox, gh, agent, push, model,
             # Run iteration
             print(f"ralph: starting iteration (sandbox={sandbox_name}, issue=#{issue_number}, model={model})")
             rc, body = sandbox.run_iteration(sandbox_name, body, model,
-                                             env_vars, workdir=work_dir)
+                                             env_vars)
             if rc != 0:
                 print(f"ralph: iteration failed for issue #{issue_number}", file=sys.stderr)
                 gh.issue_edit(issue_number, repo,
@@ -1956,7 +2588,7 @@ def process_issue(issue_number, git, sandbox, gh, agent, push, model,
     return 0
 
 
-def poll_loop(git, sandbox, gh, agent, push, model, git_user, git_email,
+def poll_loop(git, dotfiles_dir, gh, agent, push, model, git_user, git_email,
               proxy_port, interval, timeout, rebuild=False):
     """Poll for ready issues and process them."""
     repo = resolve_repo(git)
@@ -2000,7 +2632,7 @@ def poll_loop(git, sandbox, gh, agent, push, model, git_user, git_email,
                 for num in numbers:
                     print(f"ralph: found ready issue #{num}")
                     try:
-                        process_issue(num, git, sandbox, gh, agent, push, model,
+                        process_issue(num, git, dotfiles_dir, gh, agent, push, model,
                                       git_user, git_email, proxy_port,
                                       rebuild=rebuild)
                     except Exception as exc:
@@ -2114,6 +2746,7 @@ def main():
     # Sandbox subcommands
     if args and args[0] == "prune-sandboxes":
         agent = "claude"
+        sandbox_type = "docker"
         rest = args[1:]
         j = 0
         while j < len(rest):
@@ -2122,6 +2755,16 @@ def main():
                     print("ralph: --agent requires an argument", file=sys.stderr)
                     sys.exit(2)
                 agent = rest[j + 1]
+                j += 2
+            elif rest[j] == "--type":
+                if j + 1 >= len(rest):
+                    print("ralph: --type requires an argument", file=sys.stderr)
+                    sys.exit(2)
+                sandbox_type = rest[j + 1]
+                if sandbox_type not in ("docker", "tart"):
+                    print(f"ralph: unknown sandbox type: {sandbox_type}",
+                          file=sys.stderr)
+                    sys.exit(2)
                 j += 2
             elif rest[j] in ("-h", "--help"):
                 usage(0)
@@ -2133,7 +2776,10 @@ def main():
         self_path = os.path.realpath(__file__)
         dotfiles_dir = os.path.normpath(
             os.path.join(os.path.dirname(self_path), ".."))
-        sb = Sandbox(dotfiles_dir)
+        if sandbox_type == "tart":
+            sb = TartSandbox(dotfiles_dir)
+        else:
+            sb = DockerSandbox(dotfiles_dir)
         pruned = sb.prune_sandboxes(agent)
         if not pruned:
             print("ralph: no orphan sandboxes found")
@@ -2142,6 +2788,7 @@ def main():
     # Selftest subcommand
     if args and args[0] == "selftest":
         agent = "claude"
+        sandbox_type = "docker"
         rest = args[1:]
         j = 0
         while j < len(rest):
@@ -2150,6 +2797,16 @@ def main():
                     print("ralph: --agent requires an argument", file=sys.stderr)
                     sys.exit(2)
                 agent = rest[j + 1]
+                j += 2
+            elif rest[j] == "--type":
+                if j + 1 >= len(rest):
+                    print("ralph: --type requires an argument", file=sys.stderr)
+                    sys.exit(2)
+                sandbox_type = rest[j + 1]
+                if sandbox_type not in ("docker", "tart"):
+                    print(f"ralph: unknown sandbox type: {sandbox_type}",
+                          file=sys.stderr)
+                    sys.exit(2)
                 j += 2
             elif rest[j] in ("-h", "--help"):
                 usage(0)
@@ -2162,7 +2819,7 @@ def main():
         self_path = os.path.realpath(__file__)
         dotfiles_dir = os.path.normpath(
             os.path.join(os.path.dirname(self_path), ".."))
-        sys.exit(selftest(agent, dotfiles_dir))
+        sys.exit(selftest(agent, dotfiles_dir, sandbox_type=sandbox_type))
 
     # Parse arguments manually to match zsh behavior exactly
     push = False
@@ -2257,9 +2914,6 @@ def main():
     dotfiles_dir = os.path.normpath(
         os.path.join(os.path.dirname(self_path), ".."))
 
-    # Initialize sandbox (image build deferred to ensure_sandbox for project context)
-    sandbox = Sandbox(dotfiles_dir)
-
     # Auth — ensure valid token exists before starting proxy
     # (auto-runs claude setup-token if missing/expired)
     ensure_token(agent)
@@ -2277,14 +2931,14 @@ def main():
 
     # Issue mode
     if issue_number:
-        rc = process_issue(int(issue_number), git, sandbox, gh, agent,
+        rc = process_issue(int(issue_number), git, dotfiles_dir, gh, agent,
                            push, model, git_user, git_email, proxy_port,
                            rebuild=rebuild)
         sys.exit(rc)
 
     # Poll mode
     if poll:
-        poll_loop(git, sandbox, gh, agent, push, model, git_user,
+        poll_loop(git, dotfiles_dir, gh, agent, push, model, git_user,
                   git_email, proxy_port, interval, timeout_val,
                   rebuild=rebuild)
         sys.exit(0)

@@ -110,6 +110,74 @@ class TestParseFrontmatter:
 
 
 # ---------------------------------------------------------------------------
+# load_sandbox_config
+# ---------------------------------------------------------------------------
+
+class TestLoadSandboxConfig:
+    def test_default_when_no_config(self, tmp_path):
+        """No .agent-loop/config.json returns docker default."""
+        assert ralph.load_sandbox_config(str(tmp_path)) == {"type": "docker"}
+
+    def test_default_when_no_agent_loop_dir(self, tmp_path):
+        """No .agent-loop directory at all returns docker default."""
+        assert ralph.load_sandbox_config(str(tmp_path)) == {"type": "docker"}
+
+    def test_docker_type(self, tmp_path):
+        config_dir = tmp_path / ".agent-loop"
+        config_dir.mkdir()
+        (config_dir / "config.json").write_text('{"type": "docker"}')
+        assert ralph.load_sandbox_config(str(tmp_path)) == {"type": "docker"}
+
+    def test_tart_type_with_base_image(self, tmp_path):
+        config_dir = tmp_path / ".agent-loop"
+        config_dir.mkdir()
+        config = {
+            "type": "tart",
+            "base_image": "ghcr.io/cirruslabs/macos-sequoia-xcode:latest",
+        }
+        (config_dir / "config.json").write_text(json.dumps(config))
+        result = ralph.load_sandbox_config(str(tmp_path))
+        assert result["type"] == "tart"
+        assert result["base_image"] == "ghcr.io/cirruslabs/macos-sequoia-xcode:latest"
+
+    def test_tart_type_with_optional_fields(self, tmp_path):
+        config_dir = tmp_path / ".agent-loop"
+        config_dir.mkdir()
+        config = {
+            "type": "tart",
+            "base_image": "ghcr.io/cirruslabs/macos-sequoia-xcode:latest",
+            "cpu": 4,
+            "memory_gb": 8,
+        }
+        (config_dir / "config.json").write_text(json.dumps(config))
+        result = ralph.load_sandbox_config(str(tmp_path))
+        assert result["type"] == "tart"
+        assert result["cpu"] == 4
+        assert result["memory_gb"] == 8
+
+    def test_missing_type_defaults_to_docker(self, tmp_path):
+        config_dir = tmp_path / ".agent-loop"
+        config_dir.mkdir()
+        (config_dir / "config.json").write_text('{"some_key": "value"}')
+        result = ralph.load_sandbox_config(str(tmp_path))
+        assert result["type"] == "docker"
+
+    def test_unknown_type_raises_value_error(self, tmp_path):
+        config_dir = tmp_path / ".agent-loop"
+        config_dir.mkdir()
+        (config_dir / "config.json").write_text('{"type": "kubernetes"}')
+        with pytest.raises(ValueError, match="unknown sandbox type"):
+            ralph.load_sandbox_config(str(tmp_path))
+
+    def test_malformed_json_raises(self, tmp_path):
+        config_dir = tmp_path / ".agent-loop"
+        config_dir.mkdir()
+        (config_dir / "config.json").write_text("{not valid json")
+        with pytest.raises(json.JSONDecodeError):
+            ralph.load_sandbox_config(str(tmp_path))
+
+
+# ---------------------------------------------------------------------------
 # parse_issue_branch
 # ---------------------------------------------------------------------------
 
@@ -871,24 +939,1044 @@ class TestEnsureProxy:
 
 
 # ---------------------------------------------------------------------------
-# Sandbox.parse_base_image
+# SandboxBackend
+# ---------------------------------------------------------------------------
+
+class TestSandboxBackend:
+    """SandboxBackend interface methods raise NotImplementedError."""
+
+    def test_proxy_host_raises(self):
+        with pytest.raises(NotImplementedError):
+            ralph.SandboxBackend().proxy_host()
+
+    def test_ensure_image_raises(self):
+        with pytest.raises(NotImplementedError):
+            ralph.SandboxBackend().ensure_image("claude")
+
+    def test_ensure_sandbox_raises(self):
+        with pytest.raises(NotImplementedError):
+            ralph.SandboxBackend().ensure_sandbox("claude", "main", "/work")
+
+    def test_setup_git_config_raises(self):
+        with pytest.raises(NotImplementedError):
+            ralph.SandboxBackend().setup_git_config("name", "user", "email")
+
+    def test_run_iteration_raises(self):
+        with pytest.raises(NotImplementedError):
+            ralph.SandboxBackend().run_iteration("name", "spec", "model")
+
+    def test_preflight_backend_checks_raises(self):
+        with pytest.raises(NotImplementedError):
+            ralph.SandboxBackend()._preflight_backend_checks("name")
+
+    def test_cleanup_sandbox_raises(self):
+        with pytest.raises(NotImplementedError):
+            ralph.SandboxBackend().cleanup_sandbox("agent", "branch")
+
+    def test_prune_sandboxes_raises(self):
+        with pytest.raises(NotImplementedError):
+            ralph.SandboxBackend().prune_sandboxes("agent")
+
+    def test_remove_sandbox_raises(self):
+        with pytest.raises(NotImplementedError):
+            ralph.SandboxBackend().remove_sandbox("name")
+
+    def test_check_prerequisites_raises(self):
+        with pytest.raises(NotImplementedError):
+            ralph.SandboxBackend().check_prerequisites()
+
+    def test_check_in_sync_raises(self):
+        with pytest.raises(NotImplementedError):
+            ralph.SandboxBackend().check_in_sync("name", "/work", None)
+
+    def test_reset_to_host_raises(self):
+        with pytest.raises(NotImplementedError):
+            ralph.SandboxBackend().reset_to_host("name", "/work", None)
+
+    def test_sync_to_host_raises(self):
+        with pytest.raises(NotImplementedError):
+            ralph.SandboxBackend().sync_to_host("name", "abc", "def", "/work")
+
+    def test_sandbox_name_shared(self):
+        """sandbox_name is shared logic, not abstract."""
+        assert ralph.SandboxBackend.sandbox_name("claude", "fix-auth") == "agent-loop-claude-fix-auth"
+
+    def test_docker_sandbox_inherits_sandbox_name(self):
+        """DockerSandbox inherits sandbox_name from SandboxBackend."""
+        assert ralph.DockerSandbox.sandbox_name("claude", "fix-auth") == "agent-loop-claude-fix-auth"
+
+
+# ---------------------------------------------------------------------------
+# create_sandbox_backend factory
+# ---------------------------------------------------------------------------
+
+class TestCreateSandboxBackend:
+    def test_docker_returns_docker_sandbox(self):
+        backend = ralph.create_sandbox_backend("docker", "/dotfiles")
+        assert isinstance(backend, ralph.DockerSandbox)
+        assert backend.dotfiles_dir == "/dotfiles"
+
+    def test_tart_returns_tart_sandbox(self):
+        backend = ralph.create_sandbox_backend(
+            "tart", "/dotfiles",
+            base_image="ghcr.io/cirruslabs/macos-sequoia-xcode:latest")
+        assert isinstance(backend, ralph.TartSandbox)
+        assert backend.dotfiles_dir == "/dotfiles"
+        assert backend.base_image == "ghcr.io/cirruslabs/macos-sequoia-xcode:latest"
+
+    def test_tart_reads_dependencies_from_project_dir(self, tmp_path):
+        agent_loop = tmp_path / ".agent-loop"
+        agent_loop.mkdir()
+        (agent_loop / "dependencies").write_text("brew install jq\n")
+        backend = ralph.create_sandbox_backend(
+            "tart", "/dotfiles",
+            base_image="img:latest", project_dir=str(tmp_path))
+        assert backend.dependencies_content == "brew install jq\n"
+
+    def test_tart_no_dependencies_file(self, tmp_path):
+        backend = ralph.create_sandbox_backend(
+            "tart", "/dotfiles",
+            base_image="img:latest", project_dir=str(tmp_path))
+        assert backend.dependencies_content == ""
+
+    def test_tart_explicit_dependencies_not_overridden(self, tmp_path):
+        """If dependencies_content is passed explicitly, don't read from file."""
+        agent_loop = tmp_path / ".agent-loop"
+        agent_loop.mkdir()
+        (agent_loop / "dependencies").write_text("from file\n")
+        backend = ralph.create_sandbox_backend(
+            "tart", "/dotfiles",
+            base_image="img:latest", project_dir=str(tmp_path),
+            dependencies_content="explicit\n")
+        assert backend.dependencies_content == "explicit\n"
+
+    def test_unknown_type_raises_value_error(self):
+        with pytest.raises(ValueError, match="unknown sandbox type 'podman'"):
+            ralph.create_sandbox_backend("podman", "/dotfiles")
+
+    def test_kwargs_passed_through(self):
+        """Extra kwargs don't break DockerSandbox creation."""
+        backend = ralph.create_sandbox_backend(
+            "docker", "/dotfiles", base_image="foo", cpu=4)
+        assert isinstance(backend, ralph.DockerSandbox)
+
+
+# ---------------------------------------------------------------------------
+# TartSandbox._template_name
+# ---------------------------------------------------------------------------
+
+class TestTartTemplateName:
+    def _make(self, **kwargs):
+        config = {"base_image": "img:latest", "dependencies_content": ""}
+        config.update(kwargs)
+        return ralph.TartSandbox("/dotfiles", config=config)
+
+    def test_deterministic(self):
+        t1 = self._make()
+        t2 = self._make()
+        assert t1._template_name("claude") == t2._template_name("claude")
+
+    def test_format(self):
+        name = self._make()._template_name("claude")
+        assert name.startswith("agent-loop-template-claude-")
+        # Hash part is 12 hex chars
+        hash_part = name.split("-")[-1]
+        assert len(hash_part) == 12
+        assert all(c in "0123456789abcdef" for c in hash_part)
+
+    def test_changes_with_base_image(self):
+        n1 = self._make(base_image="img:v1")._template_name("claude")
+        n2 = self._make(base_image="img:v2")._template_name("claude")
+        assert n1 != n2
+
+    def test_changes_with_dependencies(self):
+        n1 = self._make(dependencies_content="brew install jq")._template_name("claude")
+        n2 = self._make(dependencies_content="brew install yq")._template_name("claude")
+        assert n1 != n2
+
+    def test_changes_with_agent(self):
+        t = self._make()
+        assert t._template_name("claude") != t._template_name("cursor")
+
+
+# ---------------------------------------------------------------------------
+# TartSandbox._list_vms
+# ---------------------------------------------------------------------------
+
+class TestTartListVms:
+    def _make(self):
+        return ralph.TartSandbox("/dotfiles", config={"base_image": "img:latest"})
+
+    def setup_method(self):
+        self._saved_cache = ralph.TartSandbox._vm_list_cache
+        ralph.TartSandbox._vm_list_cache = (0, [])
+
+    def teardown_method(self):
+        ralph.TartSandbox._vm_list_cache = self._saved_cache
+
+    @patch("subprocess.run")
+    def test_parses_json(self, mock_run):
+        vms = [{"Name": "vm1", "State": "Running"}, {"Name": "vm2", "State": "Stopped"}]
+        mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(vms))
+        result = self._make()._list_vms()
+        assert result == vms
+        mock_run.assert_called_once_with(
+            ["tart", "list", "--format", "json"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            check=False,
+        )
+
+    @patch("subprocess.run")
+    def test_failure_returns_empty(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=1, stdout="")
+        assert self._make()._list_vms() == []
+
+    @patch("subprocess.run")
+    def test_invalid_json_returns_empty(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=0, stdout="not json")
+        assert self._make()._list_vms() == []
+
+
+# ---------------------------------------------------------------------------
+# TartSandbox._list_vms caching
+# ---------------------------------------------------------------------------
+
+class TestTartListVmsCache:
+    def _make(self):
+        return ralph.TartSandbox("/dotfiles", config={"base_image": "img:latest"})
+
+    def setup_method(self):
+        self._saved_cache = ralph.TartSandbox._vm_list_cache
+        ralph.TartSandbox._vm_list_cache = (0, [])
+
+    def teardown_method(self):
+        ralph.TartSandbox._vm_list_cache = self._saved_cache
+
+    @patch("subprocess.run")
+    def test_second_call_within_ttl_uses_cache(self, mock_run):
+        vms = [{"Name": "vm1", "State": "Running"}]
+        mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(vms))
+        t = self._make()
+        result1 = t._list_vms()
+        result2 = t._list_vms()
+        assert result1 == vms
+        assert result2 == vms
+        # Only one subprocess call — second was cached
+        assert mock_run.call_count == 1
+
+    @patch("time.monotonic")
+    @patch("subprocess.run")
+    def test_call_after_ttl_fetches_fresh(self, mock_run, mock_time):
+        vms_old = [{"Name": "vm1", "State": "Running"}]
+        vms_new = [{"Name": "vm1", "State": "Stopped"}]
+        mock_run.side_effect = [
+            MagicMock(returncode=0, stdout=json.dumps(vms_old)),
+            MagicMock(returncode=0, stdout=json.dumps(vms_new)),
+        ]
+        mock_time.side_effect = [10.0, 13.0]  # 3s apart, > 2s TTL
+        t = self._make()
+        result1 = t._list_vms()
+        result2 = t._list_vms()
+        assert result1 == vms_old
+        assert result2 == vms_new
+        assert mock_run.call_count == 2
+
+    @patch("subprocess.run")
+    def test_cache_shared_across_instances(self, mock_run):
+        vms = [{"Name": "vm1", "State": "Running"}]
+        mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(vms))
+        t1 = self._make()
+        t2 = self._make()
+        t1._list_vms()
+        result = t2._list_vms()
+        assert result == vms
+        # Only one subprocess call — t2 used t1's cache
+        assert mock_run.call_count == 1
+
+
+# ---------------------------------------------------------------------------
+# TartSandbox._check_vm_limit
+# ---------------------------------------------------------------------------
+
+class TestTartCheckVmLimit:
+    def _make(self):
+        return ralph.TartSandbox("/dotfiles", config={"base_image": "img:latest"})
+
+    @patch.object(ralph.TartSandbox, "_running_vm_count", return_value=0)
+    def test_zero_running_passes(self, _):
+        self._make()._check_vm_limit()  # should not raise
+
+    @patch.object(ralph.TartSandbox, "_running_vm_count", return_value=1)
+    def test_one_running_passes(self, _):
+        self._make()._check_vm_limit()  # should not raise
+
+    @patch.object(ralph.TartSandbox, "_running_vm_count", return_value=2)
+    def test_two_running_raises(self, _):
+        with pytest.raises(RuntimeError, match="cannot start VM"):
+            self._make()._check_vm_limit()
+
+    @patch.object(ralph.TartSandbox, "_running_vm_count", return_value=2)
+    def test_error_message_includes_count(self, _):
+        with pytest.raises(RuntimeError, match="2 macOS VMs already running"):
+            self._make()._check_vm_limit()
+
+    @patch.object(ralph.TartSandbox, "_running_vm_count", return_value=3)
+    def test_three_running_raises(self, _):
+        with pytest.raises(RuntimeError, match="3 macOS VMs already running"):
+            self._make()._check_vm_limit()
+
+
+# ---------------------------------------------------------------------------
+# TartSandbox._wait_for_guest_agent
+# ---------------------------------------------------------------------------
+
+class TestTartWaitForGuestAgent:
+    def _make(self):
+        return ralph.TartSandbox("/dotfiles", config={"base_image": "img:latest"})
+
+    @patch("time.sleep")
+    @patch("subprocess.run")
+    def test_succeeds_first_try(self, mock_run, _sleep):
+        mock_run.return_value = MagicMock(returncode=0)
+        self._make()._wait_for_guest_agent("test-vm", timeout=10)
+        mock_run.assert_called_once_with(
+            ["tart", "exec", "test-vm", "--", "echo", "ok"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            check=False,
+        )
+
+    @patch("time.sleep")
+    @patch("time.time")
+    @patch("subprocess.run")
+    def test_succeeds_after_retries(self, mock_run, mock_time, _sleep):
+        # First two calls fail, third succeeds
+        mock_run.side_effect = [
+            MagicMock(returncode=1),
+            MagicMock(returncode=1),
+            MagicMock(returncode=0),
+        ]
+        # time.time() returns values within the timeout window
+        mock_time.side_effect = [0, 2, 4, 6]
+        self._make()._wait_for_guest_agent("test-vm", timeout=120)
+        assert mock_run.call_count == 3
+
+    @patch("time.sleep")
+    @patch("time.time")
+    @patch("subprocess.run")
+    def test_timeout_raises(self, mock_run, mock_time, _sleep):
+        mock_run.return_value = MagicMock(returncode=1)
+        # Time jumps past deadline
+        mock_time.side_effect = [0, 130]
+        with pytest.raises(RuntimeError, match="guest agent not responding"):
+            self._make()._wait_for_guest_agent("test-vm", timeout=120)
+
+    @patch("time.sleep")
+    @patch("time.time")
+    @patch("subprocess.run")
+    def test_timeout_includes_vm_name(self, mock_run, mock_time, _sleep):
+        mock_run.return_value = MagicMock(returncode=1)
+        mock_time.side_effect = [0, 200]
+        with pytest.raises(RuntimeError, match="test-vm"):
+            self._make()._wait_for_guest_agent("test-vm", timeout=120)
+
+
+# ---------------------------------------------------------------------------
+# TartSandbox.ensure_image
+# ---------------------------------------------------------------------------
+
+class TestTartEnsureImage:
+    def _make(self, deps=""):
+        config = {"base_image": "img:latest", "dependencies_content": deps}
+        return ralph.TartSandbox("/dotfiles", config=config)
+
+    @patch.object(ralph.TartSandbox, "_vm_exists", return_value=True)
+    def test_cached_template_reused(self, _exists):
+        t = self._make()
+        name = t.ensure_image("claude")
+        assert name == t._template_name("claude")
+
+    @patch("subprocess.Popen")
+    @patch("subprocess.run")
+    @patch.object(ralph.TartSandbox, "_wait_for_guest_agent")
+    @patch.object(ralph.TartSandbox, "_check_vm_limit")
+    @patch.object(ralph.TartSandbox, "_vm_exists", return_value=False)
+    def test_clones_without_deps(self, _exists, _limit, _wait, mock_run, _popen):
+        t = self._make(deps="")
+        name = t.ensure_image("claude")
+        # Should call tart clone
+        clone_call = mock_run.call_args_list[0]
+        assert clone_call[0][0] == ["tart", "clone", "img:latest", name]
+        # Should NOT start VM (no deps)
+        _popen.assert_not_called()
+        _wait.assert_not_called()
+
+    @patch("subprocess.Popen")
+    @patch("subprocess.run")
+    @patch.object(ralph.TartSandbox, "_wait_for_guest_agent")
+    @patch.object(ralph.TartSandbox, "_check_vm_limit")
+    @patch.object(ralph.TartSandbox, "_vm_exists", return_value=False)
+    def test_installs_deps(self, _exists, _limit, _wait, mock_run, mock_popen):
+        vm_proc = MagicMock()
+        mock_popen.return_value = vm_proc
+        t = self._make(deps="brew install jq\n")
+        name = t.ensure_image("claude")
+        # Should start VM
+        mock_popen.assert_called_once_with(
+            ["tart", "run", name, "--no-graphics"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        # Should exec dependencies
+        exec_calls = [c for c in mock_run.call_args_list
+                      if c[0][0][:3] == ["tart", "exec", "-i"]]
+        assert len(exec_calls) == 1
+        assert exec_calls[0].kwargs["input"] == "brew install jq\n"
+        # Should stop VM
+        stop_calls = [c for c in mock_run.call_args_list
+                      if c[0][0][:2] == ["tart", "stop"]]
+        assert len(stop_calls) == 1
+        vm_proc.wait.assert_called_once()
+
+    @patch("subprocess.Popen")
+    @patch("subprocess.run")
+    @patch.object(ralph.TartSandbox, "_wait_for_guest_agent")
+    @patch.object(ralph.TartSandbox, "_check_vm_limit")
+    @patch.object(ralph.TartSandbox, "_vm_exists", side_effect=[True, False])
+    def test_force_rebuild_deletes_old(self, _exists, _limit, _wait, mock_run, _popen):
+        t = self._make(deps="")
+        name = t.ensure_image("claude", force_rebuild=True)
+        # First call should be tart delete
+        delete_call = mock_run.call_args_list[0]
+        assert delete_call[0][0] == ["tart", "delete", name]
+        # Then tart clone
+        clone_call = mock_run.call_args_list[1]
+        assert clone_call[0][0] == ["tart", "clone", "img:latest", name]
+
+    @patch("subprocess.Popen")
+    @patch("subprocess.run")
+    @patch.object(ralph.TartSandbox, "_wait_for_guest_agent",
+                  side_effect=RuntimeError("timeout"))
+    @patch.object(ralph.TartSandbox, "_check_vm_limit")
+    @patch.object(ralph.TartSandbox, "_vm_exists", return_value=False)
+    def test_stops_vm_on_failure(self, _exists, _limit, _wait, mock_run, mock_popen):
+        """VM is stopped even if dependency install fails."""
+        vm_proc = MagicMock()
+        mock_popen.return_value = vm_proc
+        t = self._make(deps="brew install jq\n")
+        with pytest.raises(RuntimeError, match="timeout"):
+            t.ensure_image("claude")
+        # Should still stop VM
+        stop_calls = [c for c in mock_run.call_args_list
+                      if len(c[0][0]) >= 2 and c[0][0][:2] == ["tart", "stop"]]
+        assert len(stop_calls) == 1
+        vm_proc.wait.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# TartSandbox.exec_output
+# ---------------------------------------------------------------------------
+
+class TestTartExecOutput:
+    @patch("subprocess.run")
+    def test_returns_stdout_on_success(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=0, stdout="  hello world  \n")
+        result = ralph.TartSandbox.exec_output("test-vm", "echo", "hello")
+        assert result == "hello world"
+        mock_run.assert_called_once_with(
+            ["tart", "exec", "test-vm", "--", "echo", "hello"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False,
+        )
+
+    @patch("subprocess.run")
+    def test_returns_empty_on_failure(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=1, stdout="error stuff")
+        result = ralph.TartSandbox.exec_output("test-vm", "false")
+        assert result == ""
+
+
+# ---------------------------------------------------------------------------
+# TartSandbox.ensure_sandbox
+# ---------------------------------------------------------------------------
+
+class TestTartEnsureSandbox:
+    def setup_method(self):
+        self._saved = ralph.TartSandbox._vm_procs.copy()
+        ralph.TartSandbox._vm_procs.clear()
+
+    def teardown_method(self):
+        ralph.TartSandbox._vm_procs.clear()
+        ralph.TartSandbox._vm_procs.update(self._saved)
+
+    def _make(self, **kwargs):
+        config = {"base_image": "img:latest", "dependencies_content": ""}
+        config.update(kwargs)
+        return ralph.TartSandbox("/dotfiles", config=config)
+
+    @patch.object(ralph.TartSandbox, "_wait_for_guest_agent")
+    @patch("subprocess.Popen")
+    @patch("subprocess.run")
+    @patch.object(ralph.TartSandbox, "ensure_image", return_value="template-name")
+    @patch.object(ralph.TartSandbox, "_check_vm_limit")
+    @patch.object(ralph.TartSandbox, "_vm_state", return_value=None)
+    def test_creates_new_vm(self, _state, _limit, _ensure, mock_run, mock_popen, _wait):
+        mock_popen.return_value = MagicMock()
+        t = self._make()
+        name = t.ensure_sandbox("claude", "my-branch", "/work/my-branch")
+        assert name == ralph.TartSandbox.sandbox_name("claude", "my-branch")
+
+        # Should clone from template
+        clone_call = mock_run.call_args_list[0]
+        assert clone_call[0][0] == ["tart", "clone", "template-name", name]
+
+        # Should start VM with directory sharing
+        mock_popen.assert_called_once()
+        popen_args = mock_popen.call_args[0][0]
+        assert popen_args[:4] == ["tart", "run", name, "--no-graphics"]
+        assert f"--dir=workspace:/work/my-branch" in popen_args
+
+    @patch.object(ralph.TartSandbox, "_vm_state", return_value="Running")
+    def test_reuses_running_vm(self, _state):
+        t = self._make()
+        name = t.ensure_sandbox("claude", "my-branch", "/work/my-branch")
+        assert name == ralph.TartSandbox.sandbox_name("claude", "my-branch")
+
+    @patch.object(ralph.TartSandbox, "_wait_for_guest_agent")
+    @patch("subprocess.Popen")
+    @patch("subprocess.run")
+    @patch.object(ralph.TartSandbox, "ensure_image", return_value="template-name")
+    @patch.object(ralph.TartSandbox, "_check_vm_limit")
+    @patch.object(ralph.TartSandbox, "_vm_state", return_value="Stopped")
+    def test_deletes_stopped_vm_and_recreates(self, _state, _limit, _ensure,
+                                               mock_run, mock_popen, _wait):
+        mock_popen.return_value = MagicMock()
+        t = self._make()
+        name = t.ensure_sandbox("claude", "my-branch", "/work/my-branch")
+
+        # First call should be tart delete
+        delete_call = mock_run.call_args_list[0]
+        assert delete_call[0][0] == ["tart", "delete", name]
+        # Then clone
+        clone_call = mock_run.call_args_list[1]
+        assert clone_call[0][0] == ["tart", "clone", "template-name", name]
+
+    @patch.object(ralph.TartSandbox, "_vm_state", return_value=None)
+    @patch.object(ralph.TartSandbox, "_check_vm_limit",
+                  side_effect=RuntimeError("too many VMs"))
+    def test_vm_limit_check(self, _limit, _state):
+        t = self._make()
+        with pytest.raises(RuntimeError, match="too many VMs"):
+            t.ensure_sandbox("claude", "my-branch", "/work/my-branch")
+
+    @patch.object(ralph.TartSandbox, "_wait_for_guest_agent")
+    @patch("subprocess.Popen")
+    @patch("subprocess.run")
+    @patch.object(ralph.TartSandbox, "ensure_image", return_value="template-name")
+    @patch.object(ralph.TartSandbox, "_check_vm_limit")
+    @patch.object(ralph.TartSandbox, "_vm_state", return_value=None)
+    def test_stores_vm_proc(self, _state, _limit, _ensure, _run, mock_popen, _wait):
+        vm_proc = MagicMock()
+        mock_popen.return_value = vm_proc
+        t = self._make()
+        name = t.ensure_sandbox("claude", "my-branch", "/work/my-branch")
+        assert t._vm_procs[name] is vm_proc
+
+
+# ---------------------------------------------------------------------------
+# TartSandbox.setup_git_config
+# ---------------------------------------------------------------------------
+
+class TestTartSetupGitConfig:
+    @patch("subprocess.run")
+    def test_configures_user_email_safedir(self, mock_run):
+        t = ralph.TartSandbox("/dotfiles", config={"base_image": "img:latest"})
+        t.setup_git_config("test-vm", "Test User", "test@example.com")
+        assert mock_run.call_count == 3
+
+        calls = mock_run.call_args_list
+        # user.name
+        assert calls[0][0][0] == [
+            "tart", "exec", "test-vm", "--",
+            "git", "config", "--global", "user.name", "Test User"]
+        # user.email
+        assert calls[1][0][0] == [
+            "tart", "exec", "test-vm", "--",
+            "git", "config", "--global", "user.email", "test@example.com"]
+        # safe.directory
+        assert calls[2][0][0] == [
+            "tart", "exec", "test-vm", "--",
+            "git", "config", "--global", "--add", "safe.directory", "*"]
+
+
+# ---------------------------------------------------------------------------
+# TartSandbox.run_iteration
+# ---------------------------------------------------------------------------
+
+class TestTartRunIteration:
+    def _make(self):
+        return ralph.TartSandbox("/dotfiles", config={"base_image": "img:latest"})
+
+    @patch("subprocess.run")
+    def test_writes_spec_runs_claude_reads_spec(self, mock_run):
+        mock_run.side_effect = [
+            MagicMock(returncode=0),  # tee (write spec)
+            MagicMock(returncode=0),  # bash -c claude
+            MagicMock(returncode=0, stdout="updated spec"),  # cat (read spec)
+        ]
+        t = self._make()
+        rc, spec = t.run_iteration("test-vm", "original spec", "sonnet",
+                                   {"KEY": "val"})
+        assert rc == 0
+        assert spec == "updated spec"
+
+        # Check write command
+        write_call = mock_run.call_args_list[0]
+        assert write_call[0][0] == [
+            "tart", "exec", "-i", "test-vm", "--", "tee", "/tmp/spec.md"]
+        assert write_call.kwargs["input"] == "original spec"
+
+        # Check claude command uses bash -c with env vars
+        claude_call = mock_run.call_args_list[1]
+        cmd = claude_call[0][0]
+        assert cmd[:5] == ["tart", "exec", "test-vm", "--", "bash"]
+        assert cmd[5] == "-c"
+        bash_cmd = cmd[6]
+        assert "env KEY='val'" in bash_cmd or "env KEY=val" in bash_cmd
+        assert "--model" in bash_cmd
+        assert "--dangerously-skip-permissions" in bash_cmd
+        assert f"cd '{ralph.TartSandbox.SHARED_DIR}'" in bash_cmd
+
+        # Check read command
+        read_call = mock_run.call_args_list[2]
+        assert read_call[0][0] == [
+            "tart", "exec", "test-vm", "--", "cat", "/tmp/spec.md"]
+
+    @patch("subprocess.run")
+    def test_write_failure_returns_original_spec(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=1)
+        t = self._make()
+        rc, spec = t.run_iteration("test-vm", "original spec", "sonnet")
+        assert rc == 1
+        assert spec == "original spec"
+
+    @patch("subprocess.run")
+    def test_read_failure_returns_original_spec(self, mock_run):
+        mock_run.side_effect = [
+            MagicMock(returncode=0),  # tee
+            MagicMock(returncode=0),  # claude
+            MagicMock(returncode=1, stdout=""),  # cat fails
+        ]
+        t = self._make()
+        rc, spec = t.run_iteration("test-vm", "original spec", "sonnet")
+        assert rc == 0
+        assert spec == "original spec"
+
+    @patch("subprocess.run")
+    def test_no_env_vars(self, mock_run):
+        mock_run.side_effect = [
+            MagicMock(returncode=0),  # tee
+            MagicMock(returncode=0),  # claude
+            MagicMock(returncode=0, stdout="spec"),  # cat
+        ]
+        t = self._make()
+        t.run_iteration("test-vm", "spec", "sonnet")
+        claude_call = mock_run.call_args_list[1]
+        bash_cmd = claude_call[0][0][6]
+        assert "env " not in bash_cmd or bash_cmd.startswith("cd ")
+
+    @patch("subprocess.run")
+    def test_env_vars_shell_escaped(self, mock_run):
+        """Env vars with special chars are properly shell-escaped."""
+        mock_run.side_effect = [
+            MagicMock(returncode=0),  # tee
+            MagicMock(returncode=0),  # claude
+            MagicMock(returncode=0, stdout="spec"),  # cat
+        ]
+        t = self._make()
+        t.run_iteration("test-vm", "spec", "sonnet",
+                        {"KEY": "val with spaces"})
+        claude_call = mock_run.call_args_list[1]
+        bash_cmd = claude_call[0][0][6]
+        assert "KEY='val with spaces'" in bash_cmd
+
+
+# ---------------------------------------------------------------------------
+# TartSandbox.proxy_host
+# ---------------------------------------------------------------------------
+
+class TestTartProxyHost:
+    def setup_method(self):
+        self._saved = ralph.TartSandbox._vm_procs.copy()
+        ralph.TartSandbox._vm_procs.clear()
+
+    def teardown_method(self):
+        ralph.TartSandbox._vm_procs.clear()
+        ralph.TartSandbox._vm_procs.update(self._saved)
+
+    def _make(self):
+        return ralph.TartSandbox("/dotfiles", config={"base_image": "img:latest"})
+
+    @patch("subprocess.run")
+    def test_gateway_from_vm(self, mock_run):
+        """Parses gateway IP from route output inside VM."""
+        route_output = (
+            "   route to: default\n"
+            "destination: default\n"
+            "       mask: default\n"
+            "    gateway: 192.168.64.1\n"
+            "  interface: en0\n"
+        )
+        mock_run.return_value = MagicMock(returncode=0, stdout=route_output)
+        t = self._make()
+        # Add a fake running VM proc
+        proc = MagicMock()
+        proc.poll.return_value = None  # still running
+        t._vm_procs["test-vm"] = proc
+
+        result = t.proxy_host()
+        assert result == "192.168.64.1"
+
+    @patch("subprocess.run")
+    def test_fallback_to_en0(self, mock_run):
+        """Falls back to ipconfig getifaddr en0 on host."""
+        mock_run.side_effect = [
+            MagicMock(returncode=0, stdout="10.0.0.5\n"),  # ipconfig
+        ]
+        t = self._make()
+        # No running VMs
+        result = t.proxy_host()
+        assert result == "10.0.0.5"
+
+    @patch("subprocess.run")
+    def test_final_fallback(self, mock_run):
+        """Falls back to well-known 192.168.64.1."""
+        mock_run.return_value = MagicMock(returncode=1, stdout="")
+        t = self._make()
+        result = t.proxy_host()
+        assert result == "192.168.64.1"
+
+    @patch("subprocess.run")
+    def test_caches_result(self, mock_run):
+        """proxy_host caches after first call."""
+        mock_run.return_value = MagicMock(returncode=0, stdout="10.0.0.5\n")
+        t = self._make()
+        t.proxy_host()
+        t.proxy_host()
+        # ipconfig should only be called once
+        assert mock_run.call_count == 1
+
+    def test_cached_value_used_directly(self):
+        """If _cached_proxy_host is set, no subprocess calls."""
+        t = self._make()
+        t._cached_proxy_host = "10.0.0.99"
+        assert t.proxy_host() == "10.0.0.99"
+
+
+# ---------------------------------------------------------------------------
+# TartSandbox.cleanup_sandbox
+# ---------------------------------------------------------------------------
+
+class TestTartCleanupSandbox:
+    def setup_method(self):
+        self._saved = ralph.TartSandbox._vm_procs.copy()
+        ralph.TartSandbox._vm_procs.clear()
+
+    def teardown_method(self):
+        ralph.TartSandbox._vm_procs.clear()
+        ralph.TartSandbox._vm_procs.update(self._saved)
+
+    @patch("subprocess.run")
+    def test_stops_and_deletes(self, mock_run):
+        t = ralph.TartSandbox("/dotfiles", config={"base_image": "img:latest"})
+        t.cleanup_sandbox("claude", "my-branch")
+
+        calls = mock_run.call_args_list
+        name = ralph.TartSandbox.sandbox_name("claude", "my-branch")
+        # Stop
+        assert calls[0][0][0] == ["tart", "stop", name]
+        # Delete
+        assert calls[1][0][0] == ["tart", "delete", name]
+
+    @patch("subprocess.run")
+    def test_waits_for_tracked_proc(self, mock_run):
+        t = ralph.TartSandbox("/dotfiles", config={"base_image": "img:latest"})
+        name = ralph.TartSandbox.sandbox_name("claude", "my-branch")
+        proc = MagicMock()
+        t._vm_procs[name] = proc
+        t.cleanup_sandbox("claude", "my-branch")
+        proc.wait.assert_called_once()
+        assert name not in t._vm_procs
+
+    @patch("subprocess.run")
+    def test_no_tracked_proc(self, mock_run):
+        """Works fine even without a tracked proc."""
+        t = ralph.TartSandbox("/dotfiles", config={"base_image": "img:latest"})
+        t.cleanup_sandbox("claude", "my-branch")  # should not raise
+
+
+# ---------------------------------------------------------------------------
+# TartSandbox.remove_sandbox
+# ---------------------------------------------------------------------------
+
+class TestTartRemoveSandbox:
+    def setup_method(self):
+        self._saved = ralph.TartSandbox._vm_procs.copy()
+        ralph.TartSandbox._vm_procs.clear()
+
+    def teardown_method(self):
+        ralph.TartSandbox._vm_procs.clear()
+        ralph.TartSandbox._vm_procs.update(self._saved)
+
+    @patch("subprocess.run")
+    def test_stops_and_deletes_by_name(self, mock_run):
+        t = ralph.TartSandbox("/dotfiles", config={"base_image": "img:latest"})
+        t.remove_sandbox("some-vm")
+        calls = mock_run.call_args_list
+        assert calls[0][0][0] == ["tart", "stop", "some-vm"]
+        assert calls[1][0][0] == ["tart", "delete", "some-vm"]
+
+    @patch("subprocess.run")
+    def test_cleans_up_tracked_proc(self, mock_run):
+        t = ralph.TartSandbox("/dotfiles", config={"base_image": "img:latest"})
+        proc = MagicMock()
+        t._vm_procs["some-vm"] = proc
+        t.remove_sandbox("some-vm")
+        proc.wait.assert_called_once()
+        assert "some-vm" not in t._vm_procs
+
+
+# ---------------------------------------------------------------------------
+# TartSandbox.prune_sandboxes
+# ---------------------------------------------------------------------------
+
+class TestTartPruneSandboxes:
+    @patch("subprocess.run")
+    @patch.object(ralph.TartSandbox, "_list_vms")
+    def test_removes_stopped_non_template_vms(self, mock_list, mock_run):
+        mock_list.return_value = [
+            {"Name": "agent-loop-claude-old-branch", "State": "Stopped"},
+            {"Name": "agent-loop-claude-active", "State": "Running"},
+            {"Name": "agent-loop-template-claude-abc123", "State": "Stopped"},
+            {"Name": "other-vm", "State": "Stopped"},
+        ]
+        t = ralph.TartSandbox("/dotfiles", config={"base_image": "img:latest"})
+        pruned = t.prune_sandboxes("claude")
+        assert pruned == ["agent-loop-claude-old-branch"]
+
+    @patch("subprocess.run")
+    @patch.object(ralph.TartSandbox, "_list_vms")
+    def test_keeps_running_vms(self, mock_list, mock_run):
+        mock_list.return_value = [
+            {"Name": "agent-loop-claude-active", "State": "Running"},
+        ]
+        t = ralph.TartSandbox("/dotfiles", config={"base_image": "img:latest"})
+        pruned = t.prune_sandboxes("claude")
+        assert pruned == []
+        mock_run.assert_not_called()
+
+    @patch("subprocess.run")
+    @patch.object(ralph.TartSandbox, "_list_vms")
+    def test_skips_templates(self, mock_list, mock_run):
+        mock_list.return_value = [
+            {"Name": "agent-loop-template-claude-abc123", "State": "Stopped"},
+        ]
+        t = ralph.TartSandbox("/dotfiles", config={"base_image": "img:latest"})
+        pruned = t.prune_sandboxes("claude")
+        assert pruned == []
+        mock_run.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# TartSandbox.preflight_check
+# ---------------------------------------------------------------------------
+
+class TestTartPreflightCheck:
+    def _make(self):
+        return ralph.TartSandbox("/dotfiles", config={"base_image": "img:latest"})
+
+    @patch("subprocess.run")
+    @patch("ralph.proxy_health_check", return_value=(True, ""))
+    @patch("ralph.read_token_from_keychain",
+           return_value={"expiresAt": int(time.time() * 1000) + 600000})
+    def test_all_pass(self, _token, _proxy, mock_run):
+        mock_run.return_value = MagicMock(returncode=0, stdout="ok\n")
+        t = self._make()
+        failures = t.preflight_check("test-vm", "claude", 18080)
+        assert failures == []
+
+    @patch("subprocess.run")
+    @patch("ralph.proxy_health_check", return_value=(True, ""))
+    @patch("ralph.read_token_from_keychain", return_value=None)
+    def test_token_missing(self, _token, _proxy, mock_run):
+        mock_run.return_value = MagicMock(returncode=0, stdout="ok\n")
+        t = self._make()
+        failures = t.preflight_check("test-vm", "claude", 18080)
+        assert any("no token found" in f for f in failures)
+
+    @patch("subprocess.run")
+    @patch("ralph.proxy_health_check", return_value=(True, ""))
+    @patch("ralph.read_token_from_keychain",
+           return_value={"expiresAt": 0})
+    def test_token_expired(self, _token, _proxy, mock_run):
+        mock_run.return_value = MagicMock(returncode=0, stdout="ok\n")
+        t = self._make()
+        failures = t.preflight_check("test-vm", "claude", 18080)
+        assert any("token expired" in f for f in failures)
+
+    @patch("subprocess.run")
+    @patch("ralph.proxy_health_check", return_value=(False, ""))
+    @patch("ralph.read_token_from_keychain",
+           return_value={"expiresAt": int(time.time() * 1000) + 600000})
+    def test_proxy_down(self, _token, _proxy, mock_run):
+        mock_run.return_value = MagicMock(returncode=0, stdout="ok\n")
+        t = self._make()
+        failures = t.preflight_check("test-vm", "claude", 18080)
+        assert any("proxy not reachable" in f for f in failures)
+
+    @patch("subprocess.run")
+    @patch("ralph.proxy_health_check", return_value=(True, ""))
+    @patch("ralph.read_token_from_keychain",
+           return_value={"expiresAt": int(time.time() * 1000) + 600000})
+    def test_vm_unresponsive(self, _token, _proxy, mock_run):
+        mock_run.return_value = MagicMock(returncode=1, stdout="")
+        t = self._make()
+        failures = t.preflight_check("test-vm", "claude", 18080)
+        assert any("not responding" in f for f in failures)
+
+
+# ---------------------------------------------------------------------------
+# TartSandbox.sync_to_host
+# ---------------------------------------------------------------------------
+
+class TestTartSyncToHost:
+    @patch("subprocess.run")
+    def test_returns_true_when_commit_visible(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=0)
+        t = ralph.TartSandbox("/dotfiles", config={"base_image": "img:latest"})
+        assert t.sync_to_host("test-vm", "abc", "def", "/work") is True
+        mock_run.assert_called_once_with(
+            ["git", "rev-parse", "--verify", "def"],
+            cwd="/work", stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            check=False,
+        )
+
+    @patch("subprocess.run")
+    def test_returns_false_when_commit_not_visible(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=1)
+        t = ralph.TartSandbox("/dotfiles", config={"base_image": "img:latest"})
+        assert t.sync_to_host("test-vm", "abc", "def", "/work") is False
+
+
+# ---------------------------------------------------------------------------
+# TartSandbox.check_in_sync
+# ---------------------------------------------------------------------------
+
+class TestTartCheckInSync:
+    def test_always_true(self):
+        t = ralph.TartSandbox("/dotfiles", config={"base_image": "img:latest"})
+        assert t.check_in_sync("vm", "/work", MagicMock()) is True
+
+
+# ---------------------------------------------------------------------------
+# TartSandbox.reset_to_host
+# ---------------------------------------------------------------------------
+
+class TestTartResetToHost:
+    def test_always_true(self):
+        t = ralph.TartSandbox("/dotfiles", config={"base_image": "img:latest"})
+        assert t.reset_to_host("vm", "/work", MagicMock()) is True
+
+
+# ---------------------------------------------------------------------------
+# TartSandbox._atexit_stop_all
+# ---------------------------------------------------------------------------
+
+class TestTartAtexitStopAll:
+    def setup_method(self):
+        """Save and clear class-level _vm_procs before each test."""
+        self._saved = ralph.TartSandbox._vm_procs.copy()
+        ralph.TartSandbox._vm_procs.clear()
+
+    def teardown_method(self):
+        """Restore class-level _vm_procs after each test."""
+        ralph.TartSandbox._vm_procs.clear()
+        ralph.TartSandbox._vm_procs.update(self._saved)
+
+    @patch("subprocess.run")
+    def test_stops_each_tracked_vm(self, mock_run):
+        proc1 = MagicMock()
+        proc2 = MagicMock()
+        ralph.TartSandbox._vm_procs["vm-one"] = proc1
+        ralph.TartSandbox._vm_procs["vm-two"] = proc2
+
+        ralph.TartSandbox._atexit_stop_all()
+
+        # tart stop called for each VM
+        stop_calls = [c for c in mock_run.call_args_list
+                      if c[0][0][:2] == ["tart", "stop"]]
+        stopped_names = {c[0][0][2] for c in stop_calls}
+        assert stopped_names == {"vm-one", "vm-two"}
+
+        # wait called for each proc
+        proc1.wait.assert_called_once_with(timeout=10)
+        proc2.wait.assert_called_once_with(timeout=10)
+
+    @patch("subprocess.run")
+    def test_clears_vm_procs_after_cleanup(self, mock_run):
+        ralph.TartSandbox._vm_procs["vm-x"] = MagicMock()
+        ralph.TartSandbox._atexit_stop_all()
+        assert ralph.TartSandbox._vm_procs == {}
+
+    @patch("subprocess.run")
+    def test_handles_empty_vm_procs(self, mock_run):
+        ralph.TartSandbox._atexit_stop_all()
+        mock_run.assert_not_called()
+        assert ralph.TartSandbox._vm_procs == {}
+
+    @patch("subprocess.run", side_effect=OSError("no tart"))
+    def test_suppresses_stop_errors(self, mock_run):
+        proc = MagicMock()
+        ralph.TartSandbox._vm_procs["vm-err"] = proc
+        # Should not raise
+        ralph.TartSandbox._atexit_stop_all()
+        proc.wait.assert_called_once_with(timeout=10)
+        assert ralph.TartSandbox._vm_procs == {}
+
+    @patch("subprocess.run")
+    def test_suppresses_wait_timeout(self, mock_run):
+        proc = MagicMock()
+        proc.wait.side_effect = subprocess.TimeoutExpired(cmd="tart", timeout=10)
+        ralph.TartSandbox._vm_procs["vm-stuck"] = proc
+        # Should not raise
+        ralph.TartSandbox._atexit_stop_all()
+        assert ralph.TartSandbox._vm_procs == {}
+
+    def test_vm_procs_shared_across_instances(self):
+        t1 = ralph.TartSandbox("/dotfiles", config={"base_image": "img:latest"})
+        t2 = ralph.TartSandbox("/dotfiles", config={"base_image": "img:latest"})
+        t1._vm_procs["shared-vm"] = MagicMock()
+        assert "shared-vm" in t2._vm_procs
+        assert t1._vm_procs is t2._vm_procs
+        assert t1._vm_procs is ralph.TartSandbox._vm_procs
+
+
+# ---------------------------------------------------------------------------
+# DockerSandbox.parse_base_image
 # ---------------------------------------------------------------------------
 
 class TestSandboxParseBaseImage:
     def test_extracts_from_line(self):
         content = "FROM docker/sandbox-templates:claude-code\nUSER root"
-        assert ralph.Sandbox.parse_base_image(content) == "docker/sandbox-templates:claude-code"
+        assert ralph.DockerSandbox.parse_base_image(content) == "docker/sandbox-templates:claude-code"
 
     def test_returns_none_when_no_from(self):
-        assert ralph.Sandbox.parse_base_image("RUN echo hi") is None
+        assert ralph.DockerSandbox.parse_base_image("RUN echo hi") is None
 
     def test_ignores_comment_lines(self):
         content = "# FROM fake:image\nFROM real:latest"
-        assert ralph.Sandbox.parse_base_image(content) == "real:latest"
+        assert ralph.DockerSandbox.parse_base_image(content) == "real:latest"
 
     def test_returns_final_stage_in_multistage(self):
         content = "FROM builder:latest AS build\nRUN make\nFROM runtime:slim"
-        assert ralph.Sandbox.parse_base_image(content) == "runtime:slim"
+        assert ralph.DockerSandbox.parse_base_image(content) == "runtime:slim"
 
 
 # ---------------------------------------------------------------------------
@@ -897,23 +1985,23 @@ class TestSandboxParseBaseImage:
 
 class TestSandboxContentHash:
     def test_deterministic(self):
-        h1 = ralph.Sandbox.content_hash("FROM a", "digest1")
-        h2 = ralph.Sandbox.content_hash("FROM a", "digest1")
+        h1 = ralph.DockerSandbox.content_hash("FROM a", "digest1")
+        h2 = ralph.DockerSandbox.content_hash("FROM a", "digest1")
         assert h1 == h2
 
     def test_changes_when_dockerfile_changes(self):
-        h1 = ralph.Sandbox.content_hash("FROM a\nRUN echo old", "digest1")
-        h2 = ralph.Sandbox.content_hash("FROM a\nRUN echo new", "digest1")
+        h1 = ralph.DockerSandbox.content_hash("FROM a\nRUN echo old", "digest1")
+        h2 = ralph.DockerSandbox.content_hash("FROM a\nRUN echo new", "digest1")
         assert h1 != h2
 
     def test_changes_when_base_digest_changes(self):
         df = "FROM a\nRUN echo same"
-        h1 = ralph.Sandbox.content_hash(df, "sha256:aaa")
-        h2 = ralph.Sandbox.content_hash(df, "sha256:bbb")
+        h1 = ralph.DockerSandbox.content_hash(df, "sha256:aaa")
+        h2 = ralph.DockerSandbox.content_hash(df, "sha256:bbb")
         assert h1 != h2
 
     def test_length_is_8(self):
-        h = ralph.Sandbox.content_hash("FROM a", "d")
+        h = ralph.DockerSandbox.content_hash("FROM a", "d")
         assert len(h) == 8
 
 
@@ -923,11 +2011,11 @@ class TestSandboxContentHash:
 
 class TestSandboxImageTag:
     def test_format(self):
-        tag = ralph.Sandbox.image_tag("claude", "abc123de")
+        tag = ralph.DockerSandbox.image_tag("claude", "abc123de")
         assert tag == "agent-loop-sandbox-claude:vabc123de"
 
     def test_custom_agent(self):
-        tag = ralph.Sandbox.image_tag("codex", "xyz")
+        tag = ralph.DockerSandbox.image_tag("codex", "xyz")
         assert tag == "agent-loop-sandbox-codex:vxyz"
 
 
@@ -938,47 +2026,47 @@ class TestSandboxImageTag:
 class TestSandboxParseDependencies:
     def test_basic_package_list(self):
         content = "openjdk-21-jdk\npython3-venv\nnodejs"
-        assert ralph.Sandbox.parse_dependencies(content) == [
+        assert ralph.DockerSandbox.parse_dependencies(content) == [
             "openjdk-21-jdk", "python3-venv", "nodejs"
         ]
 
     def test_comment_only_lines_skipped(self):
         content = "# This is a comment\npkg1\n# Another comment\npkg2"
-        assert ralph.Sandbox.parse_dependencies(content) == ["pkg1", "pkg2"]
+        assert ralph.DockerSandbox.parse_dependencies(content) == ["pkg1", "pkg2"]
 
     def test_inline_comments_stripped(self):
         content = "pkg1 # this is a comment\npkg2 # another"
-        assert ralph.Sandbox.parse_dependencies(content) == ["pkg1", "pkg2"]
+        assert ralph.DockerSandbox.parse_dependencies(content) == ["pkg1", "pkg2"]
 
     def test_blank_lines_skipped(self):
         content = "pkg1\n\n\npkg2\n\npkg3"
-        assert ralph.Sandbox.parse_dependencies(content) == ["pkg1", "pkg2", "pkg3"]
+        assert ralph.DockerSandbox.parse_dependencies(content) == ["pkg1", "pkg2", "pkg3"]
 
     def test_whitespace_handling(self):
         content = "  pkg1  \n\tpkg2\t\n  pkg3  # comment  "
-        assert ralph.Sandbox.parse_dependencies(content) == ["pkg1", "pkg2", "pkg3"]
+        assert ralph.DockerSandbox.parse_dependencies(content) == ["pkg1", "pkg2", "pkg3"]
 
     def test_empty_content(self):
-        assert ralph.Sandbox.parse_dependencies("") == []
+        assert ralph.DockerSandbox.parse_dependencies("") == []
 
     def test_only_comments_and_blanks(self):
         content = "# comment\n\n# another\n  \n"
-        assert ralph.Sandbox.parse_dependencies(content) == []
+        assert ralph.DockerSandbox.parse_dependencies(content) == []
 
     def test_rejects_shell_injection(self):
         with pytest.raises(ValueError, match="invalid package name"):
-            ralph.Sandbox.parse_dependencies("pkg; rm -rf /")
+            ralph.DockerSandbox.parse_dependencies("pkg; rm -rf /")
 
     def test_rejects_uppercase_names(self):
         with pytest.raises(ValueError, match="invalid package name"):
-            ralph.Sandbox.parse_dependencies("BadPkg")
+            ralph.DockerSandbox.parse_dependencies("BadPkg")
 
     def test_accepts_arch_qualifier(self):
-        result = ralph.Sandbox.parse_dependencies("libc6:amd64")
+        result = ralph.DockerSandbox.parse_dependencies("libc6:amd64")
         assert result == ["libc6:amd64"]
 
     def test_accepts_version_pinning(self):
-        result = ralph.Sandbox.parse_dependencies("openjdk-21-jdk=21.0.1+12-1")
+        result = ralph.DockerSandbox.parse_dependencies("openjdk-21-jdk=21.0.1+12-1")
         assert result == ["openjdk-21-jdk=21.0.1+12-1"]
 
 # ---------------------------------------------------------------------------
@@ -987,37 +2075,37 @@ class TestSandboxParseDependencies:
 
 class TestSandboxGenerateProjectDockerfile:
     def test_single_package(self):
-        result = ralph.Sandbox.generate_project_dockerfile(["openjdk-21-jdk"])
+        result = ralph.DockerSandbox.generate_project_dockerfile(["openjdk-21-jdk"])
         assert "apt-get install -y --no-install-recommends" in result
         assert "openjdk-21-jdk" in result
 
     def test_multiple_packages_joined(self):
-        result = ralph.Sandbox.generate_project_dockerfile(["pkg1", "pkg2", "pkg3"])
+        result = ralph.DockerSandbox.generate_project_dockerfile(["pkg1", "pkg2", "pkg3"])
         assert "'pkg1' 'pkg2' 'pkg3'" in result
 
     def test_packages_are_shell_quoted(self):
-        result = ralph.Sandbox.generate_project_dockerfile(["pkg; rm -rf /"])
+        result = ralph.DockerSandbox.generate_project_dockerfile(["pkg; rm -rf /"])
         assert "\"pkg; rm -rf /\"" not in result
         assert "'pkg; rm -rf /'" in result
 
     def test_contains_arg_and_from(self):
-        result = ralph.Sandbox.generate_project_dockerfile(["pkg1"])
+        result = ralph.DockerSandbox.generate_project_dockerfile(["pkg1"])
         assert "ARG BASE_IMAGE" in result
         assert "FROM ${BASE_IMAGE}" in result
 
     def test_user_switching(self):
-        result = ralph.Sandbox.generate_project_dockerfile(["pkg1"])
+        result = ralph.DockerSandbox.generate_project_dockerfile(["pkg1"])
         lines = result.splitlines()
         assert "USER root" in lines
         assert "USER agent" in lines
         assert lines.index("USER root") < lines.index("USER agent")
 
     def test_apt_cleanup(self):
-        result = ralph.Sandbox.generate_project_dockerfile(["pkg1"])
+        result = ralph.DockerSandbox.generate_project_dockerfile(["pkg1"])
         assert "rm -rf /var/lib/apt/lists/*" in result
 
     def test_no_install_recommends(self):
-        result = ralph.Sandbox.generate_project_dockerfile(["pkg1"])
+        result = ralph.DockerSandbox.generate_project_dockerfile(["pkg1"])
         assert "--no-install-recommends" in result
 
 
@@ -1027,12 +2115,12 @@ class TestSandboxGenerateProjectDockerfile:
 
 class TestSandboxFindProjectConfig:
     def test_returns_none_when_no_agent_loop_dir(self, tmp_path):
-        result = ralph.Sandbox.find_project_config(str(tmp_path))
+        result = ralph.DockerSandbox.find_project_config(str(tmp_path))
         assert result is None
 
     def test_returns_none_when_agent_loop_empty(self, tmp_path):
         (tmp_path / ".agent-loop").mkdir()
-        result = ralph.Sandbox.find_project_config(str(tmp_path))
+        result = ralph.DockerSandbox.find_project_config(str(tmp_path))
         assert result is None
 
     def test_prefers_dockerfile_over_dependencies(self, tmp_path):
@@ -1040,7 +2128,7 @@ class TestSandboxFindProjectConfig:
         al.mkdir()
         (al / "dependencies").write_text("pkg1\n")
         (al / "Dockerfile.sandbox").write_text("FROM base\n")
-        config_type, path = ralph.Sandbox.find_project_config(str(tmp_path))
+        config_type, path = ralph.DockerSandbox.find_project_config(str(tmp_path))
         assert config_type == "dockerfile"
         assert path == str(al / "Dockerfile.sandbox")
 
@@ -1048,7 +2136,7 @@ class TestSandboxFindProjectConfig:
         al = tmp_path / ".agent-loop"
         al.mkdir()
         (al / "dependencies").write_text("pkg1\n")
-        config_type, path = ralph.Sandbox.find_project_config(str(tmp_path))
+        config_type, path = ralph.DockerSandbox.find_project_config(str(tmp_path))
         assert config_type == "dependencies"
         assert path == str(al / "dependencies")
 
@@ -1056,7 +2144,7 @@ class TestSandboxFindProjectConfig:
         al = tmp_path / ".agent-loop"
         al.mkdir()
         (al / "Dockerfile.sandbox").write_text("FROM base\n")
-        config_type, path = ralph.Sandbox.find_project_config(str(tmp_path))
+        config_type, path = ralph.DockerSandbox.find_project_config(str(tmp_path))
         assert config_type == "dockerfile"
         assert path == str(al / "Dockerfile.sandbox")
 
@@ -1067,27 +2155,27 @@ class TestSandboxFindProjectConfig:
 
 class TestSandboxProjectImageTag:
     def test_includes_agent_and_project_in_tag(self):
-        tag = ralph.Sandbox.project_image_tag("claude", "myproject", "base:v1", "content")
+        tag = ralph.DockerSandbox.project_image_tag("claude", "myproject", "base:v1", "content")
         assert tag.startswith("agent-loop-sandbox-claude-myproject:v")
 
     def test_hash_is_8_chars(self):
-        tag = ralph.Sandbox.project_image_tag("claude", "proj", "base:v1", "content")
+        tag = ralph.DockerSandbox.project_image_tag("claude", "proj", "base:v1", "content")
         chash = tag.split(":v")[1]
         assert len(chash) == 8
 
     def test_different_content_produces_different_hash(self):
-        tag1 = ralph.Sandbox.project_image_tag("claude", "proj", "base:v1", "content-a")
-        tag2 = ralph.Sandbox.project_image_tag("claude", "proj", "base:v1", "content-b")
+        tag1 = ralph.DockerSandbox.project_image_tag("claude", "proj", "base:v1", "content-a")
+        tag2 = ralph.DockerSandbox.project_image_tag("claude", "proj", "base:v1", "content-b")
         assert tag1 != tag2
 
     def test_same_content_produces_same_hash(self):
-        tag1 = ralph.Sandbox.project_image_tag("claude", "proj", "base:v1", "content")
-        tag2 = ralph.Sandbox.project_image_tag("claude", "proj", "base:v1", "content")
+        tag1 = ralph.DockerSandbox.project_image_tag("claude", "proj", "base:v1", "content")
+        tag2 = ralph.DockerSandbox.project_image_tag("claude", "proj", "base:v1", "content")
         assert tag1 == tag2
 
     def test_different_base_tag_produces_different_hash(self):
-        tag1 = ralph.Sandbox.project_image_tag("claude", "proj", "base:v1", "content")
-        tag2 = ralph.Sandbox.project_image_tag("claude", "proj", "base:v2", "content")
+        tag1 = ralph.DockerSandbox.project_image_tag("claude", "proj", "base:v1", "content")
+        tag2 = ralph.DockerSandbox.project_image_tag("claude", "proj", "base:v2", "content")
         assert tag1 != tag2
 
 
@@ -1101,7 +2189,7 @@ class TestSandboxEnsureProjectImage:
         agent_dir = tmp_path / "docker" / "agent-loop" / "claude"
         agent_dir.mkdir(parents=True, exist_ok=True)
         (agent_dir / "Dockerfile").write_text("FROM base:latest\nRUN echo hi")
-        return ralph.Sandbox(str(tmp_path))
+        return ralph.DockerSandbox(str(tmp_path))
 
     def test_returns_base_tag_when_no_project_config(self, tmp_path):
         sb = self._make_sandbox(tmp_path)
@@ -1195,15 +2283,15 @@ class TestSandboxEnsureProjectImage:
 
 class TestSandboxParseDockerTimestamp:
     def test_z_suffix(self):
-        dt = ralph.Sandbox._parse_docker_timestamp("2024-06-15T10:30:00Z")
+        dt = ralph.DockerSandbox._parse_docker_timestamp("2024-06-15T10:30:00Z")
         assert dt.year == 2024 and dt.month == 6
 
     def test_truncates_nanoseconds(self):
-        dt = ralph.Sandbox._parse_docker_timestamp("2024-06-15T10:30:00.123456789Z")
+        dt = ralph.DockerSandbox._parse_docker_timestamp("2024-06-15T10:30:00.123456789Z")
         assert dt.microsecond == 123456
 
     def test_offset_format(self):
-        dt = ralph.Sandbox._parse_docker_timestamp("2024-06-15T10:30:00+00:00")
+        dt = ralph.DockerSandbox._parse_docker_timestamp("2024-06-15T10:30:00+00:00")
         assert dt.year == 2024
 
 
@@ -1217,7 +2305,7 @@ class TestSandboxNeedsRebuild:
         agent_dir = tmp_path / "docker" / "agent-loop" / "claude"
         agent_dir.mkdir(parents=True, exist_ok=True)
         (agent_dir / "Dockerfile").write_text(dockerfile)
-        return ralph.Sandbox(str(tmp_path))
+        return ralph.DockerSandbox(str(tmp_path))
 
     @patch("ralph.subprocess.run")
     def test_true_when_image_missing(self, mock_run, tmp_path):
@@ -1248,7 +2336,7 @@ class TestSandboxEnsureImage:
         agent_dir = tmp_path / "docker" / "agent-loop" / "claude"
         agent_dir.mkdir(parents=True, exist_ok=True)
         (agent_dir / "Dockerfile").write_text(dockerfile)
-        return ralph.Sandbox(str(tmp_path))
+        return ralph.DockerSandbox(str(tmp_path))
 
     @staticmethod
     def _side_effect(image_exists=True, base_age="2099-01-01T00:00:00Z"):
@@ -1309,30 +2397,30 @@ class TestSandboxEnsureImage:
 
 
 # ---------------------------------------------------------------------------
-# Sandbox.sandbox_name
+# SandboxBackend.sandbox_name
 # ---------------------------------------------------------------------------
 
 class TestSandboxName:
     def test_simple_branch(self):
-        assert ralph.Sandbox.sandbox_name("claude", "fix-auth") == "agent-loop-claude-fix-auth"
+        assert ralph.DockerSandbox.sandbox_name("claude", "fix-auth") == "agent-loop-claude-fix-auth"
 
     def test_branch_with_slashes(self):
-        assert ralph.Sandbox.sandbox_name("claude", "feature/foo") == "agent-loop-claude-feature-foo"
+        assert ralph.DockerSandbox.sandbox_name("claude", "feature/foo") == "agent-loop-claude-feature-foo"
 
     def test_branch_with_multiple_slashes(self):
-        assert ralph.Sandbox.sandbox_name("claude", "user/feature/bar") == "agent-loop-claude-user-feature-bar"
+        assert ralph.DockerSandbox.sandbox_name("claude", "user/feature/bar") == "agent-loop-claude-user-feature-bar"
 
     def test_branch_uppercase_lowered(self):
-        assert ralph.Sandbox.sandbox_name("claude", "Fix-Auth") == "agent-loop-claude-fix-auth"
+        assert ralph.DockerSandbox.sandbox_name("claude", "Fix-Auth") == "agent-loop-claude-fix-auth"
 
     def test_consecutive_slashes_collapsed(self):
-        assert ralph.Sandbox.sandbox_name("claude", "a//b") == "agent-loop-claude-a-b"
+        assert ralph.DockerSandbox.sandbox_name("claude", "a//b") == "agent-loop-claude-a-b"
 
     def test_leading_trailing_hyphens_stripped(self):
-        assert ralph.Sandbox.sandbox_name("claude", "-branch-") == "agent-loop-claude-branch"
+        assert ralph.DockerSandbox.sandbox_name("claude", "-branch-") == "agent-loop-claude-branch"
 
     def test_custom_agent(self):
-        assert ralph.Sandbox.sandbox_name("codex", "my-branch") == "agent-loop-codex-my-branch"
+        assert ralph.DockerSandbox.sandbox_name("codex", "my-branch") == "agent-loop-codex-my-branch"
 
 
 # ---------------------------------------------------------------------------
@@ -1345,16 +2433,16 @@ class TestSandboxEnsureSandbox:
         agent_dir = tmp_path / "docker" / "agent-loop" / "claude"
         agent_dir.mkdir(parents=True, exist_ok=True)
         (agent_dir / "Dockerfile").write_text(dockerfile)
-        return ralph.Sandbox(str(tmp_path))
+        return ralph.DockerSandbox(str(tmp_path))
 
-    @patch.object(ralph.Sandbox, "apply_network_policy")
-    @patch.object(ralph.Sandbox, "_docker_sandbox_create")
-    @patch.object(ralph.Sandbox, "_resolve_git_common_dir", return_value="/repo/.git")
-    @patch.object(ralph.Sandbox, "ensure_image", return_value="agent-loop-sandbox-claude:vabc")
-    @patch.object(ralph.Sandbox, "sandbox_exists", return_value=False)
+    @patch.object(ralph.DockerSandbox, "apply_network_policy")
+    @patch.object(ralph.DockerSandbox, "_docker_sandbox_create")
+    @patch.object(ralph.DockerSandbox, "_resolve_git_common_dir", return_value="/repo/.git")
+    @patch.object(ralph.DockerSandbox, "ensure_image", return_value="agent-loop-sandbox-claude:vabc")
+    @patch.object(ralph.DockerSandbox, "sandbox_exists", return_value=False)
     def test_creates_new_sandbox(self, mock_exists, mock_img, mock_resolve,
                                  mock_create, mock_policy):
-        sb = ralph.Sandbox("/dotfiles")
+        sb = ralph.DockerSandbox("/dotfiles")
         name = sb.ensure_sandbox("claude", "fix-auth", "/work/fix-auth")
         assert name == "agent-loop-claude-fix-auth"
         mock_create.assert_called_once_with(
@@ -1362,35 +2450,35 @@ class TestSandboxEnsureSandbox:
             "/work/fix-auth", "/repo/.git")
         mock_policy.assert_called_once_with("agent-loop-claude-fix-auth")
 
-    @patch.object(ralph.Sandbox, "sandbox_exists", return_value=True)
+    @patch.object(ralph.DockerSandbox, "sandbox_exists", return_value=True)
     def test_reuses_existing_sandbox(self, mock_exists):
-        sb = ralph.Sandbox("/dotfiles")
+        sb = ralph.DockerSandbox("/dotfiles")
         name = sb.ensure_sandbox("claude", "fix-auth", "/work/fix-auth")
         assert name == "agent-loop-claude-fix-auth"
 
-    @patch.object(ralph.Sandbox, "apply_network_policy")
-    @patch.object(ralph.Sandbox, "_docker_sandbox_create")
-    @patch.object(ralph.Sandbox, "ensure_image", return_value="agent-loop-sandbox-claude:vabc")
-    @patch.object(ralph.Sandbox, "sandbox_exists", return_value=True)
+    @patch.object(ralph.DockerSandbox, "apply_network_policy")
+    @patch.object(ralph.DockerSandbox, "_docker_sandbox_create")
+    @patch.object(ralph.DockerSandbox, "ensure_image", return_value="agent-loop-sandbox-claude:vabc")
+    @patch.object(ralph.DockerSandbox, "sandbox_exists", return_value=True)
     def test_reuse_skips_create_and_policy(self, mock_exists, mock_img, mock_create, mock_policy):
-        sb = ralph.Sandbox("/dotfiles")
+        sb = ralph.DockerSandbox("/dotfiles")
         sb.ensure_sandbox("claude", "fix-auth", "/work/fix-auth")
         mock_create.assert_not_called()
         mock_policy.assert_not_called()
         mock_img.assert_not_called()
 
-    @patch.object(ralph.Sandbox, "apply_network_policy")
-    @patch.object(ralph.Sandbox, "_docker_sandbox_create")
-    @patch.object(ralph.Sandbox, "_resolve_git_common_dir", return_value="/repo/.git")
-    @patch.object(ralph.Sandbox, "ensure_project_image",
+    @patch.object(ralph.DockerSandbox, "apply_network_policy")
+    @patch.object(ralph.DockerSandbox, "_docker_sandbox_create")
+    @patch.object(ralph.DockerSandbox, "_resolve_git_common_dir", return_value="/repo/.git")
+    @patch.object(ralph.DockerSandbox, "ensure_project_image",
                   return_value="agent-loop-sandbox-claude-myproj:vdef12345")
-    @patch.object(ralph.Sandbox, "ensure_image",
+    @patch.object(ralph.DockerSandbox, "ensure_image",
                   return_value="agent-loop-sandbox-claude:vabc")
-    @patch.object(ralph.Sandbox, "sandbox_exists", return_value=False)
+    @patch.object(ralph.DockerSandbox, "sandbox_exists", return_value=False)
     def test_calls_ensure_project_image_when_project_dir(
             self, mock_exists, mock_img, mock_proj, mock_resolve,
             mock_create, mock_policy):
-        sb = ralph.Sandbox("/dotfiles")
+        sb = ralph.DockerSandbox("/dotfiles")
         sb.ensure_sandbox("claude", "fix-auth", "/work/fix-auth",
                           project_dir="/repo/root")
         mock_proj.assert_called_once_with(
@@ -1401,16 +2489,16 @@ class TestSandboxEnsureSandbox:
             "agent-loop-sandbox-claude-myproj:vdef12345",
             "/work/fix-auth", "/repo/.git")
 
-    @patch.object(ralph.Sandbox, "apply_network_policy")
-    @patch.object(ralph.Sandbox, "_docker_sandbox_create")
-    @patch.object(ralph.Sandbox, "_resolve_git_common_dir", return_value="/repo/.git")
-    @patch.object(ralph.Sandbox, "ensure_image",
+    @patch.object(ralph.DockerSandbox, "apply_network_policy")
+    @patch.object(ralph.DockerSandbox, "_docker_sandbox_create")
+    @patch.object(ralph.DockerSandbox, "_resolve_git_common_dir", return_value="/repo/.git")
+    @patch.object(ralph.DockerSandbox, "ensure_image",
                   return_value="agent-loop-sandbox-claude:vabc")
-    @patch.object(ralph.Sandbox, "sandbox_exists", return_value=False)
+    @patch.object(ralph.DockerSandbox, "sandbox_exists", return_value=False)
     def test_skips_project_image_when_no_project_dir(
             self, mock_exists, mock_img, mock_resolve, mock_create, mock_policy):
-        sb = ralph.Sandbox("/dotfiles")
-        with patch.object(ralph.Sandbox, "ensure_project_image") as mock_proj:
+        sb = ralph.DockerSandbox("/dotfiles")
+        with patch.object(ralph.DockerSandbox, "ensure_project_image") as mock_proj:
             sb.ensure_sandbox("claude", "fix-auth", "/work/fix-auth")
             mock_proj.assert_not_called()
         mock_create.assert_called_once_with(
@@ -1418,18 +2506,18 @@ class TestSandboxEnsureSandbox:
             "agent-loop-sandbox-claude:vabc",
             "/work/fix-auth", "/repo/.git")
 
-    @patch.object(ralph.Sandbox, "apply_network_policy")
-    @patch.object(ralph.Sandbox, "_docker_sandbox_create")
-    @patch.object(ralph.Sandbox, "_resolve_git_common_dir", return_value="/repo/.git")
-    @patch.object(ralph.Sandbox, "ensure_project_image",
+    @patch.object(ralph.DockerSandbox, "apply_network_policy")
+    @patch.object(ralph.DockerSandbox, "_docker_sandbox_create")
+    @patch.object(ralph.DockerSandbox, "_resolve_git_common_dir", return_value="/repo/.git")
+    @patch.object(ralph.DockerSandbox, "ensure_project_image",
                   return_value="agent-loop-sandbox-claude-myproj:vdef12345")
-    @patch.object(ralph.Sandbox, "ensure_image",
+    @patch.object(ralph.DockerSandbox, "ensure_image",
                   return_value="agent-loop-sandbox-claude:vabc")
-    @patch.object(ralph.Sandbox, "sandbox_exists", return_value=False)
+    @patch.object(ralph.DockerSandbox, "sandbox_exists", return_value=False)
     def test_force_rebuild_passed_through(
             self, mock_exists, mock_img, mock_proj, mock_resolve,
             mock_create, mock_policy):
-        sb = ralph.Sandbox("/dotfiles")
+        sb = ralph.DockerSandbox("/dotfiles")
         sb.ensure_sandbox("claude", "fix-auth", "/work/fix-auth",
                           project_dir="/repo/root", force_rebuild=True)
         mock_img.assert_called_once_with("claude", force_rebuild=True)
@@ -1445,7 +2533,7 @@ class TestSandboxEnsureSandbox:
 class TestSandboxApplyNetworkPolicy:
     @patch("ralph.subprocess.run")
     def test_correct_command(self, mock_run):
-        ralph.Sandbox.apply_network_policy("agent-loop-claude-fix-auth")
+        ralph.DockerSandbox.apply_network_policy("agent-loop-claude-fix-auth")
         mock_run.assert_called_once_with(
             ["docker", "sandbox", "network", "proxy", "agent-loop-claude-fix-auth",
              "--policy", "deny",
@@ -1464,7 +2552,7 @@ class TestSandboxApplyNetworkPolicy:
 class TestSandboxCleanup:
     @patch("ralph.subprocess.run")
     def test_removes_sandbox(self, mock_run):
-        ralph.Sandbox.cleanup_sandbox("claude", "fix-auth")
+        ralph.DockerSandbox("/dotfiles").cleanup_sandbox("claude", "fix-auth")
         mock_run.assert_called_once_with(
             ["docker", "sandbox", "rm", "agent-loop-claude-fix-auth"],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
@@ -1478,7 +2566,7 @@ class TestSandboxCleanup:
 
 class TestSandboxPruneSandboxes:
     @patch("ralph.subprocess.run")
-    @patch.object(ralph.Sandbox, "_docker_sandbox_ls")
+    @patch.object(ralph.DockerSandbox, "_docker_sandbox_ls")
     def test_removes_orphans(self, mock_ls, mock_run, tmp_path):
         # Create one workspace that exists
         existing = tmp_path / "workspace"
@@ -1489,7 +2577,7 @@ class TestSandboxPruneSandboxes:
                 {"name": "agent-loop-claude-orphan", "workspace": "/nonexistent/path"},
             ]
         }
-        sb = ralph.Sandbox(str(tmp_path))
+        sb = ralph.DockerSandbox(str(tmp_path))
         pruned = sb.prune_sandboxes("claude")
         assert pruned == ["agent-loop-claude-orphan"]
         mock_run.assert_called_once_with(
@@ -1499,7 +2587,7 @@ class TestSandboxPruneSandboxes:
         )
 
     @patch("ralph.subprocess.run")
-    @patch.object(ralph.Sandbox, "_docker_sandbox_ls")
+    @patch.object(ralph.DockerSandbox, "_docker_sandbox_ls")
     def test_keeps_active_sandboxes(self, mock_ls, mock_run, tmp_path):
         existing = tmp_path / "workspace"
         existing.mkdir()
@@ -1508,26 +2596,26 @@ class TestSandboxPruneSandboxes:
                 {"name": "agent-loop-claude-active", "workspace": str(existing)},
             ]
         }
-        sb = ralph.Sandbox(str(tmp_path))
+        sb = ralph.DockerSandbox(str(tmp_path))
         pruned = sb.prune_sandboxes("claude")
         assert pruned == []
         mock_run.assert_not_called()
 
-    @patch.object(ralph.Sandbox, "_docker_sandbox_ls")
+    @patch.object(ralph.DockerSandbox, "_docker_sandbox_ls")
     def test_ignores_other_agents(self, mock_ls, tmp_path):
         mock_ls.return_value = {
             "vms": [
                 {"name": "agent-loop-codex-orphan", "workspace": "/nonexistent"},
             ]
         }
-        sb = ralph.Sandbox(str(tmp_path))
+        sb = ralph.DockerSandbox(str(tmp_path))
         pruned = sb.prune_sandboxes("claude")
         assert pruned == []
 
-    @patch.object(ralph.Sandbox, "_docker_sandbox_ls")
+    @patch.object(ralph.DockerSandbox, "_docker_sandbox_ls")
     def test_empty_vm_list(self, mock_ls, tmp_path):
         mock_ls.return_value = {"vms": []}
-        sb = ralph.Sandbox(str(tmp_path))
+        sb = ralph.DockerSandbox(str(tmp_path))
         pruned = sb.prune_sandboxes("claude")
         assert pruned == []
 
@@ -1542,19 +2630,19 @@ class TestSandboxDockerSandboxLs:
         vms_data = {"vms": [{"name": "test-vm", "workspace": "/tmp/w"}]}
         mock_run.return_value = MagicMock(
             returncode=0, stdout=json.dumps(vms_data))
-        result = ralph.Sandbox._docker_sandbox_ls()
+        result = ralph.DockerSandbox._docker_sandbox_ls()
         assert result == vms_data
 
     @patch("ralph.subprocess.run")
     def test_returns_empty_on_failure(self, mock_run):
         mock_run.return_value = MagicMock(returncode=1, stdout="")
-        result = ralph.Sandbox._docker_sandbox_ls()
+        result = ralph.DockerSandbox._docker_sandbox_ls()
         assert result == {"vms": []}
 
     @patch("ralph.subprocess.run")
     def test_returns_empty_on_invalid_json(self, mock_run):
         mock_run.return_value = MagicMock(returncode=0, stdout="not json")
-        result = ralph.Sandbox._docker_sandbox_ls()
+        result = ralph.DockerSandbox._docker_sandbox_ls()
         assert result == {"vms": []}
 
 
@@ -1584,7 +2672,7 @@ class TestSandboxPreflightCheck:
         future_ms = 1700000000000 + 30 * 86400 * 1000
         mock_read.return_value = {"accessToken": "sk-test", "expiresAt": future_ms}
         mock_run.side_effect = self._run_side_effect(echo_rc=0, curl_rc=28)
-        sb = ralph.Sandbox("/dotfiles")
+        sb = ralph.DockerSandbox("/dotfiles")
         failures = sb.preflight_check(self.SANDBOX_NAME, "claude", 8080)
         assert failures == []
 
@@ -1594,7 +2682,7 @@ class TestSandboxPreflightCheck:
     @patch("ralph.time.time", return_value=1700000000.0)
     def test_token_missing_returns_error(self, mock_time, mock_read, mock_health, mock_run):
         mock_run.side_effect = self._run_side_effect(echo_rc=0, curl_rc=28)
-        sb = ralph.Sandbox("/dotfiles")
+        sb = ralph.DockerSandbox("/dotfiles")
         failures = sb.preflight_check(self.SANDBOX_NAME, "claude", 8080)
         assert len(failures) == 1
         assert "no token found" in failures[0]
@@ -1608,7 +2696,7 @@ class TestSandboxPreflightCheck:
         past_ms = 1700000000000 - 86400 * 1000
         mock_read.return_value = {"accessToken": "sk-test", "expiresAt": past_ms}
         mock_run.side_effect = self._run_side_effect(echo_rc=0, curl_rc=28)
-        sb = ralph.Sandbox("/dotfiles")
+        sb = ralph.DockerSandbox("/dotfiles")
         failures = sb.preflight_check(self.SANDBOX_NAME, "claude", 8080)
         assert len(failures) == 1
         assert "token expired" in failures[0]
@@ -1622,7 +2710,7 @@ class TestSandboxPreflightCheck:
         future_ms = 1700000000000 + 30 * 86400 * 1000
         mock_read.return_value = {"accessToken": "sk-test", "expiresAt": future_ms}
         mock_run.side_effect = self._run_side_effect(echo_rc=0, curl_rc=28)
-        sb = ralph.Sandbox("/dotfiles")
+        sb = ralph.DockerSandbox("/dotfiles")
         failures = sb.preflight_check(self.SANDBOX_NAME, "claude", 8080)
         assert len(failures) == 1
         assert "proxy not reachable" in failures[0]
@@ -1636,7 +2724,7 @@ class TestSandboxPreflightCheck:
         future_ms = 1700000000000 + 30 * 86400 * 1000
         mock_read.return_value = {"accessToken": "sk-test", "expiresAt": future_ms}
         mock_run.side_effect = self._run_side_effect(echo_rc=1, curl_rc=28)
-        sb = ralph.Sandbox("/dotfiles")
+        sb = ralph.DockerSandbox("/dotfiles")
         failures = sb.preflight_check(self.SANDBOX_NAME, "claude", 8080)
         assert len(failures) == 1
         assert "not responding" in failures[0]
@@ -1651,7 +2739,7 @@ class TestSandboxPreflightCheck:
         future_ms = 1700000000000 + 30 * 86400 * 1000
         mock_read.return_value = {"accessToken": "sk-test", "expiresAt": future_ms}
         mock_run.side_effect = self._run_side_effect(echo_rc=1, curl_rc=0)
-        sb = ralph.Sandbox("/dotfiles")
+        sb = ralph.DockerSandbox("/dotfiles")
         failures = sb.preflight_check(self.SANDBOX_NAME, "claude", 8080)
         # Should only have sandbox error, not network policy error
         assert len(failures) == 1
@@ -1669,7 +2757,7 @@ class TestSandboxPreflightCheck:
         mock_read.return_value = {"accessToken": "sk-test", "expiresAt": future_ms}
         # echo succeeds, curl also succeeds (google.com reachable = bad)
         mock_run.side_effect = self._run_side_effect(echo_rc=0, curl_rc=0)
-        sb = ralph.Sandbox("/dotfiles")
+        sb = ralph.DockerSandbox("/dotfiles")
         failures = sb.preflight_check(self.SANDBOX_NAME, "claude", 8080)
         assert len(failures) == 1
         assert "network policy not applied" in failures[0]
@@ -1682,7 +2770,7 @@ class TestSandboxPreflightCheck:
     def test_multiple_failures_collected(self, mock_time, mock_read, mock_health, mock_run):
         """All failures are collected, not just the first one."""
         mock_run.side_effect = self._run_side_effect(echo_rc=1, curl_rc=28)
-        sb = ralph.Sandbox("/dotfiles")
+        sb = ralph.DockerSandbox("/dotfiles")
         failures = sb.preflight_check(self.SANDBOX_NAME, "claude", 8080)
         # token missing + proxy down + sandbox unresponsive = 3 failures
         assert len(failures) == 3
@@ -1695,7 +2783,7 @@ class TestSandboxPreflightCheck:
 class TestSandboxSetupGitConfig:
     @patch("ralph.subprocess.run")
     def test_sets_user_name_email_and_safe_directory(self, mock_run):
-        ralph.Sandbox.setup_git_config("my-sandbox", "Ralph", "ralph@test.com")
+        ralph.DockerSandbox("/dotfiles").setup_git_config("my-sandbox", "Ralph", "ralph@test.com")
         assert mock_run.call_count == 3
 
         name_call = mock_run.call_args_list[0]
@@ -1729,7 +2817,7 @@ class TestSandboxRunIteration:
             MagicMock(returncode=0),  # run claude
             MagicMock(returncode=0, stdout="updated spec"),  # read spec
         ]
-        sb = ralph.Sandbox("/dotfiles")
+        sb = ralph.DockerSandbox("/dotfiles")
         rc, updated = sb.run_iteration("my-sandbox", "original spec", "sonnet")
         assert rc == 0
         assert updated == "updated spec"
@@ -1762,7 +2850,7 @@ class TestSandboxRunIteration:
             MagicMock(returncode=0),  # run claude
             MagicMock(returncode=0, stdout="spec"),  # read spec
         ]
-        sb = ralph.Sandbox("/dotfiles")
+        sb = ralph.DockerSandbox("/dotfiles")
         sb.run_iteration("my-sandbox", "spec", "sonnet",
                          env_vars={"CLAUDE_CODE_OAUTH_TOKEN": "sk-test"})
 
@@ -1775,7 +2863,7 @@ class TestSandboxRunIteration:
     @patch("ralph.subprocess.run")
     def test_returns_original_spec_on_write_failure(self, mock_run):
         mock_run.return_value = MagicMock(returncode=1)
-        sb = ralph.Sandbox("/dotfiles")
+        sb = ralph.DockerSandbox("/dotfiles")
         rc, updated = sb.run_iteration("my-sandbox", "original", "sonnet")
         assert rc == 1
         assert updated == "original"
@@ -1789,7 +2877,7 @@ class TestSandboxRunIteration:
             MagicMock(returncode=0),  # run claude
             MagicMock(returncode=1, stdout=""),  # read spec fails
         ]
-        sb = ralph.Sandbox("/dotfiles")
+        sb = ralph.DockerSandbox("/dotfiles")
         rc, updated = sb.run_iteration("my-sandbox", "original", "sonnet")
         assert rc == 0
         assert updated == "original"
@@ -1801,7 +2889,7 @@ class TestSandboxRunIteration:
             MagicMock(returncode=42),  # claude fails
             MagicMock(returncode=0, stdout="spec"),  # read spec
         ]
-        sb = ralph.Sandbox("/dotfiles")
+        sb = ralph.DockerSandbox("/dotfiles")
         rc, _ = sb.run_iteration("my-sandbox", "spec", "sonnet")
         assert rc == 42
 
@@ -1865,7 +2953,7 @@ class TestSandboxSyncToHost:
     @patch("ralph.subprocess.run")
     def test_returns_true_when_host_can_see_commit(self, mock_run):
         mock_run.return_value = MagicMock(returncode=0)
-        result = ralph.Sandbox.sync_to_host("sandbox", "abc123", "def456", "/work")
+        result = ralph.DockerSandbox("/dotfiles").sync_to_host("sandbox", "abc123", "def456", "/work")
         assert result is True
         cmd = mock_run.call_args[0][0]
         assert "rev-parse" in cmd
@@ -1875,7 +2963,7 @@ class TestSandboxSyncToHost:
     @patch("ralph.subprocess.run")
     def test_returns_false_when_host_cannot_see_commit(self, mock_run):
         mock_run.return_value = MagicMock(returncode=1)
-        result = ralph.Sandbox.sync_to_host("sandbox", "abc", "def", "/work")
+        result = ralph.DockerSandbox("/dotfiles").sync_to_host("sandbox", "abc", "def", "/work")
         assert result is False
 
 
@@ -2066,10 +3154,13 @@ class TestTryFastForward:
 # ---------------------------------------------------------------------------
 
 class TestProcessIssueSandbox:
+    @patch("ralph.create_sandbox_backend")
+    @patch("ralph.load_sandbox_config", return_value={"type": "docker"})
     @patch("ralph.unblock_ready_specs")
     @patch("ralph.ensure_worktree", return_value="/work/my-branch")
     @patch("ralph.resolve_repo", return_value="owner/repo")
-    def test_resets_sandbox_when_out_of_sync(self, mock_repo, mock_wt, mock_unblock):
+    def test_resets_sandbox_when_out_of_sync(self, mock_repo, mock_wt, mock_unblock,
+                                             mock_config, mock_create):
         git = MagicMock()
         # All git.output calls return same value — HEAD doesn't change
         git.output.return_value = "/repo/root"
@@ -2079,13 +3170,14 @@ class TestProcessIssueSandbox:
         sandbox.run_iteration.return_value = (0, "updated spec")
         sandbox.check_in_sync.return_value = False
         sandbox.reset_to_host.return_value = True
+        mock_create.return_value = sandbox
 
         gh = MagicMock()
         gh.issue_view_title.return_value = "[my-branch] Test Issue"
         gh.issue_view_body.return_value = "---\nbranch: my-branch\n---\nSpec"
 
         ralph.process_issue(
-            42, git, sandbox, gh, "claude", False, "sonnet",
+            42, git, "/dotfiles", gh, "claude", False, "sonnet",
             "user", "user@test.com", 18080)
 
         sandbox.check_in_sync.assert_called_once_with(
@@ -2093,10 +3185,13 @@ class TestProcessIssueSandbox:
         sandbox.reset_to_host.assert_called_once_with(
             "agent-loop-claude-my-branch", "/work/my-branch", git)
 
+    @patch("ralph.create_sandbox_backend")
+    @patch("ralph.load_sandbox_config", return_value={"type": "docker"})
     @patch("ralph.unblock_ready_specs")
     @patch("ralph.ensure_worktree", return_value="/work/my-branch")
     @patch("ralph.resolve_repo", return_value="owner/repo")
-    def test_recreates_sandbox_when_reset_fails(self, mock_repo, mock_wt, mock_unblock):
+    def test_recreates_sandbox_when_reset_fails(self, mock_repo, mock_wt, mock_unblock,
+                                                 mock_config, mock_create):
         git = MagicMock()
         git.output.return_value = "/repo/root"
 
@@ -2105,13 +3200,14 @@ class TestProcessIssueSandbox:
         sandbox.run_iteration.return_value = (0, "updated spec")
         sandbox.check_in_sync.return_value = False
         sandbox.reset_to_host.return_value = False
+        mock_create.return_value = sandbox
 
         gh = MagicMock()
         gh.issue_view_title.return_value = "[my-branch] Test Issue"
         gh.issue_view_body.return_value = "---\nbranch: my-branch\n---\nSpec"
 
         ralph.process_issue(
-            42, git, sandbox, gh, "claude", False, "sonnet",
+            42, git, "/dotfiles", gh, "claude", False, "sonnet",
             "user", "user@test.com", 18080)
 
         sandbox.remove_sandbox.assert_called_once_with("agent-loop-claude-my-branch")
@@ -2124,25 +3220,34 @@ class TestProcessIssueSandbox:
         # setup_git_config called twice: initial + after recreation
         assert sandbox.setup_git_config.call_count == 2
 
+    @patch("ralph.create_sandbox_backend")
+    @patch("ralph.load_sandbox_config", return_value={"type": "docker"})
     @patch("ralph.unblock_ready_specs")
     @patch("ralph.ensure_worktree", return_value="/work/my-branch")
     @patch("ralph.resolve_repo", return_value="owner/repo")
-    def test_uses_ensure_sandbox_and_run_iteration(self, mock_repo, mock_wt, mock_unblock):
+    def test_uses_ensure_sandbox_and_run_iteration(self, mock_repo, mock_wt, mock_unblock,
+                                                    mock_config, mock_create):
         git = MagicMock()
         git.output.return_value = "/repo/root"
 
         sandbox = MagicMock()
+        sandbox.proxy_host.return_value = "host.docker.internal"
         sandbox.ensure_sandbox.return_value = "agent-loop-claude-my-branch"
         sandbox.run_iteration.return_value = (0, "updated spec")
+        mock_create.return_value = sandbox
 
         gh = MagicMock()
         gh.issue_view_title.return_value = "[my-branch] Test Issue"
         gh.issue_view_body.return_value = "---\nbranch: my-branch\n---\nSpec"
 
         result = ralph.process_issue(
-            42, git, sandbox, gh, "claude", False, "sonnet",
+            42, git, "/dotfiles", gh, "claude", False, "sonnet",
             "user", "user@test.com", 18080)
         assert result == 0
+
+        mock_config.assert_called_once_with("/repo/root")
+        mock_create.assert_called_once_with("docker", "/dotfiles",
+                                            project_dir="/repo/root")
 
         sandbox.ensure_sandbox.assert_called_once_with(
             "claude", "my-branch", "/work/my-branch",
@@ -2151,29 +3256,64 @@ class TestProcessIssueSandbox:
             "agent-loop-claude-my-branch", "user", "user@test.com")
         sandbox.run_iteration.assert_called_once()
 
-        # Verify run_iteration received workdir + phantom token + proxy base URL
+        # Verify run_iteration received phantom token + proxy base URL (no workdir)
         call_args = sandbox.run_iteration.call_args
-        assert call_args[1].get("workdir") == "/work/my-branch"
-        env_vars = call_args[1].get("env_vars") or call_args[0][3]
+        assert "workdir" not in (call_args[1] or {})
+        env_vars = call_args[0][3]
         assert env_vars["CLAUDE_CODE_OAUTH_TOKEN"] == "phantom"
         assert env_vars["ANTHROPIC_BASE_URL"] == "http://host.docker.internal:18080"
 
+    @patch("ralph.create_sandbox_backend")
+    @patch("ralph.load_sandbox_config", return_value={"type": "docker"})
+    @patch("ralph.unblock_ready_specs")
     @patch("ralph.ensure_worktree", return_value="/work/my-branch")
     @patch("ralph.resolve_repo", return_value="owner/repo")
-    def test_iteration_failure_marks_needs_attention(self, mock_repo, mock_wt):
+    def test_proxy_host_used_in_env_vars(self, mock_repo, mock_wt, mock_unblock,
+                                          mock_config, mock_create):
+        """Verify sandbox.proxy_host() is called for constructing the proxy URL."""
+        git = MagicMock()
+        git.output.return_value = "/repo/root"
+
+        sandbox = MagicMock()
+        sandbox.proxy_host.return_value = "192.168.64.1"
+        sandbox.ensure_sandbox.return_value = "agent-loop-claude-my-branch"
+        sandbox.run_iteration.return_value = (0, "spec")
+        sandbox.exec_output.return_value = "abc123"
+        mock_create.return_value = sandbox
+
+        gh = MagicMock()
+        gh.issue_view_title.return_value = "[my-branch] Test Issue"
+        gh.issue_view_body.return_value = "---\nbranch: my-branch\n---\nSpec"
+
+        ralph.process_issue(
+            42, git, "/dotfiles", gh, "claude", False, "sonnet",
+            "user", "user@test.com", 18080)
+
+        sandbox.proxy_host.assert_called_once()
+        call_args = sandbox.run_iteration.call_args
+        env_vars = call_args[1].get("env_vars") or call_args[0][3]
+        assert env_vars["ANTHROPIC_BASE_URL"] == "http://192.168.64.1:18080"
+
+    @patch("ralph.create_sandbox_backend")
+    @patch("ralph.load_sandbox_config", return_value={"type": "docker"})
+    @patch("ralph.ensure_worktree", return_value="/work/my-branch")
+    @patch("ralph.resolve_repo", return_value="owner/repo")
+    def test_iteration_failure_marks_needs_attention(self, mock_repo, mock_wt,
+                                                      mock_config, mock_create):
         git = MagicMock()
         git.output.return_value = "/repo/root"
 
         sandbox = MagicMock()
         sandbox.ensure_sandbox.return_value = "agent-loop-claude-my-branch"
         sandbox.run_iteration.return_value = (1, "spec")
+        mock_create.return_value = sandbox
 
         gh = MagicMock()
         gh.issue_view_title.return_value = "[my-branch] Test Issue"
         gh.issue_view_body.return_value = "---\nbranch: my-branch\n---\nSpec"
 
         result = ralph.process_issue(
-            42, git, sandbox, gh, "claude", False, "sonnet",
+            42, git, "/dotfiles", gh, "claude", False, "sonnet",
             "user", "user@test.com", 18080)
         assert result == 1
 
@@ -2182,10 +3322,13 @@ class TestProcessIssueSandbox:
             remove_label="status:in-progress",
             add_label="status:needs-attention")
 
+    @patch("ralph.create_sandbox_backend")
+    @patch("ralph.load_sandbox_config", return_value={"type": "docker"})
     @patch("ralph.try_fast_forward", return_value=None)
     @patch("ralph.ensure_worktree", return_value="/work/my-branch")
     @patch("ralph.resolve_repo", return_value="owner/repo")
-    def test_sync_failure_marks_needs_attention(self, mock_repo, mock_wt, mock_ff):
+    def test_sync_failure_marks_needs_attention(self, mock_repo, mock_wt, mock_ff,
+                                                 mock_config, mock_create):
         heads = iter(["abc123", "def456"])
         def _git_output(*args, **kwargs):
             if args == ("rev-parse", "--show-toplevel"):
@@ -2200,13 +3343,14 @@ class TestProcessIssueSandbox:
         sandbox.ensure_sandbox.return_value = "agent-loop-claude-my-branch"
         sandbox.run_iteration.return_value = (0, "spec")
         sandbox.sync_to_host.return_value = False
+        mock_create.return_value = sandbox
 
         gh = MagicMock()
         gh.issue_view_title.return_value = "[my-branch] Test Issue"
         gh.issue_view_body.return_value = "---\nbranch: my-branch\n---\nSpec"
 
         result = ralph.process_issue(
-            42, git, sandbox, gh, "claude", False, "sonnet",
+            42, git, "/dotfiles", gh, "claude", False, "sonnet",
             "user", "user@test.com", 18080)
         assert result == 1
 
@@ -2215,12 +3359,15 @@ class TestProcessIssueSandbox:
             remove_label="status:in-progress",
             add_label="status:needs-attention")
 
+    @patch("ralph.create_sandbox_backend")
+    @patch("ralph.load_sandbox_config", return_value={"type": "docker"})
     @patch("ralph.try_fast_forward", return_value=None)
     @patch("ralph.unblock_ready_specs")
     @patch("ralph.ensure_worktree", return_value="/work/my-branch")
     @patch("ralph.resolve_repo", return_value="owner/repo")
     def test_pushes_after_iteration_when_flag_set(self, mock_repo, mock_wt,
-                                                  mock_unblock, mock_ff):
+                                                  mock_unblock, mock_ff,
+                                                  mock_config, mock_create):
         # HEAD changes on first iteration (abc→def), stays same on second (def→def)
         heads = iter(["abc", "def", "def", "def"])
         def _git_output(*args, **kwargs):
@@ -2235,111 +3382,133 @@ class TestProcessIssueSandbox:
         sandbox = MagicMock()
         sandbox.ensure_sandbox.return_value = "agent-loop-claude-my-branch"
         sandbox.run_iteration.return_value = (0, "updated spec")
+        # First call returns "abc", second returns "def" (new commit),
+        # third returns "def" (no new commit = done)
+        mock_create.return_value = sandbox
 
         gh = MagicMock()
         gh.issue_view_title.return_value = "[my-branch] Test Issue"
         gh.issue_view_body.return_value = "---\nbranch: my-branch\n---\nSpec"
 
         ralph.process_issue(
-            42, git, sandbox, gh, "claude", True, "sonnet",
+            42, git, "/dotfiles", gh, "claude", True, "sonnet",
             "user", "user@test.com", 18080)
 
         git.run.assert_any_call("push", cwd="/work/my-branch", check=False)
 
+    @patch("ralph.create_sandbox_backend")
+    @patch("ralph.load_sandbox_config", return_value={"type": "docker"})
     @patch("ralph.ensure_worktree", return_value="/work/my-branch")
     @patch("ralph.resolve_repo", return_value="owner/repo")
-    def test_agent_codex_uses_correct_names(self, mock_repo, mock_wt):
+    def test_agent_codex_uses_correct_names(self, mock_repo, mock_wt,
+                                             mock_config, mock_create):
         git = MagicMock()
         git.output.return_value = "/repo/root"
 
         sandbox = MagicMock()
         sandbox.ensure_sandbox.return_value = "agent-loop-codex-my-branch"
         sandbox.run_iteration.return_value = (0, "spec")
+        mock_create.return_value = sandbox
 
         gh = MagicMock()
         gh.issue_view_title.return_value = "[my-branch] Test Issue"
         gh.issue_view_body.return_value = "---\nbranch: my-branch\n---\nSpec"
 
         ralph.process_issue(
-            42, git, sandbox, gh, "codex", False, "sonnet",
+            42, git, "/dotfiles", gh, "codex", False, "sonnet",
             "user", "user@test.com", 18080)
 
         sandbox.ensure_sandbox.assert_called_once_with(
             "codex", "my-branch", "/work/my-branch",
             project_dir="/repo/root", force_rebuild=False)
 
+    @patch("ralph.create_sandbox_backend")
+    @patch("ralph.load_sandbox_config", return_value={"type": "docker"})
     @patch("ralph.unblock_ready_specs")
     @patch("ralph.ensure_worktree", return_value="/work/my-branch")
     @patch("ralph.resolve_repo", return_value="owner/repo")
-    def test_rebuild_flag_passed_to_ensure_sandbox(self, mock_repo, mock_wt, mock_unblock):
+    def test_rebuild_flag_passed_to_ensure_sandbox(self, mock_repo, mock_wt, mock_unblock,
+                                                    mock_config, mock_create):
         git = MagicMock()
         git.output.return_value = "/repo/root"
 
         sandbox = MagicMock()
         sandbox.ensure_sandbox.return_value = "agent-loop-claude-my-branch"
         sandbox.run_iteration.return_value = (0, "spec")
+        mock_create.return_value = sandbox
 
         gh = MagicMock()
         gh.issue_view_title.return_value = "[my-branch] Test Issue"
         gh.issue_view_body.return_value = "---\nbranch: my-branch\n---\nSpec"
 
         ralph.process_issue(
-            42, git, sandbox, gh, "claude", False, "sonnet",
+            42, git, "/dotfiles", gh, "claude", False, "sonnet",
             "user", "user@test.com", 18080, rebuild=True)
 
         sandbox.ensure_sandbox.assert_called_once_with(
             "claude", "my-branch", "/work/my-branch",
             project_dir="/repo/root", force_rebuild=True)
 
+    @patch("ralph.create_sandbox_backend")
+    @patch("ralph.load_sandbox_config", return_value={"type": "docker"})
     @patch("ralph.unblock_ready_specs")
     @patch("ralph.ensure_worktree", return_value="/work/my-branch")
     @patch("ralph.resolve_repo", return_value="owner/repo")
-    def test_stores_issue_number_in_git_config(self, mock_repo, mock_wt, mock_unblock):
+    def test_stores_issue_number_in_git_config(self, mock_repo, mock_wt, mock_unblock,
+                                                mock_config, mock_create):
         git = MagicMock()
         git.output.return_value = "abc123"
 
         sandbox = MagicMock()
         sandbox.ensure_sandbox.return_value = "agent-loop-claude-my-branch"
         sandbox.run_iteration.return_value = (0, "updated spec")
+        mock_create.return_value = sandbox
 
         gh = MagicMock()
         gh.issue_view_title.return_value = "[my-branch] Test Issue"
         gh.issue_view_body.return_value = "---\nbranch: my-branch\n---\nSpec"
 
         ralph.process_issue(
-            42, git, sandbox, gh, "claude", False, "sonnet",
+            42, git, "/dotfiles", gh, "claude", False, "sonnet",
             "user", "user@test.com", 18080)
 
         git.run.assert_any_call(
             "config", "branch.my-branch.issue", "42",
             cwd="/work/my-branch", check=False)
 
+    @patch("ralph.create_sandbox_backend")
+    @patch("ralph.load_sandbox_config", return_value={"type": "docker"})
     @patch("ralph.unblock_ready_specs")
     @patch("ralph.ensure_worktree", return_value="/work/feat/slash-branch")
     @patch("ralph.resolve_repo", return_value="owner/repo")
-    def test_stores_issue_number_with_slashes_in_branch(self, mock_repo, mock_wt, mock_unblock):
+    def test_stores_issue_number_with_slashes_in_branch(self, mock_repo, mock_wt, mock_unblock,
+                                                         mock_config, mock_create):
         git = MagicMock()
         git.output.return_value = "abc123"
 
         sandbox = MagicMock()
         sandbox.ensure_sandbox.return_value = "agent-loop-claude-feat-slash-branch"
         sandbox.run_iteration.return_value = (0, "updated spec")
+        mock_create.return_value = sandbox
 
         gh = MagicMock()
         gh.issue_view_title.return_value = "[feat/slash-branch] Test Issue"
         gh.issue_view_body.return_value = "---\nbranch: feat/slash-branch\n---\nSpec"
 
         ralph.process_issue(
-            99, git, sandbox, gh, "claude", False, "sonnet",
+            99, git, "/dotfiles", gh, "claude", False, "sonnet",
             "user", "user@test.com", 18080)
 
         git.run.assert_any_call(
             "config", "branch.feat/slash-branch.issue", "99",
             cwd="/work/feat/slash-branch", check=False)
 
+    @patch("ralph.create_sandbox_backend")
+    @patch("ralph.load_sandbox_config", return_value={"type": "docker"})
     @patch("ralph.ensure_worktree", return_value="/work/my-branch")
     @patch("ralph.resolve_repo", return_value="owner/repo")
-    def test_blocked_marker_marks_needs_attention(self, mock_repo, mock_wt):
+    def test_blocked_marker_marks_needs_attention(self, mock_repo, mock_wt,
+                                                   mock_config, mock_create):
         git = MagicMock()
         # HEAD doesn't change = no commit made
         git.output.return_value = "abc123"
@@ -2354,13 +3523,14 @@ class TestProcessIssueSandbox:
             "### Step 2: Run tests [blocked: pytest not installed]\n"
         )
         sandbox.run_iteration.return_value = (0, spec_body)
+        mock_create.return_value = sandbox
 
         gh = MagicMock()
         gh.issue_view_title.return_value = "[my-branch] Test Issue"
         gh.issue_view_body.return_value = "---\nbranch: my-branch\n---\nSpec"
 
         result = ralph.process_issue(
-            42, git, sandbox, gh, "claude", False, "sonnet",
+            42, git, "/dotfiles", gh, "claude", False, "sonnet",
             "user", "user@test.com", 18080)
         assert result == 0
 
@@ -2369,10 +3539,13 @@ class TestProcessIssueSandbox:
             remove_label="status:in-progress",
             add_label="status:needs-attention")
 
+    @patch("ralph.create_sandbox_backend")
+    @patch("ralph.load_sandbox_config", return_value={"type": "docker"})
     @patch("ralph.unblock_ready_specs")
     @patch("ralph.ensure_worktree", return_value="/work/my-branch")
     @patch("ralph.resolve_repo", return_value="owner/repo")
-    def test_no_blocked_marker_marks_done_and_unblocks(self, mock_repo, mock_wt, mock_unblock):
+    def test_no_blocked_marker_marks_done_and_unblocks(self, mock_repo, mock_wt, mock_unblock,
+                                                        mock_config, mock_create):
         git = MagicMock()
         # HEAD doesn't change = no commit made
         git.output.return_value = "abc123"
@@ -2387,13 +3560,14 @@ class TestProcessIssueSandbox:
             "### Step 2: Run tests [done]\n"
         )
         sandbox.run_iteration.return_value = (0, spec_body)
+        mock_create.return_value = sandbox
 
         gh = MagicMock()
         gh.issue_view_title.return_value = "[my-branch] Test Issue"
         gh.issue_view_body.return_value = "---\nbranch: my-branch\n---\nSpec"
 
         result = ralph.process_issue(
-            42, git, sandbox, gh, "claude", False, "sonnet",
+            42, git, "/dotfiles", gh, "claude", False, "sonnet",
             "user", "user@test.com", 18080)
         assert result == 0
 
@@ -2502,13 +3676,13 @@ class TestSelftest:
 
     # proxy_health_check returns (False, None) for the initial
     # proxy_existed_before check, then (True, "v123") after ensure_proxy.
-    @patch("ralph.Sandbox.remove_sandbox")
+    @patch("ralph.DockerSandbox.remove_sandbox")
     @patch("ralph.stop_proxy")
     @patch("ralph.subprocess.run")
-    @patch("ralph.Sandbox.apply_network_policy")
-    @patch("ralph.Sandbox._docker_sandbox_create")
-    @patch("ralph.Sandbox._resolve_git_common_dir", return_value="/fake/.git")
-    @patch("ralph.Sandbox.ensure_image", return_value="agent-loop-sandbox-claude:vabc")
+    @patch("ralph.DockerSandbox.apply_network_policy")
+    @patch("ralph.DockerSandbox._docker_sandbox_create")
+    @patch("ralph.DockerSandbox._resolve_git_common_dir", return_value="/fake/.git")
+    @patch("ralph.DockerSandbox.ensure_image", return_value="agent-loop-sandbox-claude:vabc")
     @patch("ralph.proxy_health_check", side_effect=[(False, None), (True, "abc123")])
     @patch("ralph.ensure_proxy")
     @patch("ralph.read_token_from_keychain")
@@ -2537,17 +3711,17 @@ class TestSelftest:
         assert "PASS: proxy reachable from sandbox" in captured.out
         assert "PASS: claude auth via proxy" in captured.out
         assert "PASS: network isolation" in captured.out
-        assert "all 8 checks passed" in captured.out
+        assert "all 9 checks passed" in captured.out
         # Proxy was not running before selftest, so it should be stopped
         mock_stop.assert_called_once_with("claude")
 
-    @patch("ralph.Sandbox.remove_sandbox")
+    @patch("ralph.DockerSandbox.remove_sandbox")
     @patch("ralph.stop_proxy")
     @patch("ralph.subprocess.run")
-    @patch("ralph.Sandbox.apply_network_policy")
-    @patch("ralph.Sandbox._docker_sandbox_create")
-    @patch("ralph.Sandbox._resolve_git_common_dir", return_value="/fake/.git")
-    @patch("ralph.Sandbox.ensure_image", return_value="agent-loop-sandbox-claude:vabc")
+    @patch("ralph.DockerSandbox.apply_network_policy")
+    @patch("ralph.DockerSandbox._docker_sandbox_create")
+    @patch("ralph.DockerSandbox._resolve_git_common_dir", return_value="/fake/.git")
+    @patch("ralph.DockerSandbox.ensure_image", return_value="agent-loop-sandbox-claude:vabc")
     @patch("ralph.proxy_health_check", return_value=(True, "abc123"))
     @patch("ralph.ensure_proxy")
     @patch("ralph.read_token_from_keychain")
@@ -2595,13 +3769,13 @@ class TestSelftest:
         assert "FAIL: check token" in captured.out
         assert "token expired" in captured.out
 
-    @patch("ralph.Sandbox.remove_sandbox")
+    @patch("ralph.DockerSandbox.remove_sandbox")
     @patch("ralph.stop_proxy")
     @patch("ralph.subprocess.run")
-    @patch("ralph.Sandbox.apply_network_policy")
-    @patch("ralph.Sandbox._docker_sandbox_create")
-    @patch("ralph.Sandbox._resolve_git_common_dir", return_value="/fake/.git")
-    @patch("ralph.Sandbox.ensure_image", return_value="agent-loop-sandbox-claude:vabc")
+    @patch("ralph.DockerSandbox.apply_network_policy")
+    @patch("ralph.DockerSandbox._docker_sandbox_create")
+    @patch("ralph.DockerSandbox._resolve_git_common_dir", return_value="/fake/.git")
+    @patch("ralph.DockerSandbox.ensure_image", return_value="agent-loop-sandbox-claude:vabc")
     @patch("ralph.proxy_health_check", side_effect=[(False, None), (True, "abc123")])
     @patch("ralph.ensure_proxy")
     @patch("ralph.read_token_from_keychain")
@@ -2625,13 +3799,13 @@ class TestSelftest:
         mock_remove.assert_called_with("agent-loop-selftest-claude")
         mock_stop.assert_called_once_with("claude")
 
-    @patch("ralph.Sandbox.remove_sandbox")
+    @patch("ralph.DockerSandbox.remove_sandbox")
     @patch("ralph.stop_proxy")
     @patch("ralph.subprocess.run")
-    @patch("ralph.Sandbox.apply_network_policy")
-    @patch("ralph.Sandbox._docker_sandbox_create")
-    @patch("ralph.Sandbox._resolve_git_common_dir", return_value="/fake/.git")
-    @patch("ralph.Sandbox.ensure_image", return_value="agent-loop-sandbox-claude:vabc")
+    @patch("ralph.DockerSandbox.apply_network_policy")
+    @patch("ralph.DockerSandbox._docker_sandbox_create")
+    @patch("ralph.DockerSandbox._resolve_git_common_dir", return_value="/fake/.git")
+    @patch("ralph.DockerSandbox.ensure_image", return_value="agent-loop-sandbox-claude:vabc")
     @patch("ralph.proxy_health_check", side_effect=[(False, None), (True, "abc123")])
     @patch("ralph.ensure_proxy")
     @patch("ralph.read_token_from_keychain")
@@ -2655,11 +3829,11 @@ class TestSelftest:
         captured = capsys.readouterr()
         assert "FAIL: claude auth via proxy" in captured.out
         assert "FAIL: network isolation" in captured.out
-        assert "2/8 checks failed" in captured.out
+        assert "2/9 checks failed" in captured.out
 
-    @patch("ralph.Sandbox.remove_sandbox")
+    @patch("ralph.DockerSandbox.remove_sandbox")
     @patch("ralph.stop_proxy")
-    @patch("ralph.Sandbox.ensure_image", side_effect=RuntimeError("build failed"))
+    @patch("ralph.DockerSandbox.ensure_image", side_effect=RuntimeError("build failed"))
     @patch("ralph.proxy_health_check", side_effect=[(False, None), (True, "abc123")])
     @patch("ralph.ensure_proxy")
     @patch("ralph.read_token_from_keychain")
@@ -2676,13 +3850,13 @@ class TestSelftest:
         # Proxy should still be stopped (was started, didn't exist before)
         mock_stop.assert_called_once_with("claude")
 
-    @patch("ralph.Sandbox.remove_sandbox")
+    @patch("ralph.DockerSandbox.remove_sandbox")
     @patch("ralph.stop_proxy")
-    @patch("ralph.Sandbox.apply_network_policy")
-    @patch("ralph.Sandbox._docker_sandbox_create",
+    @patch("ralph.DockerSandbox.apply_network_policy")
+    @patch("ralph.DockerSandbox._docker_sandbox_create",
            side_effect=subprocess.CalledProcessError(1, "docker"))
-    @patch("ralph.Sandbox._resolve_git_common_dir", return_value="/fake/.git")
-    @patch("ralph.Sandbox.ensure_image", return_value="agent-loop-sandbox-claude:vabc")
+    @patch("ralph.DockerSandbox._resolve_git_common_dir", return_value="/fake/.git")
+    @patch("ralph.DockerSandbox.ensure_image", return_value="agent-loop-sandbox-claude:vabc")
     @patch("ralph.proxy_health_check", side_effect=[(False, None), (True, "abc123")])
     @patch("ralph.ensure_proxy")
     @patch("ralph.read_token_from_keychain")
@@ -2708,7 +3882,8 @@ class TestSelftest:
         with pytest.raises(SystemExit) as exc_info:
             ralph.main()
         assert exc_info.value.code == 0
-        mock_selftest.assert_called_once_with("claude", mock_selftest.call_args[0][1])
+        mock_selftest.assert_called_once_with(
+            "claude", mock_selftest.call_args[0][1], sandbox_type="docker")
 
     @patch("ralph.selftest", return_value=0)
     @patch("ralph.check_dependencies_prereq")
@@ -2717,7 +3892,8 @@ class TestSelftest:
         with pytest.raises(SystemExit) as exc_info:
             ralph.main()
         assert exc_info.value.code == 0
-        mock_selftest.assert_called_once_with("codex", mock_selftest.call_args[0][1])
+        mock_selftest.assert_called_once_with(
+            "codex", mock_selftest.call_args[0][1], sandbox_type="docker")
 
     @patch("ralph.sys.argv", ["ralph", "selftest", "--badopt"])
     def test_main_selftest_rejects_unknown_option(self):
@@ -2725,17 +3901,17 @@ class TestSelftest:
             ralph.main()
         assert exc_info.value.code == 2
 
-    @patch("ralph.Sandbox.remove_sandbox")
+    @patch("ralph.DockerSandbox.remove_sandbox")
     @patch("ralph.stop_proxy")
     @patch("ralph.subprocess.run")
-    @patch("ralph.Sandbox.apply_network_policy")
-    @patch("ralph.Sandbox._docker_sandbox_create")
-    @patch("ralph.Sandbox._resolve_git_common_dir", return_value="/fake/.git")
-    @patch("ralph.Sandbox.ensure_project_image",
+    @patch("ralph.DockerSandbox.apply_network_policy")
+    @patch("ralph.DockerSandbox._docker_sandbox_create")
+    @patch("ralph.DockerSandbox._resolve_git_common_dir", return_value="/fake/.git")
+    @patch("ralph.DockerSandbox.ensure_project_image",
            return_value="agent-loop-sandbox-claude-myproject:vdeadbeef")
-    @patch("ralph.Sandbox.find_project_config",
+    @patch("ralph.DockerSandbox.find_project_config",
            return_value=("dependencies", "/proj/.agent-loop/dependencies"))
-    @patch("ralph.Sandbox.ensure_image", return_value="agent-loop-sandbox-claude:vabc")
+    @patch("ralph.DockerSandbox.ensure_image", return_value="agent-loop-sandbox-claude:vabc")
     @patch("ralph.proxy_health_check", side_effect=[(False, None), (True, "abc123")])
     @patch("ralph.ensure_proxy")
     @patch("ralph.read_token_from_keychain")
@@ -2758,19 +3934,19 @@ class TestSelftest:
         captured = capsys.readouterr()
         assert "PASS: build project image" in captured.out
         assert "agent-loop-sandbox-claude-myproject:vdeadbeef" in captured.out
-        assert "all 9 checks passed" in captured.out
+        assert "all 10 checks passed" in captured.out
 
-    @patch("ralph.Sandbox.remove_sandbox")
+    @patch("ralph.DockerSandbox.remove_sandbox")
     @patch("ralph.stop_proxy")
     @patch("ralph.subprocess.run")
-    @patch("ralph.Sandbox.apply_network_policy")
-    @patch("ralph.Sandbox._docker_sandbox_create")
-    @patch("ralph.Sandbox._resolve_git_common_dir", return_value="/fake/.git")
-    @patch("ralph.Sandbox.ensure_project_image",
+    @patch("ralph.DockerSandbox.apply_network_policy")
+    @patch("ralph.DockerSandbox._docker_sandbox_create")
+    @patch("ralph.DockerSandbox._resolve_git_common_dir", return_value="/fake/.git")
+    @patch("ralph.DockerSandbox.ensure_project_image",
            return_value="agent-loop-sandbox-claude-myproject:vdeadbeef")
-    @patch("ralph.Sandbox.find_project_config",
+    @patch("ralph.DockerSandbox.find_project_config",
            return_value=("dockerfile", "/proj/.agent-loop/Dockerfile.sandbox"))
-    @patch("ralph.Sandbox.ensure_image", return_value="agent-loop-sandbox-claude:vabc")
+    @patch("ralph.DockerSandbox.ensure_image", return_value="agent-loop-sandbox-claude:vabc")
     @patch("ralph.proxy_health_check", side_effect=[(False, None), (True, "abc123")])
     @patch("ralph.ensure_proxy")
     @patch("ralph.read_token_from_keychain")
@@ -2792,16 +3968,16 @@ class TestSelftest:
 
         captured = capsys.readouterr()
         assert "PASS: build project image" in captured.out
-        assert "all 9 checks passed" in captured.out
+        assert "all 10 checks passed" in captured.out
 
-    @patch("ralph.Sandbox.remove_sandbox")
+    @patch("ralph.DockerSandbox.remove_sandbox")
     @patch("ralph.stop_proxy")
     @patch("ralph.subprocess.run")
-    @patch("ralph.Sandbox.apply_network_policy")
-    @patch("ralph.Sandbox._docker_sandbox_create")
-    @patch("ralph.Sandbox._resolve_git_common_dir", return_value="/fake/.git")
-    @patch("ralph.Sandbox.find_project_config", return_value=None)
-    @patch("ralph.Sandbox.ensure_image", return_value="agent-loop-sandbox-claude:vabc")
+    @patch("ralph.DockerSandbox.apply_network_policy")
+    @patch("ralph.DockerSandbox._docker_sandbox_create")
+    @patch("ralph.DockerSandbox._resolve_git_common_dir", return_value="/fake/.git")
+    @patch("ralph.DockerSandbox.find_project_config", return_value=None)
+    @patch("ralph.DockerSandbox.ensure_image", return_value="agent-loop-sandbox-claude:vabc")
     @patch("ralph.proxy_health_check", side_effect=[(False, None), (True, "abc123")])
     @patch("ralph.ensure_proxy")
     @patch("ralph.read_token_from_keychain")
@@ -2823,18 +3999,18 @@ class TestSelftest:
         captured = capsys.readouterr()
         assert "PASS: build project image" not in captured.out
         assert "skipping project image check" in captured.out
-        assert "all 8 checks passed" in captured.out
+        assert "all 9 checks passed" in captured.out
 
-    @patch("ralph.Sandbox.remove_sandbox")
+    @patch("ralph.DockerSandbox.remove_sandbox")
     @patch("ralph.stop_proxy")
     @patch("ralph.subprocess.run")
-    @patch("ralph.Sandbox.apply_network_policy")
-    @patch("ralph.Sandbox._docker_sandbox_create")
-    @patch("ralph.Sandbox.ensure_project_image",
+    @patch("ralph.DockerSandbox.apply_network_policy")
+    @patch("ralph.DockerSandbox._docker_sandbox_create")
+    @patch("ralph.DockerSandbox.ensure_project_image",
            side_effect=RuntimeError("project build failed"))
-    @patch("ralph.Sandbox.find_project_config",
+    @patch("ralph.DockerSandbox.find_project_config",
            return_value=("dependencies", "/proj/.agent-loop/dependencies"))
-    @patch("ralph.Sandbox.ensure_image", return_value="agent-loop-sandbox-claude:vabc")
+    @patch("ralph.DockerSandbox.ensure_image", return_value="agent-loop-sandbox-claude:vabc")
     @patch("ralph.proxy_health_check", side_effect=[(False, None), (True, "abc123")])
     @patch("ralph.ensure_proxy")
     @patch("ralph.read_token_from_keychain")
@@ -2858,6 +4034,221 @@ class TestSelftest:
         assert "project build failed" in captured.out
         assert "selftest aborted" in captured.out
         mock_create.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# TartSandbox.check_prerequisites
+# ---------------------------------------------------------------------------
+
+
+class TestTartCheckPrerequisites:
+    def _make(self, **kwargs):
+        config = {"base_image": "img:latest"}
+        config.update(kwargs)
+        return ralph.TartSandbox("/dotfiles", config=config)
+
+    @patch("ralph.shutil.which", return_value="/usr/local/bin/tart")
+    def test_tart_and_docker_present(self, mock_which):
+        mock_which.side_effect = lambda cmd: (
+            "/usr/local/bin/tart" if cmd == "tart"
+            else "/usr/local/bin/docker" if cmd == "docker"
+            else None)
+        ts = self._make()
+        assert ts.check_prerequisites() == []
+
+    @patch("ralph.shutil.which", return_value=None)
+    def test_tart_missing(self, mock_which):
+        mock_which.side_effect = lambda cmd: (
+            None if cmd == "tart"
+            else "/usr/local/bin/docker" if cmd == "docker"
+            else None)
+        ts = self._make()
+        errors = ts.check_prerequisites()
+        assert len(errors) == 1
+        assert "tart is not installed" in errors[0]
+
+    @patch("ralph.shutil.which", return_value=None)
+    def test_docker_missing(self, mock_which):
+        mock_which.side_effect = lambda cmd: (
+            "/usr/local/bin/tart" if cmd == "tart"
+            else None)
+        ts = self._make()
+        errors = ts.check_prerequisites()
+        assert len(errors) == 1
+        assert "docker is not installed" in errors[0]
+
+    @patch("ralph.shutil.which", return_value=None)
+    def test_both_missing(self, mock_which):
+        ts = self._make()
+        errors = ts.check_prerequisites()
+        assert len(errors) == 2
+
+
+# ---------------------------------------------------------------------------
+# selftest --type tart routing
+# ---------------------------------------------------------------------------
+
+
+class TestSelftestTart:
+    """Tests for tart-specific selftest path."""
+
+    FUTURE_MS = 1700000000000 + 30 * 86400 * 1000  # 30 days from now
+
+    @patch("ralph.TartSandbox.remove_sandbox")
+    @patch("ralph.stop_proxy")
+    @patch("ralph.subprocess.run")
+    @patch("ralph.subprocess.Popen")
+    @patch("ralph.TartSandbox._wait_for_guest_agent")
+    @patch("ralph.TartSandbox.proxy_host", return_value="192.168.64.1")
+    @patch("ralph.TartSandbox.ensure_image",
+           return_value="agent-loop-template-claude-abc123")
+    @patch("ralph.TartSandbox.check_prerequisites", return_value=[])
+    @patch("ralph.proxy_health_check",
+           side_effect=[(False, None), (True, "abc123")])
+    @patch("ralph.ensure_proxy")
+    @patch("ralph.read_token_from_keychain")
+    @patch("ralph.time.time", return_value=1700000000.0)
+    def test_all_checks_pass(self, mock_time, mock_read, mock_ensure_proxy,
+                              mock_health, mock_prereq, mock_img,
+                              mock_proxy_host, mock_wait, mock_popen,
+                              mock_run, mock_stop, mock_remove, capsys):
+        mock_read.return_value = {"accessToken": "sk-test",
+                                  "expiresAt": self.FUTURE_MS}
+        mock_popen.return_value = MagicMock()
+        # subprocess.run calls: tart clone (ok), proxy reachable (ok),
+        # claude auth (ok)
+        mock_run.side_effect = [
+            MagicMock(returncode=0),   # tart clone
+            MagicMock(returncode=0),   # curl proxy health from VM
+            MagicMock(returncode=0),   # claude via proxy
+        ]
+
+        rc = ralph.selftest("claude", "/fake/dotfiles", sandbox_type="tart")
+        assert rc == 0
+
+        captured = capsys.readouterr()
+        assert "selftest starting (tart)" in captured.out
+        assert "PASS: check token" in captured.out
+        assert "PASS: prerequisites" in captured.out
+        assert "PASS: proxy health" in captured.out
+        assert "PASS: build template" in captured.out
+        assert "PASS: create test VM" in captured.out
+        assert "PASS: tart exec" in captured.out
+        assert "PASS: proxy reachable from VM" in captured.out
+        assert "PASS: claude auth via proxy" in captured.out
+        assert "network isolation — skipping" in captured.out
+        # proxy was not running before, so should be stopped
+        mock_stop.assert_called_once_with("claude")
+
+    @patch("ralph.TartSandbox.remove_sandbox")
+    @patch("ralph.stop_proxy")
+    @patch("ralph.TartSandbox.ensure_image",
+           side_effect=RuntimeError("clone failed"))
+    @patch("ralph.TartSandbox.check_prerequisites", return_value=[])
+    @patch("ralph.proxy_health_check",
+           side_effect=[(False, None), (True, "abc123")])
+    @patch("ralph.ensure_proxy")
+    @patch("ralph.read_token_from_keychain")
+    @patch("ralph.time.time", return_value=1700000000.0)
+    def test_template_build_failure_aborts(self, mock_time, mock_read,
+                                            mock_ensure_proxy, mock_health,
+                                            mock_prereq, mock_img,
+                                            mock_stop, mock_remove, capsys):
+        mock_read.return_value = {"accessToken": "sk-test",
+                                  "expiresAt": self.FUTURE_MS}
+        rc = ralph.selftest("claude", "/fake/dotfiles", sandbox_type="tart")
+        assert rc == 1
+        captured = capsys.readouterr()
+        assert "FAIL: build template" in captured.out
+        assert "selftest aborted" in captured.out
+
+    @patch("ralph.TartSandbox.remove_sandbox")
+    @patch("ralph.stop_proxy")
+    @patch("ralph.TartSandbox.check_prerequisites",
+           return_value=["tart is not installed"])
+    @patch("ralph.proxy_health_check", return_value=(False, None))
+    @patch("ralph.read_token_from_keychain")
+    @patch("ralph.time.time", return_value=1700000000.0)
+    def test_prerequisites_failure_aborts(self, mock_time, mock_read,
+                                          mock_health, mock_prereq,
+                                          mock_stop, mock_remove, capsys):
+        mock_read.return_value = {"accessToken": "sk-test",
+                                  "expiresAt": self.FUTURE_MS}
+        rc = ralph.selftest("claude", "/fake/dotfiles", sandbox_type="tart")
+        assert rc == 1
+        captured = capsys.readouterr()
+        assert "FAIL: prerequisites" in captured.out
+        assert "prerequisites not met" in captured.out
+
+    @patch("ralph.selftest", return_value=0)
+    @patch("ralph.check_dependencies_prereq")
+    @patch("ralph.sys.argv", ["ralph", "selftest", "--type", "tart"])
+    def test_main_routes_selftest_with_type(self, mock_prereq, mock_selftest):
+        with pytest.raises(SystemExit) as exc_info:
+            ralph.main()
+        assert exc_info.value.code == 0
+        mock_selftest.assert_called_once_with(
+            "claude", mock_selftest.call_args[0][1], sandbox_type="tart")
+
+    @patch("ralph.selftest", return_value=0)
+    @patch("ralph.check_dependencies_prereq")
+    @patch("ralph.sys.argv",
+           ["ralph", "selftest", "--type", "tart", "--agent", "codex"])
+    def test_main_routes_selftest_type_and_agent(self, mock_prereq,
+                                                  mock_selftest):
+        with pytest.raises(SystemExit) as exc_info:
+            ralph.main()
+        assert exc_info.value.code == 0
+        mock_selftest.assert_called_once_with(
+            "codex", mock_selftest.call_args[0][1], sandbox_type="tart")
+
+    @patch("ralph.sys.argv", ["ralph", "selftest", "--type", "podman"])
+    def test_main_selftest_rejects_unknown_type(self):
+        with pytest.raises(SystemExit) as exc_info:
+            ralph.main()
+        assert exc_info.value.code == 2
+
+
+# ---------------------------------------------------------------------------
+# prune-sandboxes --type
+# ---------------------------------------------------------------------------
+
+
+class TestPruneSandboxesType:
+    """Tests for --type flag on prune-sandboxes subcommand."""
+
+    @patch("ralph.DockerSandbox.prune_sandboxes", return_value=[])
+    @patch("ralph.sys.argv", ["ralph", "prune-sandboxes"])
+    def test_default_uses_docker(self, mock_prune, capsys):
+        with pytest.raises(SystemExit) as exc_info:
+            ralph.main()
+        assert exc_info.value.code == 0
+        mock_prune.assert_called_once_with("claude")
+
+    @patch("ralph.TartSandbox.prune_sandboxes", return_value=["vm1"])
+    @patch("ralph.sys.argv",
+           ["ralph", "prune-sandboxes", "--type", "tart"])
+    def test_type_tart_uses_tart_sandbox(self, mock_prune):
+        with pytest.raises(SystemExit) as exc_info:
+            ralph.main()
+        assert exc_info.value.code == 0
+        mock_prune.assert_called_once_with("claude")
+
+    @patch("ralph.TartSandbox.prune_sandboxes", return_value=[])
+    @patch("ralph.sys.argv",
+           ["ralph", "prune-sandboxes", "--type", "tart", "--agent", "codex"])
+    def test_type_tart_with_agent(self, mock_prune, capsys):
+        with pytest.raises(SystemExit) as exc_info:
+            ralph.main()
+        assert exc_info.value.code == 0
+        mock_prune.assert_called_once_with("codex")
+
+    @patch("ralph.sys.argv",
+           ["ralph", "prune-sandboxes", "--type", "podman"])
+    def test_rejects_unknown_type(self):
+        with pytest.raises(SystemExit) as exc_info:
+            ralph.main()
+        assert exc_info.value.code == 2
 
 
 # ---------------------------------------------------------------------------
@@ -2942,12 +4333,11 @@ class TestPollLoopExceptionHandling:
         mock_time.side_effect = [0, 0, 0, 999]
 
         git = MagicMock()
-        sandbox = MagicMock()
         gh = MagicMock()
         gh.issue_list.return_value = [42]
 
         with patch("ralph.process_issue", side_effect=RuntimeError("boom")):
-            ralph.poll_loop(git, sandbox, gh, "claude", False, "sonnet",
+            ralph.poll_loop(git, "/dotfiles", gh, "claude", False, "sonnet",
                             "user", "user@test.com", 18080, 30, 1)
 
         # Verify error was logged
@@ -2973,14 +4363,13 @@ class TestPollLoopExceptionHandling:
         mock_time.side_effect = [0, 0, 0, 999]
 
         git = MagicMock()
-        sandbox = MagicMock()
         gh = MagicMock()
         gh.issue_list.return_value = [42]
         gh.issue_edit.side_effect = RuntimeError("gh failed")
 
         with patch("ralph.process_issue", side_effect=RuntimeError("boom")):
             # Should not raise
-            ralph.poll_loop(git, sandbox, gh, "claude", False, "sonnet",
+            ralph.poll_loop(git, "/dotfiles", gh, "claude", False, "sonnet",
                             "user", "user@test.com", 18080, 30, 1)
 
 
@@ -2992,16 +4381,16 @@ class TestIterationPrompt:
     """Verify ITERATION_PROMPT contains required execution instructions."""
 
     def test_contains_blocked_marker_rule(self):
-        assert "[blocked:" in ralph.Sandbox.ITERATION_PROMPT
+        assert "[blocked:" in ralph.DockerSandbox.ITERATION_PROMPT
 
     def test_contains_run_all_checks_rule(self):
-        assert "Run all checks" in ralph.Sandbox.ITERATION_PROMPT
+        assert "Run all checks" in ralph.DockerSandbox.ITERATION_PROMPT
 
     def test_contains_spec_maintenance_rules(self):
-        assert "Spec maintenance rules" in ralph.Sandbox.ITERATION_PROMPT
+        assert "Spec maintenance rules" in ralph.DockerSandbox.ITERATION_PROMPT
 
     def test_contains_step_structure(self):
-        assert "Each step follows this structure" in ralph.Sandbox.ITERATION_PROMPT
+        assert "Each step follows this structure" in ralph.DockerSandbox.ITERATION_PROMPT
 
     def test_contains_unfulfillable_tasks_section(self):
-        assert "Unfulfillable tasks" in ralph.Sandbox.ITERATION_PROMPT
+        assert "Unfulfillable tasks" in ralph.DockerSandbox.ITERATION_PROMPT
