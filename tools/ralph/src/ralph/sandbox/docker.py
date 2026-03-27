@@ -421,6 +421,7 @@ class DockerSandbox(SandboxBackend):
         Returns the sandbox name.
         """
         name = self.sandbox_name(agent, branch)
+        self._worktree_path = worktree_path
         if self.sandbox_exists(name):
             print(f"ralph: reusing sandbox {name}")
             return name
@@ -511,8 +512,6 @@ class DockerSandbox(SandboxBackend):
 
         Writes spec content to /tmp/spec.md inside the sandbox, runs claude
         with the iteration prompt, then reads back the (possibly updated) spec.
-        No explicit -w flag is needed: docker sandbox exec defaults to the
-        first workspace directory passed at sandbox creation time.
 
         Returns (exit_code, updated_spec_content).
         """
@@ -529,7 +528,8 @@ class DockerSandbox(SandboxBackend):
             return write_proc.returncode, spec_content
 
         # Run claude with iteration prompt
-        cmd = ["docker", "sandbox", "exec"]
+        cmd = ["docker", "sandbox", "exec",
+               "-w", self._worktree_path]
         if env_vars:
             for k, v in env_vars.items():
                 cmd.extend(["-e", f"{k}={v}"])
