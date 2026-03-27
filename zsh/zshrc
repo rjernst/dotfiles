@@ -411,6 +411,12 @@ alias refresh-dotfiles=_refresh_dotfiles
 #----------------------------------------------------------------------------
 if _dotfiles_require_cmds "starship prompt" starship; then
   eval "$(starship init zsh)"
+  # Fix fill width off-by-one in tmux
+  if [[ -n "$TMUX" ]]; then
+    _sw='$((COLUMNS - 1))'
+    PROMPT=${PROMPT//\$COLUMNS/$_sw}
+    unset _sw
+  fi
 
   # Transient prompt: collapse previous prompts to just ❯
   __starship_saved_prompt="$PROMPT"
