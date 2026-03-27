@@ -1,7 +1,7 @@
 "$schema" = 'https://starship.rs/config-schema.json'
 
 format = """\
-[╭─](blue)$username$hostname$directory$fill$git_branch$git_status${custom.java}$kubernetes$gcloud$cmd_duration$jobs$status$time
+[╭─](blue)$username$hostname$directory$fill$git_branch$git_status${custom.java}$kubernetes$gcloud$cmd_duration$jobs$status${custom.time}
 [╰─](blue) $character"""
 
 [fill]
@@ -72,6 +72,12 @@ disabled = false
 format = "[\ue0b6](fg:240)[ ✘ $status ](bg:240 bold red)[\ue0b4](fg:240)[─](blue)"
 
 [time]
-disabled = false
+disabled = true
 format = "[\ue0b6](fg:240)[ at $time ](bg:240 dimmed white)[\ue0b4](fg:240)"
 time_format = '%H:%M:%S'
+
+[custom.time]
+command = 'date "+%H:%M:%S"'
+when = '[ -z "$TMUX" ]'
+format = "[\ue0b6](fg:240)[ at $output ](bg:240 dimmed white)[\ue0b4](fg:240)"
+shell = ['sh']

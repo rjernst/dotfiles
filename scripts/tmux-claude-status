@@ -1,0 +1,40 @@
+#!/bin/sh
+# tmux-claude-status — toggle tmux status lines based on active pane command.
+# Called from tmux status format via #(). Operates entirely via side effects.
+# Arguments: $1 = pane_current_command, $2 = pane_current_path
+
+pane_cmd="$1"
+
+if [ "$pane_cmd" = "claude" ]; then
+    # Get pane working directory and replace $HOME with ~
+    pane_path="$2"
+    case "$pane_path" in
+        "$HOME"*) display_path="~${pane_path#"$HOME"}" ;;
+        *) display_path="$pane_path" ;;
+    esac
+
+    # Powerline right-arrow U+E0B0
+    arrow=$(printf '\356\202\260')
+    format="#[fg=colour0,bg=colour6,bold] ${display_path} #[fg=colour6,bg=default,nobold]${arrow}"
+
+    # Enable two status lines if not already
+    current_status=$(tmux show-option -qv status)
+    if [ "$current_status" != "2" ]; then
+        tmux set-option status 2
+    fi
+
+    # Update path format only if changed (avoid flicker)
+    current_format=$(tmux show-option -qv 'status-format[0]')
+    if [ "$current_format" != "$format" ]; then
+        tmux set-option 'status-format[0]' "$format"
+    fi
+else
+    current_status=$(tmux show-option -qv status)
+    if [ "$current_status" = "2" ]; then
+        # Revert to single status line and restore default format
+        tmux set-option -u 'status-format[0]'
+        tmux set-option -u status
+    fi
+fi
+
+exit 0
