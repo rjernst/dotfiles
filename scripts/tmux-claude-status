@@ -1,25 +1,41 @@
 #!/bin/sh
 # tmux-claude-status — toggle tmux status lines based on active pane command.
-# Called from tmux status format via #(). Operates entirely via side effects.
-# Arguments: $1 = pane_current_command, $2 = pane_current_path
+# Called from automatic-rename-format via #(). Operates entirely via side effects.
+# Queries the focused pane directly (not via args) to avoid multi-window conflicts.
 
-pane_cmd="$1"
+pane_cmd=$(tmux display-message -p '#{pane_current_command}')
+
+# Detect if any process in the focused pane is running as root.
+# #{pane_pid} is the initial shell — after sudo/su the root process
+# is a child. Check all processes on the pane's TTY instead.
+pane_tty=$(tmux display-message -p '#{pane_tty}')
+if ps -t "${pane_tty#/dev/}" -o uid= 2>/dev/null | tr -d ' ' | grep -q '^0$'; then
+    tmux set-option -g @host_bg colour1
+    tmux set-option -g @host_fg colour7
+else
+    tmux set-option -g @host_bg colour2
+    tmux set-option -g @host_fg colour0
+fi
 
 if [ "$pane_cmd" = "claude" ]; then
     # Get pane working directory and replace $HOME with ~
-    pane_path="$2"
+    pane_path=$(tmux display-message -p '#{pane_current_path}')
     case "$pane_path" in
         "$HOME"*) display_path="~${pane_path#"$HOME"}" ;;
         *) display_path="$pane_path" ;;
     esac
 
-    # Powerline right-arrow U+E0B0
-    arrow=$(printf '\356\202\260')
-    format="#[fg=colour0,bg=colour6,bold] ${display_path} #[fg=colour6,bg=default,nobold]${arrow}"
+    # Honeycomb right U+E0CC to cap the right edge
+    right=$(printf '\356\203\214')
+    format="#[fg=colour7,bg=colour8] ${display_path} #[fg=colour8,bg=default]${right}"
 
     # Enable two status lines if not already
     current_status=$(tmux show-option -qv status)
     if [ "$current_status" != "2" ]; then
+        # Move the normal bar to status-format[1] (top) and use [0] (bottom)
+        # for the path. tmux array options are overridden as a whole at session
+        # scope, so both indices must be set explicitly.
+        tmux set-option 'status-format[1]' "$(tmux show-option -gqv 'status-format[0]')"
         tmux set-option status 2
     fi
 
@@ -31,9 +47,12 @@ if [ "$pane_cmd" = "claude" ]; then
 else
     current_status=$(tmux show-option -qv status)
     if [ "$current_status" = "2" ]; then
-        # Revert to single status line and restore default format
-        tmux set-option -u 'status-format[0]'
-        tmux set-option -u status
+        # Revert to single status line. Restore status-format[0] to the
+        # global default rather than unsetting — tmux array unsets are
+        # unreliable and can leave a stale empty session-level array.
+        tmux set-option 'status-format[0]' "$(tmux show-option -gqv 'status-format[0]')"
+        tmux set-option -u 'status-format[1]'
+        tmux set-option status on
     fi
 fi
 
