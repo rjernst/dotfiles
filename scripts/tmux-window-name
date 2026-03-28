@@ -4,13 +4,20 @@
 # Usage: tmux-window-name <pane_current_path>
 # Output: "repo [branch]" for git repos, or directory basename otherwise
 
-# Fall back to user@hostname if path is empty (e.g. sudo shells)
+# Fall back to "root shell" if path is empty (e.g. sudo shells)
 if [[ -z "$1" ]]; then
-  echo "root@$(hostname -s)"
+  echo "root shell"
   exit 0
 fi
 
 pane_path="$1"
+pane_cmd="$2"
+
+# Plain shell — show "shell" instead of directory/repo name
+if [[ "$pane_cmd" == "zsh" || "$pane_cmd" == "bash" || "$pane_cmd" == "-zsh" || "$pane_cmd" == "-bash" ]]; then
+  echo "shell"
+  exit 0
+fi
 
 # If path doesn't exist, fall back to basename
 if [[ ! -d "$pane_path" ]]; then

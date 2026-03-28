@@ -10,11 +10,18 @@ pane_cmd=$(tmux display-message -p '#{pane_current_command}')
 # is a child. Check all processes on the pane's TTY instead.
 pane_tty=$(tmux display-message -p '#{pane_tty}')
 if ps -t "${pane_tty#/dev/}" -o uid= 2>/dev/null | tr -d ' ' | grep -q '^0$'; then
-    tmux set-option -g @host_bg colour1
-    tmux set-option -g @host_fg colour7
+    want_bg=colour1
+    want_fg=colour7
 else
-    tmux set-option -g @host_bg colour2
-    tmux set-option -g @host_fg colour0
+    want_bg=colour2
+    want_fg=colour0
+fi
+
+# Only update if changed — unconditional set-option -g can trigger
+# cascading status refreshes that lock up tmux.
+if [ "$(tmux show-option -gqv @host_bg)" != "$want_bg" ]; then
+    tmux set-option -g @host_bg "$want_bg"
+    tmux set-option -g @host_fg "$want_fg"
 fi
 
 if [ "$pane_cmd" = "claude" ]; then
