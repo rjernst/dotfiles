@@ -1,6 +1,6 @@
 
 # install jenv
-export PATH="$HOME/.jenv/bin:$PATH"
+export PATH="$HOME/.jenv/shims:$HOME/.jenv/bin:$PATH"
 _dotfiles_require_cmds "java role" jenv || return
 _init_jenv() {
   unfunction jenv
