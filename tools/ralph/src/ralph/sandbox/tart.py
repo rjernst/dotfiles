@@ -114,13 +114,13 @@ class TartSandbox(SandboxBackend):
     def _wait_for_guest_agent(self, vm_name, timeout=120):
         """Poll tart exec until guest agent responds or timeout.
 
-        Tries 'tart exec <vm> -- echo ok' every 2 seconds.
+        Tries 'tart exec <vm> echo ok' every 2 seconds.
         Raises RuntimeError on timeout.
         """
         deadline = time.time() + timeout
         while time.time() < deadline:
             result = subprocess.run(
-                ["tart", "exec", vm_name, "--", "echo", "ok"],
+                ["tart", "exec", vm_name, "echo", "ok"],
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                 check=False,
             )
@@ -168,7 +168,7 @@ class TartSandbox(SandboxBackend):
             try:
                 self._wait_for_guest_agent(template)
                 subprocess.run(
-                    ["tart", "exec", "-i", template, "--", "bash", "-e"],
+                    ["tart", "exec", "-i", template, "bash", "-e"],
                     input=self.dependencies_content, text=True, check=True,
                 )
             finally:
@@ -189,7 +189,7 @@ class TartSandbox(SandboxBackend):
     def exec_output(sandbox_name, *cmd):
         """Run a command inside the VM and return its stdout (stripped)."""
         result = subprocess.run(
-            ["tart", "exec", sandbox_name, "--"] + list(cmd),
+            ["tart", "exec", sandbox_name] + list(cmd),
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False,
         )
         return result.stdout.strip() if result.returncode == 0 else ""
@@ -267,17 +267,17 @@ class TartSandbox(SandboxBackend):
     def setup_git_config(self, sandbox_name, user, email):
         """Configure git user and safe directory settings inside the VM."""
         subprocess.run(
-            ["tart", "exec", sandbox_name, "--",
+            ["tart", "exec", sandbox_name,
              "git", "config", "--global", "user.name", user],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False,
         )
         subprocess.run(
-            ["tart", "exec", sandbox_name, "--",
+            ["tart", "exec", sandbox_name,
              "git", "config", "--global", "user.email", email],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False,
         )
         subprocess.run(
-            ["tart", "exec", sandbox_name, "--",
+            ["tart", "exec", sandbox_name,
              "git", "config", "--global", "--add", "safe.directory", "*"],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False,
         )
@@ -294,7 +294,7 @@ class TartSandbox(SandboxBackend):
 
         # Write spec into VM
         write_proc = subprocess.run(
-            ["tart", "exec", "-i", sandbox_name, "--", "tee", spec_path],
+            ["tart", "exec", "-i", sandbox_name, "tee", spec_path],
             input=spec_content, text=True, check=False,
             stdout=subprocess.DEVNULL,
         )
@@ -315,13 +315,13 @@ class TartSandbox(SandboxBackend):
             f"--effort high"
         )
         rc = subprocess.run(
-            ["tart", "exec", sandbox_name, "--", "bash", "-c", claude_cmd],
+            ["tart", "exec", sandbox_name, "bash", "-c", claude_cmd],
             check=False,
         ).returncode
 
         # Read back (possibly updated) spec
         read_proc = subprocess.run(
-            ["tart", "exec", sandbox_name, "--", "cat", spec_path],
+            ["tart", "exec", sandbox_name, "cat", spec_path],
             stdout=subprocess.PIPE, text=True, check=False,
         )
         updated = read_proc.stdout if read_proc.returncode == 0 else spec_content
@@ -474,7 +474,7 @@ class TartSandbox(SandboxBackend):
         """Tart-specific pre-flight checks: VM responsiveness."""
         failures = []
         result = subprocess.run(
-            ["tart", "exec", sandbox_name, "--", "echo", "ok"],
+            ["tart", "exec", sandbox_name, "echo", "ok"],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
             check=False,
         )

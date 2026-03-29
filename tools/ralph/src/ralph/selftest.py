@@ -243,7 +243,7 @@ def _selftest_tart(sandbox, agent, sandbox_name, port, report):
     # 6. Verify proxy reachable from VM via host IP
     proxy_host = sandbox.proxy_host()
     result = subprocess.run(
-        ["tart", "exec", sandbox_name, "--",
+        ["tart", "exec", sandbox_name,
          "curl", "-sf", "--max-time", "5",
          f"http://{proxy_host}:{port}/health"],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
@@ -262,7 +262,7 @@ def _selftest_tart(sandbox, agent, sandbox_name, port, report):
         f" claude -p 'say ok' --model haiku"
     )
     result = subprocess.run(
-        ["tart", "exec", sandbox_name, "--", "bash", "-c", claude_cmd],
+        ["tart", "exec", sandbox_name, "bash", "-c", claude_cmd],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
         check=False, timeout=60,
     )
