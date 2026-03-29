@@ -2,28 +2,48 @@
 set -euo pipefail
 
 width="${1:-50%}"
-height="${2:-40%}"
 
 # Self-re-exec inside a tmux popup if not already in one
 if [[ -z "${WORKSPACE_SWITCHER_INSIDE_POPUP:-}" ]]; then
   # Capture original pane path before entering the popup
   orig_pane_path=$(tmux display-message -p '#{pane_current_path}')
+
+  # Calculate popup height to fit content
+  local cs cw cf
+  cs=$(tmux display-message -p '#{session_name}')
+  cw=$(tmux display-message -p '#{window_index}')
+  cf="/tmp/tmux-workspace-collapsed-$(tmux display-message -p '#{pid}')"
+  local -i lc
+  lc=$(CURRENT_SESSION="$cs" CURRENT_WINDOW="$cw" workspace-switcher-list "$cf" 2>/dev/null | wc -l)
+  # fzf chrome: border(2) + prompt(1) + separator(1) + header(2) + padding(2)
+  local -i height=$(( lc + 8 ))
+  (( height < 10 )) && height=10
+  local -i term_height
+  term_height=$(tmux display-message -p '#{window_height}')
+  local -i max_height=$(( term_height * 80 / 100 ))
+  (( height > max_height )) && height=$max_height
+
   exec tmux popup -xC -yC -w"$width" -h"$height" -E \
-    "WORKSPACE_SWITCHER_INSIDE_POPUP=1 ORIG_PANE_PATH='$orig_pane_path' $0 $width $height"
+    "WORKSPACE_SWITCHER_INSIDE_POPUP=1 ORIG_PANE_PATH='$orig_pane_path' $0 $width"
 fi
 
 current_session=$(tmux display-message -p '#{session_name}')
+current_window=$(tmux display-message -p '#{window_index}')
 export CURRENT_SESSION="$current_session"
+export CURRENT_WINDOW="$current_window"
 
 # Collapse state file — unique per tmux server
 collapse_file="/tmp/tmux-workspace-collapsed-$(tmux display-message -p '#{pid}')"
 
 # Build header
 header="enter switch │ tab collapse │ ctrl-a agent loop │ ctrl-d kill │ esc close
-● current  ◉ attached  ○ detached"
+● current │ type m0 a1 w2 to jump"
 
 # Run fzf with grouped display
 # workspace-switcher-list accepts raw fzf field values and resolves group keys internally
+# ctrl-d: GROUP headers → skip; current window → skip; window targets (*:*) → kill-window;
+#         current session → skip; other sessions → kill-session
+# Uses POSIX (pattern) syntax so parentheses stay balanced inside fzf's execute-silent(...)
 selection=$(workspace-switcher-list "$collapse_file" | fzf \
   --ansi \
   --with-nth=2.. \
@@ -35,41 +55,30 @@ selection=$(workspace-switcher-list "$collapse_file" | fzf \
   --prompt="  " \
   --pointer="▶" \
   --bind "tab:execute-silent(workspace-switcher-list \"$collapse_file\" {1})+reload(workspace-switcher-list \"$collapse_file\")" \
-  --bind "ctrl-d:execute-silent(f={1}; if [ \"\${f%%:*}\" = GROUP ]; then exit 0; fi; if [ \"\$f\" = \"$current_session\" ]; then exit 0; fi; tmux kill-session -t \"\$f\")+reload(workspace-switcher-list \"$collapse_file\")" \
+  --bind "ctrl-d:execute-silent(f={1}; case \"\$f\" in (GROUP:*) exit 0;; (\"${current_session}:${current_window}\") exit 0;; (*:*) tmux kill-window -t \"\$f\";; (\"$current_session\") exit 0;; (*) tmux kill-session -t \"\$f\";; esac)+reload(workspace-switcher-list \"$collapse_file\")" \
   --bind "ctrl-a:become(echo AGENT_LOOP)" \
 ) || exit 0
 
-# Extract raw session name or group key (field 1)
+# Extract raw target (field 1) — session name, session:window, or GROUP:key
 target="${selection%%$'\t'*}"
 
 # If it's a group header, toggle collapse and re-run
 if [[ "$target" == GROUP:* ]]; then
   group_key="${target#GROUP:}"
   workspace-switcher-list "$collapse_file" "$group_key" > /dev/null
-  exec "$0" "$width" "$height"
+  exec "$0" "$width"
 fi
 
-# Agent-loop creation (Ctrl-A)
+# Agent-loop creation (Ctrl-A): delegate to ta agent-loop start
 if [[ "$target" == "AGENT_LOOP" ]]; then
-  git_root=$(git -C "${ORIG_PANE_PATH:-$PWD}" rev-parse --show-toplevel 2>/dev/null) || {
-    tmux display-message "workspace-switcher: not in a git repository"
-    exec "$0" "$width" "$height"
-  }
-  project=$(basename "$git_root")
-  session_name="al-$project"
-  if tmux has-session -t "$session_name" 2>/dev/null; then
-    tmux switch-client -t "$session_name"
-  else
-    tmux new-session -d -s "$session_name" -c "$git_root"
-    if command -v ralph &>/dev/null; then
-      tmux send-keys -t "$session_name" "ralph --timeout 4h" Enter
-    fi
-    tmux switch-client -t "$session_name"
-  fi
+  ta agent-loop start --dir "${ORIG_PANE_PATH:-$PWD}" 2>&1 | while read -r line; do
+    tmux display-message "$line"
+  done
+  tmux switch-client -t "agent-loops" 2>/dev/null
   exit 0
 fi
 
-# Switch if different from current
-if [[ -n "$target" && "$target" != "$current_session" ]]; then
+# Switch to target (session name or session:window_index)
+if [[ -n "$target" ]]; then
   tmux switch-client -t "$target"
 fi

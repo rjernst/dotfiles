@@ -1,35 +1,40 @@
 #!/usr/bin/env zsh
 set -euo pipefail
 
-# workspace-switcher-list: Build grouped session list for workspace-switcher
+# workspace-switcher-list: Build grouped session/window list for workspace-switcher
 #
 # Usage: workspace-switcher-list <collapse-state-file> [toggle-group-key]
 # Env: CURRENT_SESSION — name of the current tmux session
+# Env: CURRENT_WINDOW — index of the current tmux window
 # Env: TMUX_CMD — override tmux binary (for testing)
 #
 # Arguments:
 #   collapse-state-file  Path to file storing collapsed group names (one per line)
-#   toggle-group-key     Optional: group key to toggle (agent-loops, worktrees, other)
+#   toggle-group-key     Optional: group key to toggle (main, agent-loops, worktrees, other)
 #                        When provided, toggles the group in the state file before output
 #
 # Output: tab-separated lines for fzf consumption
 #   Group headers:  GROUP:<group-key>\t<ansi-bold>▾ Group Name (count)</ansi-reset>
-#   Session lines:  <raw-name>\t  <indicator>  <display-name>\t<dir-basename>\t<N windows>
+#   Window lines:   <session>:<win-idx>\t  <indicator>  <prefix><num>  <win-name>[\t<dir-basename>]
+#   Session lines:  <session-name>\t  <indicator>  [<prefix><num>  ]<display-name>\t<N windows>
 
 readonly COLLAPSE_FILE="${1:?usage: workspace-switcher-list <collapse-state-file>}"
 readonly TOGGLE_ARG="${2:-}"
 readonly tmux="${TMUX_CMD:-tmux}"
 
 # --- Resolve toggle argument to group key ---
-# Accepts: group key (agent-loops, worktrees, other),
-#          GROUP: prefixed (GROUP:agent-loops), or session name (al-foo -> agent-loops)
+# Accepts: group key (main, agent-loops, worktrees, other),
+#          GROUP: prefixed (GROUP:agent-loops), window target (main:0),
+#          or session name (wt-foo -> worktrees)
 resolve_group_key() {
   local arg="$1"
   if [[ "$arg" == GROUP:* ]]; then
     echo "${arg#GROUP:}"
-  elif [[ "$arg" == agent-loops || "$arg" == worktrees || "$arg" == other ]]; then
+  elif [[ "$arg" == main || "$arg" == agent-loops || "$arg" == worktrees || "$arg" == other ]]; then
     echo "$arg"
-  elif [[ "$arg" == al-* ]]; then
+  elif [[ "$arg" == main:* ]]; then
+    echo "main"
+  elif [[ "$arg" == agent-loops:* ]]; then
     echo "agent-loops"
   elif [[ "$arg" == wt-* ]]; then
     echo "worktrees"
@@ -65,27 +70,58 @@ if [[ -n "$TOGGLE_GROUP" ]]; then
   printf '%s\n' "${current_groups[@]}" > "$COLLAPSE_FILE"
 fi
 
-# --- Collect sessions ---
+# --- Collect windows for a named session ---
 
-typeset -a agent_loops worktrees other
+collect_windows() {
+  local session="$1" prefix="$2"
+  "$tmux" has-session -t "$session" 2>/dev/null || return 0
 
+  local num=-1
+  while IFS=$'\t' read -r win_idx win_name pane_path; do
+    num=$(( num + 1 ))
+    local indicator="○"
+    if [[ "$session" == "${CURRENT_SESSION:-}" && "$win_idx" == "${CURRENT_WINDOW:-}" ]]; then
+      indicator="●"
+    fi
+
+    # Only show working directory for shell windows
+    case "$win_name" in
+      shell|"root shell")
+        local dir_name="${pane_path:t}"
+        [[ -z "$dir_name" ]] && dir_name="-"
+        printf '%s:%s\t  %s  %s%d  %s\t%s\n' "$session" "$win_idx" "$indicator" "$prefix" "$num" "$win_name" "$dir_name"
+        ;;
+      *)
+        printf '%s:%s\t  %s  %s%d  %s\n' "$session" "$win_idx" "$indicator" "$prefix" "$num" "$win_name"
+        ;;
+    esac
+  done < <("$tmux" list-windows -t "$session" -F '#{window_index}	#{window_name}	#{pane_current_path}' 2>/dev/null)
+}
+
+# --- Collect data ---
+
+typeset -a main_windows=() agent_loop_windows=() worktrees=() other=()
+
+# Windows for special sessions
+local _out
+_out=$(collect_windows "main" "m")
+[[ -n "$_out" ]] && main_windows=("${(@f)_out}")
+
+_out=$(collect_windows "agent-loops" "a")
+[[ -n "$_out" ]] && agent_loop_windows=("${(@f)_out}")
+
+# Remaining sessions (worktrees and other)
+local wt_num=0
 while IFS=$'\t' read -r name windows attached; do
-  # Skip transient popup sessions
+  # Skip transient popup sessions and window-expanded sessions
   [[ "$name" == "popup" || "$name" == "popover" ]] && continue
+  [[ "$name" == "main" || "$name" == "agent-loops" ]] && continue
 
   # Determine indicator
+  local indicator="○"
   if [[ "$name" == "${CURRENT_SESSION:-}" ]]; then
     indicator="●"
-  elif (( attached > 0 )); then
-    indicator="◉"
-  else
-    indicator="○"
   fi
-
-  # Get working directory basename from the active pane
-  pane_path=$("$tmux" display-message -t "$name" -p '#{pane_current_path}' 2>/dev/null || echo "")
-  dir_name="${pane_path:t}"
-  [[ -z "$dir_name" ]] && dir_name="-"
 
   # Pluralize windows
   if (( windows == 1 )); then
@@ -95,14 +131,12 @@ while IFS=$'\t' read -r name windows attached; do
   fi
 
   # Categorize by prefix
-  if [[ "$name" == al-* ]]; then
-    display_name="${name#al-}"
-    agent_loops+=("${name}\t  ${indicator}  ${display_name}\t${dir_name}\t${win_label}")
-  elif [[ "$name" == wt-* ]]; then
+  if [[ "$name" == wt-* ]]; then
     display_name="${name#wt-}"
-    worktrees+=("${name}\t  ${indicator}  ${display_name}\t${dir_name}\t${win_label}")
+    worktrees+=("${name}\t  ${indicator}  w${wt_num}  ${display_name}\t${win_label}")
+    wt_num=$(( wt_num + 1 ))
   else
-    other+=("${name}\t  ${indicator}  ${name}\t${dir_name}\t${win_label}")
+    other+=("${name}\t  ${indicator}  ${name}\t${win_label}")
   fi
 done < <("$tmux" list-sessions -F '#{session_name}	#{session_windows}	#{session_attached}' 2>/dev/null | sort)
 
@@ -133,7 +167,7 @@ print_group() {
   # Group header with ANSI bold
   printf "GROUP:%s\t\033[1m%s %s (%d)\033[0m\n" "$key" "$arrow" "$label" "$count"
 
-  # Session lines (only if expanded)
+  # Entry lines (only if expanded)
   if (( ! ${+collapsed[$key]} )); then
     local line
     for line in "${items[@]}"; do
@@ -142,15 +176,22 @@ print_group() {
   fi
 }
 
-# --- Output groups in fixed order: Agent Loops, Worktrees, Other ---
+# --- Output groups in fixed order: Main, Agent Loops, Worktrees, Other ---
 
-# Agent Loops — always shown (even if empty)
-print_group "agent-loops" "Agent Loops" "${agent_loops[@]}"
+# Main — shown if session exists
+if (( ${#main_windows} > 0 )); then
+  print_group "main" "Main" "${main_windows[@]}"
+fi
 
-# Worktrees — always shown (even if empty)
+# Agent Loops — shown if session exists
+if (( ${#agent_loop_windows} > 0 )); then
+  print_group "agent-loops" "Agent Loops" "${agent_loop_windows[@]}"
+fi
+
+# Worktrees — always shown
 print_group "worktrees" "Worktrees" "${worktrees[@]}"
 
-# Other — hidden when empty
+# Other — only shown if non-empty
 if (( ${#other} > 0 )); then
   print_group "other" "Other" "${other[@]}"
 fi

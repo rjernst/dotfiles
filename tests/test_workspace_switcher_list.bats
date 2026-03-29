@@ -2,7 +2,7 @@
 
 bats_require_minimum_version 1.5.0
 
-# Tests for scripts/workspace-switcher-list (grouped session list builder)
+# Tests for scripts/workspace-switcher-list (grouped session/window list builder)
 # Uses mock tmux since tmux server may not be available.
 
 setup() {
@@ -20,28 +20,50 @@ setup() {
 
 # --- mock helpers ---
 
-# Create a mock tmux that returns configured sessions
-# Args: lines of "name\twindows\tattached" piped to stdin
+# Create a mock tmux that returns configured sessions and auto-generates windows.
+# Input on stdin: lines of "name\twindows\tattached"
+# Supports: has-session, list-sessions, list-windows, display-message
+# Override per-session windows with set_session_windows.
 create_mock_tmux() {
-  local state_file="$BATS_TEST_TMPDIR/tmux-sessions"
-  cat > "$state_file"
+  local sessions_file="$BATS_TEST_TMPDIR/tmux-sessions"
+  cat > "$sessions_file"
 
   cat > "$TMUX_CMD" <<SCRIPT
 #!/usr/bin/env bash
 case "\$1" in
-  list-sessions)
-    cat "$state_file"
-    ;;
-  display-message)
-    # Return a mock pane path
+  has-session)
     target=""
     shift
     while [[ \$# -gt 0 ]]; do
-      case "\$1" in
-        -t) target="\$2"; shift 2 ;;
-        -p) shift 2 ;;
-        *) shift ;;
-      esac
+      case "\$1" in -t) target="\$2"; shift 2 ;; *) shift ;; esac
+    done
+    grep -q "^\${target}	" "$sessions_file" 2>/dev/null
+    ;;
+  list-sessions)
+    cat "$sessions_file"
+    ;;
+  list-windows)
+    target=""
+    shift
+    while [[ \$# -gt 0 ]]; do
+      case "\$1" in -t) target="\$2"; shift 2 ;; *) shift ;; esac
+    done
+    if [[ -f "$BATS_TEST_TMPDIR/tmux-windows-\$target" ]]; then
+      cat "$BATS_TEST_TMPDIR/tmux-windows-\$target"
+    else
+      # Auto-generate windows from session's window count
+      count=\$(grep "^\${target}	" "$sessions_file" 2>/dev/null | cut -f2)
+      count=\${count:-0}
+      for ((i=0; i<count; i++)); do
+        printf '%s\tshell\t/home/user/code/%s\n' "\$i" "\$target"
+      done
+    fi
+    ;;
+  display-message)
+    target=""
+    shift
+    while [[ \$# -gt 0 ]]; do
+      case "\$1" in -t) target="\$2"; shift 2 ;; -p) shift; break ;; *) shift ;; esac
     done
     echo "/home/user/code/\$target"
     ;;
@@ -51,16 +73,34 @@ SCRIPT
   chmod +x "$TMUX_CMD"
 }
 
-# Mock tmux with a mix of session types
+# Override window data for a specific session
+# Usage: set_session_windows "session-name" <<'WINDOWS'
+#   0\twinname\t/path
+# WINDOWS
+set_session_windows() {
+  cat > "$BATS_TEST_TMPDIR/tmux-windows-$1"
+}
+
+# Mock tmux with a mix of all session types + custom windows
 create_mock_tmux_mixed() {
   create_mock_tmux <<'SESSIONS'
-al-elasticsearch	1	0
-al-kibana	2	1
+agent-loops	2	0
 main	3	1
-wt-feature-branch	2	0
-wt-bugfix-oom	1	0
 scratch	1	0
+wt-bugfix-oom	1	0
+wt-feature-branch	2	0
 SESSIONS
+
+  set_session_windows "agent-loops" <<'WINDOWS'
+0	elasticsearch	/home/user/code/elasticsearch
+1	kibana	/home/user/code/kibana
+WINDOWS
+
+  set_session_windows "main" <<'WINDOWS'
+0	shell	/home/user/code/main
+1	vim	/home/user/code/dotfiles
+2	htop	/home/user/code/main
+WINDOWS
 }
 
 # Mock tmux with no sessions
@@ -68,37 +108,29 @@ create_mock_tmux_empty() {
   cat > "$TMUX_CMD" <<'SCRIPT'
 #!/usr/bin/env bash
 case "$1" in
+  has-session) exit 1 ;;
   list-sessions)
     echo "no server running" >&2
     exit 1
     ;;
+  list-windows) exit 1 ;;
   *) exit 0 ;;
 esac
 SCRIPT
   chmod +x "$TMUX_CMD"
 }
 
-# Mock tmux with only non-prefixed sessions
-create_mock_tmux_other_only() {
-  create_mock_tmux <<'SESSIONS'
-main	3	1
-scratch	1	0
-SESSIONS
-}
-
-# Mock tmux with popup sessions that should be skipped
-create_mock_tmux_with_popups() {
-  create_mock_tmux <<'SESSIONS'
-main	1	1
-popup	1	0
-popover	1	0
-wt-feature	2	0
-SESSIONS
-}
-
 # --- group header tests ---
 
-@test "outputs Agent Loops group header" {
+@test "outputs Main group header when main session exists" {
+  create_mock_tmux_mixed
+
+  run zsh "$SCRIPT" "$COLLAPSE_FILE"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Main"* ]]
+}
+
+@test "outputs Agent Loops group header when agent-loops session exists" {
   create_mock_tmux_mixed
 
   run zsh "$SCRIPT" "$COLLAPSE_FILE"
@@ -114,7 +146,7 @@ SESSIONS
   [[ "$output" == *"Worktrees"* ]]
 }
 
-@test "outputs Other group header when non-prefixed sessions exist" {
+@test "outputs Other group header when non-mapped sessions exist" {
   create_mock_tmux_mixed
 
   run zsh "$SCRIPT" "$COLLAPSE_FILE"
@@ -122,9 +154,32 @@ SESSIONS
   [[ "$output" == *"Other"* ]]
 }
 
-@test "hides Other group when no non-prefixed sessions" {
+@test "hides Main group when main session doesn't exist" {
   create_mock_tmux <<'SESSIONS'
-al-elasticsearch	1	0
+agent-loops	1	0
+wt-feature	2	0
+SESSIONS
+
+  run zsh "$SCRIPT" "$COLLAPSE_FILE"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"Main"* ]]
+}
+
+@test "hides Agent Loops group when agent-loops session doesn't exist" {
+  create_mock_tmux <<'SESSIONS'
+main	1	1
+wt-feature	2	0
+SESSIONS
+
+  run zsh "$SCRIPT" "$COLLAPSE_FILE"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"Agent Loops"* ]]
+}
+
+@test "hides Other group when no non-mapped sessions exist" {
+  create_mock_tmux <<'SESSIONS'
+main	1	1
+agent-loops	1	0
 wt-feature	2	0
 SESSIONS
 
@@ -133,24 +188,51 @@ SESSIONS
   [[ "$output" != *"Other"* ]]
 }
 
-@test "shows Agent Loops and Worktrees even when empty" {
-  create_mock_tmux_other_only
+@test "Worktrees shown even when empty" {
+  create_mock_tmux <<'SESSIONS'
+main	1	1
+SESSIONS
 
   run zsh "$SCRIPT" "$COLLAPSE_FILE"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"Agent Loops (0)"* ]]
   [[ "$output" == *"Worktrees (0)"* ]]
 }
 
-# --- session categorization ---
+# --- window entries for Main and Agent Loops ---
 
-@test "categorizes al- sessions into Agent Loops" {
+@test "shows windows from main session in Main group" {
+  create_mock_tmux_mixed
+
+  run zsh "$SCRIPT" "$COLLAPSE_FILE"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Main (3)"* ]]
+  [[ "$output" == *"shell"* ]]
+  [[ "$output" == *"vim"* ]]
+  [[ "$output" == *"htop"* ]]
+}
+
+@test "shows windows from agent-loops session in Agent Loops group" {
   create_mock_tmux_mixed
 
   run zsh "$SCRIPT" "$COLLAPSE_FILE"
   [ "$status" -eq 0 ]
   [[ "$output" == *"Agent Loops (2)"* ]]
+  [[ "$output" == *"elasticsearch"* ]]
+  [[ "$output" == *"kibana"* ]]
 }
+
+@test "main and agent-loops don't appear in Other" {
+  create_mock_tmux <<'SESSIONS'
+main	1	1
+agent-loops	1	0
+SESSIONS
+
+  run zsh "$SCRIPT" "$COLLAPSE_FILE"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"Other"* ]]
+}
+
+# --- session entries (Worktrees / Other) ---
 
 @test "categorizes wt- sessions into Worktrees" {
   create_mock_tmux_mixed
@@ -158,27 +240,6 @@ SESSIONS
   run zsh "$SCRIPT" "$COLLAPSE_FILE"
   [ "$status" -eq 0 ]
   [[ "$output" == *"Worktrees (2)"* ]]
-}
-
-@test "categorizes plain sessions into Other" {
-  create_mock_tmux_mixed
-
-  run zsh "$SCRIPT" "$COLLAPSE_FILE"
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"Other (2)"* ]]
-}
-
-# --- display name stripping ---
-
-@test "strips al- prefix for display" {
-  create_mock_tmux <<'SESSIONS'
-al-elasticsearch	1	0
-SESSIONS
-
-  run zsh "$SCRIPT" "$COLLAPSE_FILE"
-  [ "$status" -eq 0 ]
-  # Should show "elasticsearch" not "al-elasticsearch" in the display
-  [[ "$output" == *"elasticsearch"* ]]
 }
 
 @test "strips wt- prefix for display" {
@@ -191,58 +252,123 @@ SESSIONS
   [[ "$output" == *"feature-branch"* ]]
 }
 
-# --- indicators ---
-
-@test "shows current indicator for CURRENT_SESSION" {
+@test "categorizes plain sessions into Other" {
   create_mock_tmux <<'SESSIONS'
-main	3	1
+scratch	1	0
 SESSIONS
 
-  CURRENT_SESSION=main run zsh "$SCRIPT" "$COLLAPSE_FILE"
+  run zsh "$SCRIPT" "$COLLAPSE_FILE"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Other (1)"* ]]
+}
+
+# --- window / session labels ---
+
+@test "shows singular window label for sessions" {
+  create_mock_tmux <<'SESSIONS'
+wt-feature	1	0
+SESSIONS
+
+  run zsh "$SCRIPT" "$COLLAPSE_FILE"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"1 window"* ]]
+}
+
+@test "shows plural windows label for sessions" {
+  create_mock_tmux <<'SESSIONS'
+wt-feature	3	0
+SESSIONS
+
+  run zsh "$SCRIPT" "$COLLAPSE_FILE"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"3 windows"* ]]
+}
+
+# --- indicators ---
+
+@test "shows current indicator for current window" {
+  create_mock_tmux <<'SESSIONS'
+main	2	1
+SESSIONS
+  set_session_windows "main" <<'WINDOWS'
+0	shell	/home/user
+1	vim	/home/user
+WINDOWS
+
+  CURRENT_SESSION=main CURRENT_WINDOW=0 run zsh "$SCRIPT" "$COLLAPSE_FILE"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"●"*"shell"* ]]
+}
+
+@test "non-current windows in current session show ○" {
+  create_mock_tmux <<'SESSIONS'
+main	2	1
+SESSIONS
+  set_session_windows "main" <<'WINDOWS'
+0	shell	/home/user
+1	vim	/home/user
+WINDOWS
+
+  CURRENT_SESSION=main CURRENT_WINDOW=0 run zsh "$SCRIPT" "$COLLAPSE_FILE"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"○"*"vim"* ]]
+}
+
+@test "shows ○ for windows in other sessions" {
+  create_mock_tmux <<'SESSIONS'
+main	1	1
+agent-loops	1	0
+SESSIONS
+
+  CURRENT_SESSION=main CURRENT_WINDOW=0 run zsh "$SCRIPT" "$COLLAPSE_FILE"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"○"* ]]
+}
+
+@test "shows current indicator for current session (worktree)" {
+  create_mock_tmux <<'SESSIONS'
+wt-feature	1	0
+SESSIONS
+
+  CURRENT_SESSION=wt-feature run zsh "$SCRIPT" "$COLLAPSE_FILE"
   [ "$status" -eq 0 ]
   [[ "$output" == *"●"* ]]
 }
 
-@test "shows attached indicator for attached non-current session" {
+@test "non-current sessions show ○ regardless of attached state" {
   create_mock_tmux <<'SESSIONS'
-main	3	1
-work	2	1
+wt-feature	2	1
+wt-other	1	0
 SESSIONS
 
-  CURRENT_SESSION=main run zsh "$SCRIPT" "$COLLAPSE_FILE"
+  CURRENT_SESSION=wt-other run zsh "$SCRIPT" "$COLLAPSE_FILE"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"◉"* ]]
-}
-
-@test "shows detached indicator for detached session" {
-  create_mock_tmux <<'SESSIONS'
-main	3	1
-work	2	0
-SESSIONS
-
-  CURRENT_SESSION=main run zsh "$SCRIPT" "$COLLAPSE_FILE"
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"○"* ]]
+  # wt-feature is attached but should still show ○, not ◉
+  [[ "$output" != *"◉"* ]]
 }
 
 # --- popup filtering ---
 
 @test "skips popup sessions" {
-  create_mock_tmux_with_popups
+  create_mock_tmux <<'SESSIONS'
+main	1	1
+popup	1	0
+wt-feature	2	0
+SESSIONS
 
   run zsh "$SCRIPT" "$COLLAPSE_FILE"
   [ "$status" -eq 0 ]
-  [[ "$output" != *"popup"* ]] || {
-    # "popup" may appear in tmux commands but not as a session line
-    # Check that popup is not a session entry (only appears in GROUP: lines or session lines)
-    local session_lines
-    session_lines=$(echo "$output" | grep -v "GROUP:" | grep -v "^$" || true)
-    [[ "$session_lines" != *"popup"* ]]
-  }
+  local session_lines
+  session_lines=$(echo "$output" | grep -v "GROUP:" | grep -v "^$" || true)
+  [[ "$session_lines" != *"popup"* ]]
 }
 
 @test "skips popover sessions" {
-  create_mock_tmux_with_popups
+  create_mock_tmux <<'SESSIONS'
+main	1	1
+popover	1	0
+wt-feature	2	0
+SESSIONS
 
   run zsh "$SCRIPT" "$COLLAPSE_FILE"
   [ "$status" -eq 0 ]
@@ -258,7 +384,6 @@ SESSIONS
 
   run zsh "$SCRIPT" "$COLLAPSE_FILE"
   [ "$status" -eq 0 ]
-  # All groups expanded by default — should contain ▾
   [[ "$output" == *"▾"* ]]
 }
 
@@ -271,19 +396,23 @@ SESSIONS
   [[ "$output" == *"▸"* ]]
 }
 
-@test "collapsed group hides session lines" {
+@test "collapsed group hides entries" {
   create_mock_tmux <<'SESSIONS'
-al-elasticsearch	1	0
-al-kibana	2	0
+agent-loops	2	0
 SESSIONS
+  set_session_windows "agent-loops" <<'WINDOWS'
+0	elasticsearch	/home/user/code/elasticsearch
+1	kibana	/home/user/code/kibana
+WINDOWS
   echo "agent-loops" > "$COLLAPSE_FILE"
 
   run zsh "$SCRIPT" "$COLLAPSE_FILE"
   [ "$status" -eq 0 ]
-  # Header should show count
+  # Header shows count
   [[ "$output" == *"Agent Loops (2)"* ]]
-  # But individual sessions should not appear
-  [[ "$output" != *"elasticsearch"*"window"* ]]
+  # But individual windows should not appear
+  [[ "$output" != *"elasticsearch"* ]]
+  [[ "$output" != *"kibana"* ]]
 }
 
 @test "only specified group is collapsed" {
@@ -303,34 +432,24 @@ SESSIONS
 
   run zsh "$SCRIPT" "$COLLAPSE_FILE"
   [ "$status" -eq 0 ]
+  [[ "$output" == *"GROUP:main"* ]]
   [[ "$output" == *"GROUP:agent-loops"* ]]
   [[ "$output" == *"GROUP:worktrees"* ]]
   [[ "$output" == *"GROUP:other"* ]]
 }
 
-# --- window label ---
-
-@test "shows singular window label" {
-  create_mock_tmux <<'SESSIONS'
-main	1	0
-SESSIONS
-
-  run zsh "$SCRIPT" "$COLLAPSE_FILE"
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"1 window"* ]]
-}
-
-@test "shows plural windows label" {
-  create_mock_tmux <<'SESSIONS'
-main	3	0
-SESSIONS
-
-  run zsh "$SCRIPT" "$COLLAPSE_FILE"
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"3 windows"* ]]
-}
-
 # --- group ordering ---
+
+@test "Main appears before Agent Loops in output" {
+  create_mock_tmux_mixed
+
+  run zsh "$SCRIPT" "$COLLAPSE_FILE"
+  [ "$status" -eq 0 ]
+  local main_pos al_pos
+  main_pos=$(echo "$output" | grep -n "Main" | head -1 | cut -d: -f1)
+  al_pos=$(echo "$output" | grep -n "Agent Loops" | head -1 | cut -d: -f1)
+  [ "$main_pos" -lt "$al_pos" ]
+}
 
 @test "Agent Loops appears before Worktrees in output" {
   create_mock_tmux_mixed
@@ -366,10 +485,11 @@ SESSIONS
   create_mock_tmux_empty
 
   run zsh "$SCRIPT" "$COLLAPSE_FILE"
-  # Should still output group headers (Agent Loops and Worktrees)
   [ "$status" -eq 0 ]
-  [[ "$output" == *"Agent Loops (0)"* ]]
   [[ "$output" == *"Worktrees (0)"* ]]
+  # Main and Agent Loops not shown when sessions don't exist
+  [[ "$output" != *"Main"* ]]
+  [[ "$output" != *"Agent Loops"* ]]
 }
 
 @test "handles missing collapse state file" {
@@ -390,7 +510,6 @@ SESSIONS
 
   run zsh "$SCRIPT" "$COLLAPSE_FILE" agent-loops
   [ "$status" -eq 0 ]
-  # agent-loops should now be collapsed
   run cat "$COLLAPSE_FILE"
   [[ "$output" == *"agent-loops"* ]]
 }
@@ -401,7 +520,6 @@ SESSIONS
 
   run zsh "$SCRIPT" "$COLLAPSE_FILE" agent-loops
   [ "$status" -eq 0 ]
-  # agent-loops should be removed from collapse file
   run cat "$COLLAPSE_FILE"
   [[ "$output" != *"agent-loops"* ]]
 }
@@ -412,7 +530,6 @@ SESSIONS
 
   run zsh "$SCRIPT" "$COLLAPSE_FILE" agent-loops
   [ "$status" -eq 0 ]
-  # agent-loops removed, worktrees still present
   run cat "$COLLAPSE_FILE"
   [[ "$output" != *"agent-loops"* ]]
   [[ "$output" == *"worktrees"* ]]
@@ -422,11 +539,9 @@ SESSIONS
   create_mock_tmux_mixed
   : > "$COLLAPSE_FILE"
 
-  # Toggle agent-loops to collapsed — output should show ▸ for agent-loops
   run zsh "$SCRIPT" "$COLLAPSE_FILE" agent-loops
   [ "$status" -eq 0 ]
   [[ "$output" == *"▸"*"Agent Loops"* ]]
-  # But worktrees should still be expanded
   [[ "$output" == *"▾"*"Worktrees"* ]]
 }
 
@@ -445,13 +560,10 @@ SESSIONS
   create_mock_tmux_mixed
   : > "$COLLAPSE_FILE"
 
-  # Toggle once (collapse)
   run zsh "$SCRIPT" "$COLLAPSE_FILE" agent-loops
   [ "$status" -eq 0 ]
-  # Toggle again (expand)
   run zsh "$SCRIPT" "$COLLAPSE_FILE" agent-loops
   [ "$status" -eq 0 ]
-  # Should be back to empty/no agent-loops
   run cat "$COLLAPSE_FILE"
   [[ "$output" != *"agent-loops"* ]]
 }
@@ -468,14 +580,24 @@ SESSIONS
   [[ "$output" == *"agent-loops"* ]]
 }
 
-@test "toggle resolves al- session name to agent-loops group" {
+@test "toggle resolves window target to agent-loops group" {
   create_mock_tmux_mixed
   : > "$COLLAPSE_FILE"
 
-  run zsh "$SCRIPT" "$COLLAPSE_FILE" "al-elasticsearch"
+  run zsh "$SCRIPT" "$COLLAPSE_FILE" "agent-loops:0"
   [ "$status" -eq 0 ]
   run cat "$COLLAPSE_FILE"
   [[ "$output" == *"agent-loops"* ]]
+}
+
+@test "toggle resolves window target to main group" {
+  create_mock_tmux_mixed
+  : > "$COLLAPSE_FILE"
+
+  run zsh "$SCRIPT" "$COLLAPSE_FILE" "main:2"
+  [ "$status" -eq 0 ]
+  run cat "$COLLAPSE_FILE"
+  [[ "$output" == *"main"* ]]
 }
 
 @test "toggle resolves wt- session name to worktrees group" {
@@ -492,8 +614,49 @@ SESSIONS
   create_mock_tmux_mixed
   : > "$COLLAPSE_FILE"
 
-  run zsh "$SCRIPT" "$COLLAPSE_FILE" "main"
+  run zsh "$SCRIPT" "$COLLAPSE_FILE" "scratch"
   [ "$status" -eq 0 ]
   run cat "$COLLAPSE_FILE"
   [[ "$output" == *"other"* ]]
+}
+
+# --- numbered shortcuts ---
+
+@test "Main windows have 0-based m-prefixed numbers" {
+  create_mock_tmux_mixed
+
+  run zsh "$SCRIPT" "$COLLAPSE_FILE"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"m0"*"shell"* ]]
+  [[ "$output" == *"m1"*"vim"* ]]
+  [[ "$output" == *"m2"*"htop"* ]]
+}
+
+@test "Agent Loops windows have 0-based a-prefixed numbers" {
+  create_mock_tmux_mixed
+
+  run zsh "$SCRIPT" "$COLLAPSE_FILE"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"a0"*"elasticsearch"* ]]
+  [[ "$output" == *"a1"*"kibana"* ]]
+}
+
+@test "Worktree sessions have 0-based w-prefixed numbers" {
+  create_mock_tmux_mixed
+
+  run zsh "$SCRIPT" "$COLLAPSE_FILE"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"w0"* ]]
+  [[ "$output" == *"w1"* ]]
+}
+
+@test "Other sessions have no number prefix" {
+  create_mock_tmux_mixed
+
+  run zsh "$SCRIPT" "$COLLAPSE_FILE"
+  [ "$status" -eq 0 ]
+  # scratch should appear without a letter prefix
+  [[ "$output" == *"○"*"scratch"* ]]
+  # but not with a letter+number prefix
+  [[ "$output" != *"o1"*"scratch"* ]]
 }

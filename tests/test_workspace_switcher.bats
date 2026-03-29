@@ -19,8 +19,8 @@ setup() {
   [ "$status" -eq 0 ]
 }
 
-@test "workspace-switcher uses 40% height default" {
-  run grep 'height=.*40%' "$SCRIPT"
+@test "workspace-switcher calculates popup height from content" {
+  run grep 'workspace-switcher-list.*wc -l' "$SCRIPT"
   [ "$status" -eq 0 ]
 }
 
@@ -31,6 +31,11 @@ setup() {
 
 @test "workspace-switcher exports CURRENT_SESSION" {
   run grep 'export CURRENT_SESSION' "$SCRIPT"
+  [ "$status" -eq 0 ]
+}
+
+@test "workspace-switcher exports CURRENT_WINDOW" {
+  run grep 'export CURRENT_WINDOW' "$SCRIPT"
   [ "$status" -eq 0 ]
 }
 
@@ -46,6 +51,16 @@ setup() {
 
 @test "workspace-switcher has ctrl-d binding for kill" {
   run grep 'ctrl-d:execute-silent' "$SCRIPT"
+  [ "$status" -eq 0 ]
+}
+
+@test "workspace-switcher ctrl-d handles window targets with kill-window" {
+  run grep 'kill-window' "$SCRIPT"
+  [ "$status" -eq 0 ]
+}
+
+@test "workspace-switcher ctrl-d handles session targets with kill-session" {
+  run grep 'kill-session' "$SCRIPT"
   [ "$status" -eq 0 ]
 }
 
@@ -81,27 +96,12 @@ setup() {
   [ "$status" -eq 0 ]
 }
 
-@test "workspace-switcher detects git root from ORIG_PANE_PATH" {
-  run grep 'git -C.*ORIG_PANE_PATH.*rev-parse --show-toplevel' "$SCRIPT"
+@test "workspace-switcher delegates agent loop creation to ta" {
+  run grep 'ta agent-loop start' "$SCRIPT"
   [ "$status" -eq 0 ]
 }
 
-@test "workspace-switcher creates al- prefixed session" {
-  run grep 'al-\$project' "$SCRIPT"
-  [ "$status" -eq 0 ]
-}
-
-@test "workspace-switcher sends ralph command to new agent-loop session" {
-  run grep 'ralph --timeout 4h' "$SCRIPT"
-  [ "$status" -eq 0 ]
-}
-
-@test "workspace-switcher checks if ralph is available before sending" {
-  run grep 'command -v ralph' "$SCRIPT"
-  [ "$status" -eq 0 ]
-}
-
-@test "workspace-switcher shows error when not in git repo" {
-  run grep 'not in a git repository' "$SCRIPT"
+@test "workspace-switcher passes ORIG_PANE_PATH to ta agent-loop" {
+  run grep 'ORIG_PANE_PATH' "$SCRIPT"
   [ "$status" -eq 0 ]
 }
