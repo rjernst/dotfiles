@@ -114,14 +114,36 @@ def start_proxy(agent, port, dotfiles_dir):
     return proc
 
 
-def stop_proxy(agent):
-    """Stop the proxy for the given agent via SIGTERM to its PID."""
+def stop_proxy(agent, wait=False):
+    """Stop the proxy for the given agent via SIGTERM to its PID.
+
+    If wait=True, block until the process exits (up to 5 seconds,
+    then SIGKILL).
+    """
     pid_file = proxy_pid_file(agent)
     try:
         with open(pid_file) as f:
             pid = int(f.read().strip())
         os.kill(pid, signal.SIGTERM)
     except (FileNotFoundError, ValueError, ProcessLookupError, OSError):
+        return
+
+    if not wait:
+        return
+
+    # Wait for the process to exit so the port is released.
+    for _ in range(50):  # 5 seconds
+        time.sleep(0.1)
+        try:
+            os.kill(pid, 0)  # check if still alive
+        except ProcessLookupError:
+            return
+        except OSError:
+            return
+    # Still alive — force kill
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except (ProcessLookupError, OSError):
         pass
 
 
@@ -131,10 +153,6 @@ def start_proxy_keepalive(port, interval=60):
     The proxy's idle timer resets on any request. This sends periodic /health
     requests so the proxy stays alive while ralph is running, even during long
     gaps between API calls (e.g., while Claude Code runs tests).
-
-    NOTE: This piggybacks on /health to reset the idle timer. If we later need
-    external monitoring that shouldn't extend proxy lifetime, split this into a
-    dedicated /keepalive endpoint.
 
     Returns an Event that can be set to stop the keepalive thread.
     """
@@ -171,6 +189,8 @@ def ensure_proxy(agent, port, dotfiles_dir):
                   f"(outdated v={version}, current v={current})")
         return port
 
+    # Kill any lingering proxy process so the port is free.
+    stop_proxy(agent, wait=True)
     start_proxy(agent, port, dotfiles_dir)
 
     # Wait for health check

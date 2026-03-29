@@ -148,6 +148,29 @@ class TestStopProxy:
         # Should silently handle already-dead process
         stop_proxy("claude")
 
+    @patch("ralph.proxy.time.sleep")
+    @patch("ralph.proxy.os.kill")
+    @patch("builtins.open", MagicMock(return_value=io.StringIO("12345")))
+    def test_wait_polls_until_process_exits(self, mock_kill, mock_sleep):
+        # SIGTERM succeeds, then kill(0) raises ProcessLookupError (exited)
+        mock_kill.side_effect = [None, ProcessLookupError]
+        stop_proxy("claude", wait=True)
+        assert mock_kill.call_args_list == [
+            ((12345, signal.SIGTERM),),
+            ((12345, 0),),
+        ]
+
+    @patch("ralph.proxy.time.sleep")
+    @patch("ralph.proxy.os.kill")
+    @patch("builtins.open", MagicMock(return_value=io.StringIO("12345")))
+    def test_wait_sends_sigkill_after_timeout(self, mock_kill, mock_sleep):
+        # SIGTERM succeeds, kill(0) always succeeds (process won't die)
+        mock_kill.return_value = None
+        stop_proxy("claude", wait=True)
+        # 1 SIGTERM + 50 kill(0) polls + 1 SIGKILL = 52 calls
+        assert mock_kill.call_count == 52
+        mock_kill.assert_called_with(12345, signal.SIGKILL)
+
 
 # ---------------------------------------------------------------------------
 # start_proxy_keepalive
@@ -206,12 +229,15 @@ class TestEnsureProxy:
         captured = capsys.readouterr()
         assert "outdated" in captured.out
 
+    @patch("ralph.proxy.stop_proxy")
     @patch("ralph.proxy.proxy_health_check", side_effect=[(False, None)] + [(True, "abc123")])
     @patch("ralph.proxy.start_proxy")
     @patch("ralph.proxy.time.sleep")
-    def test_starts_new_when_none_running(self, mock_sleep, mock_start, mock_health):
+    def test_starts_new_when_none_running(self, mock_sleep, mock_start, mock_health, mock_stop):
         result = ensure_proxy("claude", 18080, "/fake/dotfiles")
         assert result == 18080
+        # Kills lingering proxy before starting new one
+        mock_stop.assert_called_once_with("claude", wait=True)
         mock_start.assert_called_once_with("claude", 18080, "/fake/dotfiles")
 
     @patch("ralph.proxy.os.path.isfile", return_value=False)
@@ -225,17 +251,23 @@ class TestEnsureProxy:
         with pytest.raises(SystemExit) as exc_info:
             ensure_proxy("claude", 18080, "/fake/dotfiles")
         assert exc_info.value.code == 1
-        mock_stop.assert_called_once_with("claude")
+        # Called twice: once with wait=True before start, once on cleanup
+        assert mock_stop.call_count == 2
+        mock_stop.assert_any_call("claude", wait=True)
+        mock_stop.assert_any_call("claude")
 
 
 class TestEnsureProxyStaleCleanup:
+    @patch("ralph.proxy.stop_proxy")
     @patch("ralph.proxy.proxy_health_check",
            side_effect=[(False, None), (True, "abc123")])
     @patch("ralph.proxy.start_proxy")
     @patch("ralph.proxy.time.sleep")
     def test_logs_and_removes_stale_container(self, mock_sleep,
-                                               mock_start, mock_health):
+                                               mock_start, mock_health,
+                                               mock_stop):
         """Stale proxy is logged, stopped, removed, then a new one starts."""
         result = ensure_proxy("claude", 18080, "/fake/dotfiles")
         assert result == 18080
+        mock_stop.assert_called_once_with("claude", wait=True)
         mock_start.assert_called_once_with("claude", 18080, "/fake/dotfiles")

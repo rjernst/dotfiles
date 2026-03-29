@@ -9,7 +9,7 @@ from ralph.orchestration import (
     resolve_repo, check_dependencies, unblock_ready_specs,
     ensure_worktree, try_fast_forward,
 )
-from ralph.proxy import MODEL_ALIASES
+from ralph.proxy import MODEL_ALIASES, proxy_health_check, ensure_proxy
 from ralph.sandbox import load_sandbox_config, create_sandbox_backend
 from ralph.util import parse_frontmatter, parse_issue_branch
 
@@ -136,6 +136,13 @@ def process_issue(issue_number, git, dotfiles_dir, gh, agent, push, model,
             rc, body = sandbox.run_iteration(sandbox_name, body, model,
                                              env_vars)
             if rc != 0:
+                # Check if failure was caused by the proxy being down
+                # (e.g. idle timeout fired after machine sleep)
+                healthy, _ = proxy_health_check(proxy_port)
+                if not healthy:
+                    print("ralph: proxy died during iteration, restarting and retrying...")
+                    ensure_proxy(agent, proxy_port, dotfiles_dir)
+                    continue
                 print(f"ralph: iteration failed for issue #{issue_number}", file=sys.stderr)
                 gh.issue_edit(issue_number, repo,
                               remove_label="status:in-progress",

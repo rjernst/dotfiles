@@ -152,12 +152,14 @@ class TestProcessIssueSandbox:
         env_vars = call_args[1].get("env_vars") or call_args[0][3]
         assert env_vars["ANTHROPIC_BASE_URL"] == "http://192.168.64.1:18080"
 
+    @patch("ralph.loop.proxy_health_check", return_value=(True, "abc123"))
     @patch("ralph.loop.create_sandbox_backend")
     @patch("ralph.loop.load_sandbox_config", return_value={"type": "docker"})
     @patch("ralph.loop.ensure_worktree", return_value="/work/my-branch")
     @patch("ralph.loop.resolve_repo", return_value="owner/repo")
     def test_iteration_failure_marks_needs_attention(self, mock_repo, mock_wt,
-                                                      mock_config, mock_create):
+                                                      mock_config, mock_create,
+                                                      mock_health):
         git = MagicMock()
         git.output.return_value = "/repo/root"
 
@@ -179,6 +181,38 @@ class TestProcessIssueSandbox:
             42, "owner/repo",
             remove_label="status:in-progress",
             add_label="status:needs-attention")
+
+    @patch("ralph.loop.ensure_proxy")
+    @patch("ralph.loop.proxy_health_check", return_value=(False, None))
+    @patch("ralph.loop.create_sandbox_backend")
+    @patch("ralph.loop.load_sandbox_config", return_value={"type": "docker"})
+    @patch("ralph.loop.unblock_ready_specs")
+    @patch("ralph.loop.ensure_worktree", return_value="/work/my-branch")
+    @patch("ralph.loop.resolve_repo", return_value="owner/repo")
+    def test_iteration_failure_restarts_proxy_and_retries(self, mock_repo, mock_wt,
+                                                           mock_unblock, mock_config,
+                                                           mock_create, mock_health,
+                                                           mock_ensure):
+        git = MagicMock()
+        git.output.return_value = "/repo/root"
+
+        sandbox = MagicMock()
+        sandbox.ensure_sandbox.return_value = "agent-loop-claude-my-branch"
+        # First iteration fails (proxy down), retry succeeds
+        sandbox.run_iteration.side_effect = [(1, "spec"), (0, "spec")]
+        mock_create.return_value = sandbox
+
+        gh = MagicMock()
+        gh.issue_view_title.return_value = "[my-branch] Test Issue"
+        gh.issue_view_body.return_value = "---\nbranch: my-branch\n---\nSpec"
+
+        result = process_issue(
+            42, git, "/dotfiles", gh, "claude", False, "sonnet",
+            "user", "user@test.com", 18080)
+        assert result == 0
+
+        mock_ensure.assert_called_once_with("claude", 18080, "/dotfiles")
+        assert sandbox.run_iteration.call_count == 2
 
     @patch("ralph.loop.create_sandbox_backend")
     @patch("ralph.loop.load_sandbox_config", return_value={"type": "docker"})
