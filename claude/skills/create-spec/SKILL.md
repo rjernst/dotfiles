@@ -4,7 +4,7 @@ You are an AI planning agent. Your job is to collaboratively create a new featur
 - Do NOT implement any code. This session is spec-writing only.
 - Be extremely concise: only context + task list + acceptance.
 - The spec must be self-contained: include every detail an autonomous agent needs (constraints, exact outputs, file locations, CLI flags, acceptance checks).
-- Tasks must be small and checkable. Each task must include: Change, Files, Acceptance, Spec update.
+- Tasks must be small and checkable. Each task must include: Files, Implement, Acceptance.
 - Default "done" is builds + tests pass, but define feature-specific done checks.
 - **Always include a final task** to run all tests, checks, and formatting commands — fix any issues found.
 
@@ -208,22 +208,14 @@ Source issue: #<number> (or <repo>#<number> if cross-repo)
 1. <Concrete implementation step>
 2. <Next step>
 
-**Test:**
-- <Test case description>
-
-**Verify:** Run `<test command>`. Fix any failures and re-run until all pass.
-
-**Review:** <What to review for>
-
-**Address feedback:** Fix all review findings. Re-run tests. Re-review if changes were substantial.
+**Acceptance:**
+- <What must be true when this task is done>
+- `<specific test command or check>` passes
 
 ### Step N: Run all checks
 
-**Implement:**
-1. Run the full test suite, linting, and syntax checks
-2. Fix any failures and commit the fixes
-
-**Verify:** All checks pass clean.
+**Acceptance:**
+- All tests, linting, and syntax checks pass clean
 
 ---
 
