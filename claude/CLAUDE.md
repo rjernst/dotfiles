@@ -1,5 +1,9 @@
 # User Preferences
 
+## Git Commands
+
+- **Never use `cd` or `git -C` to change directories for git commands.** The working directory is already the repository root. Run git commands directly (e.g., `git status`, not `cd /some/path && git status` or `git -C /some/path status`).
+
 ## Git Commits
 
 - Never add `Co-Authored-By` trailers to commit messages.
