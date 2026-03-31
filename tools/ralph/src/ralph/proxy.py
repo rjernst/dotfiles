@@ -1,5 +1,6 @@
 """Proxy lifecycle management for the credential injection proxy."""
 
+import fcntl
 import hashlib
 import os
 import re
@@ -39,6 +40,11 @@ def compute_proxy_version(dotfiles_dir):
 def proxy_pid_file(agent):
     """Return the PID file path for the proxy."""
     return f"/tmp/ralph-proxy-{agent}.pid"
+
+
+def proxy_lock_file(agent):
+    """Return the lock file path for proxy lifecycle serialization."""
+    return f"/tmp/ralph-proxy-{agent}.lock"
 
 
 def proxy_log_file(agent):
@@ -177,28 +183,35 @@ def ensure_proxy(agent, port, dotfiles_dir):
     If a proxy is already running and healthy, reuse it (even if outdated —
     the idle timeout will retire it naturally). Otherwise start a new one.
 
+    Uses a file lock to serialize proxy lifecycle management across
+    concurrent ralph instances sharing the same port.
+
     Returns the proxy port.
     """
-    healthy, version = proxy_health_check(port)
-    if healthy:
-        current = compute_proxy_version(dotfiles_dir)
-        if version == current:
-            print(f"ralph: reusing healthy proxy on port {port}")
-        else:
-            print(f"ralph: reusing proxy on port {port} "
-                  f"(outdated v={version}, current v={current})")
-        return port
+    lock_path = proxy_lock_file(agent)
+    with open(lock_path, "w") as lock_fh:
+        fcntl.flock(lock_fh, fcntl.LOCK_EX)
 
-    # Kill any lingering proxy process so the port is free.
-    stop_proxy(agent, wait=True)
-    start_proxy(agent, port, dotfiles_dir)
-
-    # Wait for health check
-    for _ in range(10):
-        time.sleep(0.5)
-        healthy, _ = proxy_health_check(port)
+        healthy, version = proxy_health_check(port)
         if healthy:
+            current = compute_proxy_version(dotfiles_dir)
+            if version == current:
+                print(f"ralph: reusing healthy proxy on port {port}")
+            else:
+                print(f"ralph: reusing proxy on port {port} "
+                      f"(outdated v={version}, current v={current})")
             return port
+
+        # Kill any lingering proxy process so the port is free.
+        stop_proxy(agent, wait=True)
+        start_proxy(agent, port, dotfiles_dir)
+
+        # Wait for health check
+        for _ in range(10):
+            time.sleep(0.5)
+            healthy, _ = proxy_health_check(port)
+            if healthy:
+                return port
 
     print("ralph: proxy failed to become healthy", file=sys.stderr)
     log = proxy_log_file(agent)
