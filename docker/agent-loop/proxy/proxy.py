@@ -16,6 +16,7 @@ import http.server
 import os
 import signal
 import socket
+import socketserver
 import sys
 import threading
 import urllib.error
@@ -64,10 +65,11 @@ class IdleShutdown:
         self.server.shutdown()
 
 
-class DualStackHTTPServer(http.server.HTTPServer):
-    """HTTPServer that accepts both IPv4 and IPv6 connections."""
+class DualStackHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
+    """Threaded HTTPServer that accepts both IPv4 and IPv6 connections."""
 
     address_family = socket.AF_INET6
+    daemon_threads = True
 
     def server_bind(self):
         self.socket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
