@@ -20,6 +20,7 @@ class DockerSandbox(SandboxBackend):
 
     def __init__(self, dotfiles_dir):
         self.dotfiles_dir = dotfiles_dir
+        self._worktree_path = None
 
     def proxy_host(self):
         """Return the hostname for reaching the credential proxy."""

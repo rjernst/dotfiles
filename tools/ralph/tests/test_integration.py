@@ -7,6 +7,7 @@ Enable with:
     RALPH_INTEGRATION_TESTS=1 pytest -m integration tools/ralph/tests/test_integration.py -v
 """
 
+import os
 import subprocess
 import time
 

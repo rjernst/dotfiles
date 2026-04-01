@@ -1066,6 +1066,7 @@ class TestSandboxRunIteration:
             MagicMock(returncode=0, stdout="updated spec"),  # read spec
         ]
         sb = DockerSandbox("/dotfiles")
+        sb._worktree_path = "/work/tree"
         rc, updated = sb.run_iteration("my-sandbox", "original spec", "sonnet")
         assert rc == 0
         assert updated == "updated spec"
@@ -1080,6 +1081,8 @@ class TestSandboxRunIteration:
         claude_call = mock_run.call_args_list[1]
         cmd = claude_call[0][0]
         assert "claude" in cmd
+        assert "-w" in cmd
+        assert cmd[cmd.index("-w") + 1] == "/work/tree"
         assert "--model" in cmd
         idx = cmd.index("--model")
         assert cmd[idx + 1] == "sonnet"
@@ -1099,6 +1102,7 @@ class TestSandboxRunIteration:
             MagicMock(returncode=0, stdout="spec"),  # read spec
         ]
         sb = DockerSandbox("/dotfiles")
+        sb._worktree_path = "/work/tree"
         sb.run_iteration("my-sandbox", "spec", "sonnet",
                          env_vars={"CLAUDE_CODE_OAUTH_TOKEN": "sk-test"})
 
@@ -1126,6 +1130,7 @@ class TestSandboxRunIteration:
             MagicMock(returncode=1, stdout=""),  # read spec fails
         ]
         sb = DockerSandbox("/dotfiles")
+        sb._worktree_path = "/work/tree"
         rc, updated = sb.run_iteration("my-sandbox", "original", "sonnet")
         assert rc == 0
         assert updated == "original"
@@ -1138,6 +1143,7 @@ class TestSandboxRunIteration:
             MagicMock(returncode=0, stdout="spec"),  # read spec
         ]
         sb = DockerSandbox("/dotfiles")
+        sb._worktree_path = "/work/tree"
         rc, _ = sb.run_iteration("my-sandbox", "spec", "sonnet")
         assert rc == 42
 
