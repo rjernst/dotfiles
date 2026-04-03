@@ -156,7 +156,7 @@ def _selftest_docker(sandbox, agent, sandbox_name, port, report):
 
     # 5. Apply network policy
     try:
-        DockerSandbox.apply_network_policy(sandbox_name)
+        sandbox.apply_network_policy(sandbox_name)
         report("network policy", True)
     except Exception as e:
         report("network policy", False, str(e))

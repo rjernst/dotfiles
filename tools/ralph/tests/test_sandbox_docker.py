@@ -72,6 +72,14 @@ class TestLoadSandboxConfig:
         with pytest.raises(ValueError, match="unknown sandbox type"):
             load_sandbox_config(str(tmp_path))
 
+    def test_allowed_hosts_passed_through(self, tmp_path):
+        config_dir = tmp_path / ".agent-loop"
+        config_dir.mkdir()
+        config = {"type": "docker", "allowed_hosts": ["pypi.org", "example.com"]}
+        (config_dir / "config.json").write_text(json.dumps(config))
+        result = load_sandbox_config(str(tmp_path))
+        assert result["allowed_hosts"] == ["pypi.org", "example.com"]
+
     def test_malformed_json_raises(self, tmp_path):
         config_dir = tmp_path / ".agent-loop"
         config_dir.mkdir()
@@ -202,6 +210,17 @@ class TestCreateSandboxBackend:
         backend = create_sandbox_backend(
             "docker", "/dotfiles", base_image="foo", cpu=4)
         assert isinstance(backend, DockerSandbox)
+
+    def test_docker_allowed_hosts_passed_through(self):
+        """allowed_hosts from config reaches DockerSandbox."""
+        backend = create_sandbox_backend(
+            "docker", "/dotfiles",
+            allowed_hosts=["pypi.org", "example.com"])
+        assert backend.allowed_hosts == ("pypi.org", "example.com")
+
+    def test_docker_no_allowed_hosts_defaults_to_empty(self):
+        backend = create_sandbox_backend("docker", "/dotfiles")
+        assert backend.allowed_hosts == ()
 
 
 # ---------------------------------------------------------------------------
@@ -781,7 +800,7 @@ class TestSandboxEnsureSandbox:
 class TestSandboxApplyNetworkPolicy:
     @patch("ralph.sandbox.docker.subprocess.run")
     def test_correct_command(self, mock_run):
-        DockerSandbox.apply_network_policy("agent-loop-claude-fix-auth")
+        DockerSandbox("/dotfiles").apply_network_policy("agent-loop-claude-fix-auth")
         mock_run.assert_called_once_with(
             ["docker", "sandbox", "network", "proxy", "agent-loop-claude-fix-auth",
              "--policy", "deny",
@@ -789,6 +808,22 @@ class TestSandboxApplyNetworkPolicy:
              "--allow-host", "api.anthropic.com",
              "--allow-host", "statsig.anthropic.com",
              "--allow-host", "sentry.io"],
+            check=True,
+        )
+
+    @patch("ralph.sandbox.docker.subprocess.run")
+    def test_extra_allowed_hosts(self, mock_run):
+        sb = DockerSandbox("/dotfiles", allowed_hosts=["pypi.org", "registry.npmjs.org"])
+        sb.apply_network_policy("agent-loop-claude-fix-auth")
+        mock_run.assert_called_once_with(
+            ["docker", "sandbox", "network", "proxy", "agent-loop-claude-fix-auth",
+             "--policy", "deny",
+             "--allow-host", "localhost",
+             "--allow-host", "api.anthropic.com",
+             "--allow-host", "statsig.anthropic.com",
+             "--allow-host", "sentry.io",
+             "--allow-host", "pypi.org",
+             "--allow-host", "registry.npmjs.org"],
             check=True,
         )
 

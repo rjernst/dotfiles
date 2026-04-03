@@ -58,10 +58,12 @@ class GitHub:
         data = json.loads(result.stdout)
         return [label["name"] for label in data.get("labels", [])]
 
-    def issue_edit(self, number, repo, remove_label=None, add_label=None, body=None):
+    def issue_edit(self, number, repo, remove_labels=None, add_label=None, body=None):
         cmd = ["gh", "issue", "edit", str(number)]
-        if remove_label:
-            cmd.extend(["--remove-label", remove_label])
+        if remove_labels:
+            if isinstance(remove_labels, str):
+                remove_labels = [remove_labels]
+            cmd.extend(["--remove-label", ",".join(remove_labels)])
         if add_label:
             cmd.extend(["--add-label", add_label])
         if body is not None:

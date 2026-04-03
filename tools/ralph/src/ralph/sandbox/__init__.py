@@ -59,7 +59,8 @@ def create_sandbox_backend(sandbox_type, dotfiles_dir, **kwargs):
     from ralph.sandbox.tart import TartSandbox
 
     if sandbox_type == "docker":
-        return DockerSandbox(dotfiles_dir)
+        allowed_hosts = kwargs.get("allowed_hosts")
+        return DockerSandbox(dotfiles_dir, allowed_hosts=allowed_hosts)
     elif sandbox_type == "tart":
         # Read dependencies file if a project_dir was passed through kwargs
         config = dict(kwargs)

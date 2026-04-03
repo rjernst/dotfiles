@@ -51,7 +51,7 @@ class TestUnblockReadySpecs:
 
         gh.issue_edit.assert_called_once_with(
             5, "owner/repo",
-            remove_label="status:blocked",
+            remove_labels="status:blocked",
             add_label="status:ready",
         )
 
@@ -74,7 +74,7 @@ class TestUnblockReadySpecs:
 
         gh.issue_edit.assert_called_once_with(
             8, "owner/repo",
-            remove_label="status:blocked",
+            remove_labels="status:blocked",
             add_label="status:ready",
         )
 

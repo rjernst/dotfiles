@@ -18,8 +18,9 @@ class DockerSandbox(SandboxBackend):
 
     BASE_IMAGE_MAX_AGE_DAYS = 7
 
-    def __init__(self, dotfiles_dir):
+    def __init__(self, dotfiles_dir, allowed_hosts=None):
         self.dotfiles_dir = dotfiles_dir
+        self.allowed_hosts = tuple(allowed_hosts) if allowed_hosts else ()
         self._worktree_path = None
 
     def proxy_host(self):
@@ -398,18 +399,20 @@ class DockerSandbox(SandboxBackend):
         print(f"ralph: synced commits to {work_dir}")
         return True
 
-    @staticmethod
-    def apply_network_policy(name):
+    _BASE_ALLOWED_HOSTS = (
+        "localhost",
+        "api.anthropic.com",
+        "statsig.anthropic.com",
+        "sentry.io",
+    )
+
+    def apply_network_policy(self, name):
         """Apply deny-by-default network policy with allowed hosts."""
-        subprocess.run(
-            ["docker", "sandbox", "network", "proxy", name,
-             "--policy", "deny",
-             "--allow-host", "localhost",
-             "--allow-host", "api.anthropic.com",
-             "--allow-host", "statsig.anthropic.com",
-             "--allow-host", "sentry.io"],
-            check=True,
-        )
+        cmd = ["docker", "sandbox", "network", "proxy", name,
+               "--policy", "deny"]
+        for host in self._BASE_ALLOWED_HOSTS + self.allowed_hosts:
+            cmd.extend(["--allow-host", host])
+        subprocess.run(cmd, check=True)
 
     def ensure_sandbox(self, agent, branch, worktree_path,
                        project_dir=None, force_rebuild=False):

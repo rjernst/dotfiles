@@ -61,7 +61,7 @@ def unblock_ready_specs(repo, gh=None):
         if not depends:
             print(f"ralph: unblocked issue #{number} — no dependencies declared")
             gh.issue_edit(number, repo,
-                          remove_label="status:blocked",
+                          remove_labels="status:blocked",
                           add_label="status:ready")
             continue
 
@@ -70,7 +70,7 @@ def unblock_ready_specs(repo, gh=None):
         if not unmet:
             print(f"ralph: unblocked issue #{number} — all dependencies met")
             gh.issue_edit(number, repo,
-                          remove_label="status:blocked",
+                          remove_labels="status:blocked",
                           add_label="status:ready")
 
 

@@ -179,7 +179,7 @@ class TestProcessIssueSandbox:
 
         gh.issue_edit.assert_any_call(
             42, "owner/repo",
-            remove_label="status:in-progress",
+            remove_labels="status:in-progress",
             add_label="status:needs-attention")
 
     @patch("ralph.loop.ensure_proxy")
@@ -248,7 +248,7 @@ class TestProcessIssueSandbox:
 
         gh.issue_edit.assert_any_call(
             42, "owner/repo",
-            remove_label="status:in-progress",
+            remove_labels="status:in-progress",
             add_label="status:needs-attention")
 
     @patch("ralph.loop.create_sandbox_backend")
@@ -428,7 +428,7 @@ class TestProcessIssueSandbox:
 
         gh.issue_edit.assert_any_call(
             42, "owner/repo",
-            remove_label="status:in-progress",
+            remove_labels="status:in-progress",
             add_label="status:needs-attention")
 
     @patch("ralph.loop.create_sandbox_backend")
@@ -465,7 +465,7 @@ class TestProcessIssueSandbox:
 
         gh.issue_edit.assert_any_call(
             42, "owner/repo",
-            remove_label="status:in-progress",
+            remove_labels="status:in-progress",
             add_label="status:done")
         mock_unblock.assert_called_once_with("owner/repo", gh)
 
@@ -500,10 +500,10 @@ class TestPollLoopExceptionHandling:
         assert "unexpected error processing issue #42" in captured.err
         assert "boom" in captured.err
 
-        # Verify needs-attention label was applied
+        # Verify needs-attention label was applied (removes both ready and in-progress)
         gh.issue_edit.assert_called_with(
             42, "owner/repo",
-            remove_label="status:in-progress",
+            remove_labels=["status:ready", "status:in-progress"],
             add_label="status:needs-attention")
 
     @patch("ralph.loop.time.sleep")

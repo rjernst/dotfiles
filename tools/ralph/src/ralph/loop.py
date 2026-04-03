@@ -55,7 +55,7 @@ def process_issue(issue_number, git, dotfiles_dir, gh, agent, push, model,
             print(f"ralph: issue #{issue_number} has unmet dependencies: {unmet_str}")
             print(f"ralph: transitioning issue #{issue_number} to status:blocked")
             gh.issue_edit(issue_number, repo,
-                          remove_label="status:ready",
+                          remove_labels="status:ready",
                           add_label="status:blocked")
             return 0
 
@@ -110,7 +110,7 @@ def process_issue(issue_number, git, dotfiles_dir, gh, agent, push, model,
 
     # Label in-progress
     gh.issue_edit(issue_number, repo,
-                  remove_label="status:ready",
+                  remove_labels="status:ready",
                   add_label="status:in-progress")
 
     # Build env vars for sandbox exec — real token stays in proxy,
@@ -145,7 +145,7 @@ def process_issue(issue_number, git, dotfiles_dir, gh, agent, push, model,
                     continue
                 print(f"ralph: iteration failed for issue #{issue_number}", file=sys.stderr)
                 gh.issue_edit(issue_number, repo,
-                              remove_label="status:in-progress",
+                              remove_labels="status:in-progress",
                               add_label="status:needs-attention")
                 return 1
 
@@ -156,12 +156,12 @@ def process_issue(issue_number, git, dotfiles_dir, gh, agent, push, model,
                 if "[blocked:" in body:
                     print(f"ralph: blocked tasks found in issue #{issue_number}, marking needs-attention")
                     gh.issue_edit(issue_number, repo,
-                                  remove_label="status:in-progress",
+                                  remove_labels="status:in-progress",
                                   add_label="status:needs-attention")
                 else:
                     print(f"ralph: no commit made, marking issue #{issue_number} done")
                     gh.issue_edit(issue_number, repo,
-                                  remove_label="status:in-progress",
+                                  remove_labels="status:in-progress",
                                   add_label="status:done")
                     unblock_ready_specs(repo, gh)
                 break
@@ -171,7 +171,7 @@ def process_issue(issue_number, git, dotfiles_dir, gh, agent, push, model,
                 print(f"ralph: sync failed, marking issue #{issue_number} needs-attention",
                       file=sys.stderr)
                 gh.issue_edit(issue_number, repo,
-                              remove_label="status:in-progress",
+                              remove_labels="status:in-progress",
                               add_label="status:needs-attention")
                 return 1
 
@@ -187,7 +187,7 @@ def process_issue(issue_number, git, dotfiles_dir, gh, agent, push, model,
         prev_handler = signal.signal(signal.SIGINT, signal.SIG_IGN)
         try:
             gh.issue_edit(issue_number, repo,
-                          remove_label="status:in-progress",
+                          remove_labels="status:in-progress",
                           add_label="status:ready")
         except Exception:
             pass
@@ -250,7 +250,8 @@ def poll_loop(git, dotfiles_dir, gh, agent, push, model, git_user, git_email,
                               file=sys.stderr)
                         try:
                             gh.issue_edit(num, repo,
-                                          remove_label="status:in-progress",
+                                          remove_labels=["status:ready",
+                                                         "status:in-progress"],
                                           add_label="status:needs-attention")
                         except Exception:
                             pass
