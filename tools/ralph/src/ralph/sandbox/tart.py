@@ -3,6 +3,7 @@
 import atexit
 import hashlib
 import json
+import os
 import shlex
 import shutil
 import subprocess
@@ -21,6 +22,7 @@ class TartSandbox(SandboxBackend):
     """
 
     SHARED_DIR = "/Volumes/My Shared Files/workspace"
+    SHARED_DIR_GITDIR = "/Volumes/My Shared Files/gitdir"
     _vm_procs = {}
     _vm_list_cache = (0, [])
 
@@ -194,12 +196,59 @@ class TartSandbox(SandboxBackend):
         )
         return result.stdout.strip() if result.returncode == 0 else ""
 
+    @staticmethod
+    def _resolve_git_common_dir(worktree_path):
+        """Resolve the shared .git directory for a worktree.
+
+        A worktree's .git is a file containing 'gitdir: <path>' pointing
+        into the main repo's .git/worktrees/<name>/ directory.  The common
+        dir is two levels up from that.
+
+        Returns the absolute path to the repo's common .git directory,
+        or None if this is a regular repo (not a worktree).
+        """
+        git_path = os.path.join(worktree_path, ".git")
+        if not os.path.isfile(git_path):
+            return None
+        with open(git_path) as f:
+            line = f.readline().strip()
+        if not line.startswith("gitdir: "):
+            return None
+        gitdir = line[len("gitdir: "):]
+        if not os.path.isabs(gitdir):
+            gitdir = os.path.join(worktree_path, gitdir)
+        # gitdir is .git/worktrees/<name> — common dir is two levels up
+        common = os.path.dirname(os.path.dirname(gitdir))
+        return os.path.realpath(common)
+
+    def _setup_git_common_dir_symlink(self, sandbox_name, git_common_dir):
+        """Create a symlink inside the VM so the worktree .git pointer resolves.
+
+        VirtioFS mounts the git common dir at /Volumes/My Shared Files/gitdir,
+        but the worktree's .git file contains the host's absolute path. This
+        creates the host path as a symlink to the VirtioFS mount so git can
+        follow the pointer.
+        """
+        parent = os.path.dirname(git_common_dir)
+        subprocess.run(
+            ["tart", "exec", sandbox_name,
+             "bash", "-c", f"mkdir -p {shlex.quote(parent)} && "
+             f"ln -s {shlex.quote(self.SHARED_DIR_GITDIR)} "
+             f"{shlex.quote(git_common_dir)}"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            check=False,
+        )
+
     def ensure_sandbox(self, agent, branch, worktree_path, **kwargs):
         """Ensure a per-branch VM exists and is running. Returns VM name.
 
         Clones from the template. If the VM exists but is stopped, deletes
         and recreates. Reuses a running VM. Registers an atexit handler
         (once) to stop all tracked VMs on exit.
+
+        When the workspace is a git worktree, the repo's shared .git
+        directory is mounted as a second VirtioFS share so that the
+        worktree's .git pointer resolves inside the VM.
         """
         name = self.sandbox_name(agent, branch)
         state = self._vm_state(name)
@@ -224,11 +273,17 @@ class TartSandbox(SandboxBackend):
         print(f"ralph: cloning VM {name} from template {template}")
         subprocess.run(["tart", "clone", template, name], check=True)
 
+        # Resolve git common dir for worktrees
+        git_common_dir = self._resolve_git_common_dir(worktree_path)
+
         # Start headless with directory sharing
         print(f"ralph: starting VM {name}")
+        run_cmd = ["tart", "run", name, "--no-graphics",
+                   f"--dir=workspace:{worktree_path}"]
+        if git_common_dir:
+            run_cmd.append(f"--dir=gitdir:{git_common_dir}")
         vm_proc = subprocess.Popen(
-            ["tart", "run", name, "--no-graphics",
-             f"--dir=workspace:{worktree_path}"],
+            run_cmd,
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
         self._vm_procs[name] = vm_proc
@@ -239,6 +294,11 @@ class TartSandbox(SandboxBackend):
             TartSandbox._atexit_registered = True
 
         self._wait_for_guest_agent(name)
+
+        # Create symlink inside VM so the worktree's .git file resolves
+        if git_common_dir:
+            self._setup_git_common_dir_symlink(name, git_common_dir)
+
         return name
 
     @staticmethod
