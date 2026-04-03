@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 
 from ralph.agents import get_agent
 from ralph.sandbox import SandboxBackend
@@ -434,6 +435,7 @@ class DockerSandbox(SandboxBackend):
         self._worktree_path = worktree_path
         if self.sandbox_exists(name):
             print(f"ralph: reusing sandbox {name}")
+            self._touch_sandbox_timestamp(name)
             return name
         base_tag = self.ensure_image(agent, force_rebuild=force_rebuild)
         if project_dir:
@@ -446,6 +448,7 @@ class DockerSandbox(SandboxBackend):
         self._docker_sandbox_create(name, tag, worktree_path, git_common_dir,
                                     sandbox_agent=agent_config["sandbox_agent"])
         self.apply_network_policy(name, agent_config["allowed_hosts"])
+        self._touch_sandbox_timestamp(name)
         return name
 
     @staticmethod
@@ -473,28 +476,44 @@ class DockerSandbox(SandboxBackend):
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             check=False,
         )
+        self._remove_sandbox_timestamp(name)
 
-    def prune_sandboxes(self, agent):
-        """Remove orphaned sandboxes whose workspace paths no longer exist.
+    def prune_sandboxes(self, agent, max_age_days=None):
+        """Remove orphaned or stale sandboxes.
+
+        A sandbox is pruned if its workspace path no longer exists OR if it
+        has not been used within max_age_days.  Sandboxes with no recorded
+        timestamp are treated as stale (they predate timestamp tracking).
 
         Returns list of pruned sandbox names.
         """
+        if max_age_days is None:
+            max_age_days = self.PRUNE_MAX_AGE_DAYS
         prefix = f"agent-loop-{agent}-"
         data = self._docker_sandbox_ls()
+        now = time.time()
+        cutoff = now - max_age_days * 86400
         pruned = []
         for vm in data.get("vms", []):
             name = vm.get("name", "")
             if not name.startswith(prefix):
                 continue
+            # Workspace gone — always prune
             workspace = vm.get("workspace", "")
-            if workspace and os.path.exists(workspace):
-                continue
-            print(f"ralph: pruning orphan sandbox {name}")
+            if not workspace or not os.path.exists(workspace):
+                print(f"ralph: pruning orphan sandbox {name}")
+            else:
+                # Workspace exists — prune only if stale
+                last_used = self._sandbox_last_used(name)
+                if last_used is not None and last_used >= cutoff:
+                    continue
+                print(f"ralph: pruning stale sandbox {name}")
             subprocess.run(
                 ["docker", "sandbox", "rm", name],
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                 check=False,
             )
+            self._remove_sandbox_timestamp(name)
             pruned.append(name)
         return pruned
 
@@ -610,6 +629,7 @@ class DockerSandbox(SandboxBackend):
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             check=False,
         )
+        self._remove_sandbox_timestamp(name)
 
     # -- Pre-flight validation ------------------------------------------------
 

@@ -88,6 +88,14 @@ def process_issue(issue_number, git, dotfiles_dir, gh, agent, push, model,
     sandbox_type = config.pop("type")
     sandbox = create_sandbox_backend(sandbox_type, dotfiles_dir, **config)
 
+    # Auto-prune stale sandboxes before creating/reusing ours
+    try:
+        pruned = sandbox.prune_sandboxes(agent)
+        if pruned:
+            print(f"ralph: pruned {len(pruned)} stale sandbox(es)")
+    except Exception:
+        pass  # best-effort — don't block issue processing
+
     # Ensure sandbox
     sandbox_name = sandbox.ensure_sandbox(agent, branch, work_dir,
                                           project_dir=repo_root,
@@ -177,6 +185,7 @@ def process_issue(issue_number, git, dotfiles_dir, gh, agent, push, model,
                                   remove_labels="status:in-progress",
                                   add_label="status:done")
                     unblock_ready_specs(repo, gh)
+                    sandbox.cleanup_sandbox(agent, branch)
                 break
 
             # Sync commits from sandbox to host worktree

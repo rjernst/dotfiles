@@ -255,6 +255,7 @@ class TartSandbox(SandboxBackend):
 
         if state == "Running":
             print(f"ralph: reusing running VM {name}")
+            self._touch_sandbox_timestamp(name)
             return name
 
         if state is not None:
@@ -299,6 +300,7 @@ class TartSandbox(SandboxBackend):
         if git_common_dir:
             self._setup_git_common_dir_symlink(name, git_common_dir)
 
+        self._touch_sandbox_timestamp(name)
         return name
 
     @staticmethod
@@ -479,6 +481,7 @@ class TartSandbox(SandboxBackend):
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             check=False,
         )
+        self._remove_sandbox_timestamp(name)
 
     def remove_sandbox(self, name):
         """Remove a VM by name (best-effort)."""
@@ -495,15 +498,24 @@ class TartSandbox(SandboxBackend):
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             check=False,
         )
+        self._remove_sandbox_timestamp(name)
 
-    def prune_sandboxes(self, agent):
-        """Remove orphaned VMs whose workspace worktree paths no longer exist.
+    def prune_sandboxes(self, agent, max_age_days=None):
+        """Remove orphaned or stale VMs.
 
-        Looks for VMs matching the agent-loop-{agent}-* prefix (excluding
-        templates). Returns list of pruned VM names.
+        Tart VMs don't track workspace paths in metadata, so non-running VMs
+        are always considered orphans.  Running VMs are pruned only if their
+        last-used timestamp is older than max_age_days (or missing, meaning
+        they predate timestamp tracking).
+
+        Excludes template VMs.  Returns list of pruned VM names.
         """
+        if max_age_days is None:
+            max_age_days = self.PRUNE_MAX_AGE_DAYS
         prefix = f"agent-loop-{agent}-"
         template_prefix = f"agent-loop-template-{agent}-"
+        now = time.time()
+        cutoff = now - max_age_days * 86400
         pruned = []
         for vm in self._list_vms():
             name = vm.get("Name", "")
@@ -511,13 +523,15 @@ class TartSandbox(SandboxBackend):
                 continue
             if name.startswith(template_prefix):
                 continue
-            # VM is an agent-loop sandbox — check if we can determine its worktree
-            # Since Tart VMs don't track workspace path in metadata, we consider
-            # non-running VMs as orphans eligible for pruning
             state = vm.get("State", "")
             if state == "Running":
-                continue
-            print(f"ralph: pruning orphan VM {name}")
+                # Running VM — only prune if stale
+                last_used = self._sandbox_last_used(name)
+                if last_used is not None and last_used >= cutoff:
+                    continue
+                print(f"ralph: pruning stale VM {name}")
+            else:
+                print(f"ralph: pruning orphan VM {name}")
             subprocess.run(
                 ["tart", "stop", name],
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
@@ -528,6 +542,7 @@ class TartSandbox(SandboxBackend):
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                 check=False,
             )
+            self._remove_sandbox_timestamp(name)
             pruned.append(name)
         return pruned
 

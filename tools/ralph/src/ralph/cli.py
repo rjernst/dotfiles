@@ -27,7 +27,7 @@ Token commands:
 
 Sandbox commands:
   selftest              Smoke test the full pipeline (proxy, sandbox, auth)
-  prune-sandboxes       Remove orphaned sandboxes
+  prune-sandboxes       Remove orphaned and stale sandboxes
 
 Issue commands:
   --issue <number>      Execute a single GitHub Issue spec
@@ -91,6 +91,7 @@ def main():
     if args and args[0] == "prune-sandboxes":
         agent = "claude"
         sandbox_type = "docker"
+        max_age_days = None
         rest = args[1:]
         j = 0
         while j < len(rest):
@@ -110,6 +111,17 @@ def main():
                           file=sys.stderr)
                     sys.exit(2)
                 j += 2
+            elif rest[j] == "--max-age":
+                if j + 1 >= len(rest):
+                    print("ralph: --max-age requires an argument", file=sys.stderr)
+                    sys.exit(2)
+                try:
+                    max_age_days = int(rest[j + 1])
+                except ValueError:
+                    print(f"ralph: --max-age must be an integer: {rest[j + 1]}",
+                          file=sys.stderr)
+                    sys.exit(2)
+                j += 2
             elif rest[j] in ("-h", "--help"):
                 usage(0)
             else:
@@ -121,9 +133,9 @@ def main():
             sb = TartSandbox(DOTFILES_DIR)
         else:
             sb = DockerSandbox(DOTFILES_DIR)
-        pruned = sb.prune_sandboxes(agent)
+        pruned = sb.prune_sandboxes(agent, max_age_days=max_age_days)
         if not pruned:
-            print("ralph: no orphan sandboxes found")
+            print("ralph: no stale sandboxes found")
         sys.exit(0)
 
     # Selftest subcommand

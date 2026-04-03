@@ -12,6 +12,10 @@ import time
 from ralph.proxy import proxy_health_check
 from ralph.token import read_token_from_keychain
 
+# Directory where per-sandbox timestamp files are stored.  The mtime of each
+# file records when the sandbox was last used by process_issue / ensure_sandbox.
+SANDBOX_STATE_DIR = os.path.expanduser("~/.ralph/sandbox-used")
+
 
 # ---------------------------------------------------------------------------
 # Sandbox config (.agent-loop/config.json)
@@ -238,12 +242,46 @@ class SandboxBackend:
         """
         raise NotImplementedError
 
+    # -- Sandbox timestamp tracking --------------------------------------------
+
+    PRUNE_MAX_AGE_DAYS = 2
+
+    def _touch_sandbox_timestamp(self, name):
+        """Record that a sandbox was just used (create/reuse)."""
+        os.makedirs(SANDBOX_STATE_DIR, exist_ok=True)
+        path = os.path.join(SANDBOX_STATE_DIR, name)
+        with open(path, "w"):
+            pass  # mtime is all we need
+
+    def _sandbox_last_used(self, name):
+        """Return the last-used time as seconds since epoch, or None."""
+        path = os.path.join(SANDBOX_STATE_DIR, name)
+        try:
+            return os.path.getmtime(path)
+        except OSError:
+            return None
+
+    def _remove_sandbox_timestamp(self, name):
+        """Delete the timestamp file for a removed sandbox."""
+        path = os.path.join(SANDBOX_STATE_DIR, name)
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+
+    # -- Sandbox lifecycle (abstract) -----------------------------------------
+
     def cleanup_sandbox(self, agent, branch):
         """Remove the sandbox for a given agent and branch."""
         raise NotImplementedError
 
-    def prune_sandboxes(self, agent):
-        """Remove orphaned sandboxes. Returns list of pruned names."""
+    def prune_sandboxes(self, agent, max_age_days=None):
+        """Remove orphaned sandboxes. Returns list of pruned names.
+
+        Removes sandboxes whose workspace no longer exists AND sandboxes
+        that have not been used within max_age_days (defaults to
+        PRUNE_MAX_AGE_DAYS).
+        """
         raise NotImplementedError
 
     def remove_sandbox(self, name):
