@@ -4,6 +4,7 @@ import signal
 import sys
 import time
 
+from ralph.agents import get_agent
 from ralph.github import GitHub
 from ralph.orchestration import (
     resolve_repo, check_dependencies, unblock_ready_specs,
@@ -15,7 +16,7 @@ from ralph.util import parse_frontmatter, parse_issue_branch
 
 
 def process_issue(issue_number, git, dotfiles_dir, gh, agent, push, model,
-                  git_user, git_email, proxy_port, rebuild=False):
+                  git_user, git_email, proxy_port, token, rebuild=False):
     """Process a single GitHub Issue spec."""
     repo = resolve_repo(git)
     if not repo:
@@ -113,17 +114,27 @@ def process_issue(issue_number, git, dotfiles_dir, gh, agent, push, model,
                   remove_labels="status:ready",
                   add_label="status:in-progress")
 
-    # Build env vars for sandbox exec — real token stays in proxy,
-    # sandbox only sees a phantom token and the proxy's base URL.
-    # ANTHROPIC_CUSTOM_MODEL_OPTION bypasses client-side model validation
-    # which otherwise fails because the phantom token has no subscription
-    # tier metadata.
-    model_id = MODEL_ALIASES.get(model, model)
-    env_vars = {
-        "CLAUDE_CODE_OAUTH_TOKEN": "phantom",
-        "ANTHROPIC_BASE_URL": f"http://{sandbox.proxy_host()}:{proxy_port}",
-        "ANTHROPIC_CUSTOM_MODEL_OPTION": model_id,
-    }
+    # Build env vars and API key based on agent type.
+    # The token was already resolved by ensure_token() in cli.py and
+    # passed through — no need to re-read from Keychain.
+    agent_config = get_agent(agent)
+    if agent_config["uses_proxy"]:
+        # Real token stays in proxy — sandbox only sees a phantom token
+        # and the proxy's base URL.  ANTHROPIC_CUSTOM_MODEL_OPTION bypasses
+        # client-side model validation which otherwise fails because the
+        # phantom token has no subscription tier metadata.
+        model_id = MODEL_ALIASES.get(model, model)
+        env_vars = {
+            "CLAUDE_CODE_OAUTH_TOKEN": "phantom",
+            "ANTHROPIC_BASE_URL": f"http://{sandbox.proxy_host()}:{proxy_port}",
+            "ANTHROPIC_CUSTOM_MODEL_OPTION": model_id,
+        }
+        api_key = None
+    else:
+        # Non-proxy agents: API key is delivered via secret file in
+        # run_iteration — no env vars passed via docker exec -e.
+        env_vars = {}
+        api_key = token
 
     try:
         while True:
@@ -134,15 +145,17 @@ def process_issue(issue_number, git, dotfiles_dir, gh, agent, push, model,
             # Run iteration
             print(f"ralph: starting iteration (sandbox={sandbox_name}, issue=#{issue_number}, model={model})")
             rc, body = sandbox.run_iteration(sandbox_name, body, model,
-                                             env_vars)
+                                             env_vars, agent=agent,
+                                             api_key=api_key)
             if rc != 0:
-                # Check if failure was caused by the proxy being down
-                # (e.g. idle timeout fired after machine sleep)
-                healthy, _ = proxy_health_check(proxy_port)
-                if not healthy:
-                    print("ralph: proxy died during iteration, restarting and retrying...")
-                    ensure_proxy(agent, proxy_port, dotfiles_dir)
-                    continue
+                # For proxy-based agents, check if failure was caused by
+                # the proxy being down (e.g. idle timeout after sleep)
+                if agent_config["uses_proxy"]:
+                    healthy, _ = proxy_health_check(proxy_port)
+                    if not healthy:
+                        print("ralph: proxy died during iteration, restarting and retrying...")
+                        ensure_proxy(agent, proxy_port, dotfiles_dir)
+                        continue
                 print(f"ralph: iteration failed for issue #{issue_number}", file=sys.stderr)
                 gh.issue_edit(issue_number, repo,
                               remove_labels="status:in-progress",
@@ -199,7 +212,7 @@ def process_issue(issue_number, git, dotfiles_dir, gh, agent, push, model,
 
 
 def poll_loop(git, dotfiles_dir, gh, agent, push, model, git_user, git_email,
-              proxy_port, interval, timeout, rebuild=False):
+              proxy_port, token, interval, timeout, rebuild=False):
     """Poll for ready issues and process them."""
     repo = resolve_repo(git)
     if not repo:
@@ -244,7 +257,7 @@ def poll_loop(git, dotfiles_dir, gh, agent, push, model, git_user, git_email,
                     try:
                         process_issue(num, git, dotfiles_dir, gh, agent, push, model,
                                       git_user, git_email, proxy_port,
-                                      rebuild=rebuild)
+                                      token, rebuild=rebuild)
                     except Exception as exc:
                         print(f"ralph: unexpected error processing issue #{num}: {exc}",
                               file=sys.stderr)

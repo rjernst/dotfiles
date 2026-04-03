@@ -9,6 +9,8 @@ import subprocess
 import sys
 import time
 
+from ralph.agents import get_agent
+
 MS_PER_DAY = 86400 * 1000
 DEFAULT_EXPIRY_DAYS = 365
 
@@ -145,6 +147,23 @@ def run_claude_setup_token():
     return max(matches, key=len)
 
 
+def prompt_for_api_key(agent):
+    """Prompt the user for an API key interactively.
+
+    Used for agents that use simple API keys (e.g. cursor) rather than
+    OAuth token flows.
+    """
+    print(f"Enter your {agent} API key:", file=sys.stderr)
+    try:
+        raw = input().strip()
+    except EOFError:
+        raw = ""
+    if not raw:
+        print(f"ralph: no API key provided for agent {agent}", file=sys.stderr)
+        sys.exit(1)
+    return raw
+
+
 def _parse_and_store_token(agent, raw):
     """Parse raw token string, store in Keychain, return the data dict."""
     now_ms = int(time.time() * 1000)
@@ -165,20 +184,23 @@ def _parse_and_store_token(agent, raw):
         # Bare token string
         data = {"accessToken": raw, "expiresAt": default_expiry}
 
-    # Validate the token before storing
+    # Validate the token before storing (claude only — cursor API keys are
+    # long-lived and can't be validated without a full agent run)
+    agent_config = get_agent(agent)
     token = data["accessToken"]
-    print(f"ralph: validating token ({len(token)} chars)...", file=sys.stderr)
-    result = subprocess.run(
-        ["claude", "-p", "--model", "haiku", "ok"],
-        env={**os.environ, "CLAUDE_CODE_OAUTH_TOKEN": token},
-        stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
-    )
-    if result.returncode != 0:
-        print(f"ralph: token validation failed — token is not valid", file=sys.stderr)
-        if "401" in result.stderr or "authentication" in result.stderr.lower():
-            print("ralph: the token was rejected by the API (401 Unauthorized)", file=sys.stderr)
-        sys.exit(1)
-    print("ralph: token validated successfully", file=sys.stderr)
+    if agent_config["uses_proxy"]:
+        print(f"ralph: validating token ({len(token)} chars)...", file=sys.stderr)
+        result = subprocess.run(
+            [agent_config["cli_command"], "-p", "--model", "haiku", "ok"],
+            env={**os.environ, agent_config["env_var_name"]: token},
+            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
+        )
+        if result.returncode != 0:
+            print("ralph: token validation failed — token is not valid", file=sys.stderr)
+            if "401" in result.stderr or "authentication" in result.stderr.lower():
+                print("ralph: the token was rejected by the API (401 Unauthorized)", file=sys.stderr)
+            sys.exit(1)
+        print("ralph: token validated successfully", file=sys.stderr)
 
     json_str = json.dumps(data)
     write_token_to_keychain(agent, json_str)
@@ -188,9 +210,17 @@ def _parse_and_store_token(agent, raw):
 
 
 def store_token(agent):
-    """Store a token in Keychain. Runs claude setup-token if interactive."""
+    """Store a token in Keychain.
+
+    For claude: runs `claude setup-token` interactively, or reads from stdin.
+    For other agents: prompts for an API key interactively, or reads from stdin.
+    """
+    agent_config = get_agent(agent)
     if sys.stdin.isatty():
-        raw = run_claude_setup_token()
+        if agent_config["uses_proxy"]:
+            raw = run_claude_setup_token()
+        else:
+            raw = prompt_for_api_key(agent)
     else:
         raw = sys.stdin.read().strip()
     if not raw:
@@ -240,7 +270,11 @@ def get_token(agent):
 
 
 def ensure_token(agent):
-    """Ensure a valid token exists. Runs claude setup-token if missing or expired."""
+    """Ensure a valid token exists.
+
+    For claude: runs `claude setup-token` if missing or expired.
+    For other agents: prompts for an API key if missing or expired.
+    """
     data = read_token_from_keychain(agent)
     now_ms = int(time.time() * 1000)
 
@@ -248,12 +282,19 @@ def ensure_token(agent):
         expires_at = data.get("expiresAt", 0)
         if expires_at > now_ms:
             return data["accessToken"]
-        print(f"ralph: token expired for agent {agent}, running claude setup-token...",
+
+    agent_config = get_agent(agent)
+    if data is not None:
+        print(f"ralph: token expired for agent {agent}, requesting new token...",
               file=sys.stderr)
     else:
-        print(f"ralph: no token found for agent {agent}, running claude setup-token...",
+        print(f"ralph: no token found for agent {agent}, requesting new token...",
               file=sys.stderr)
 
-    raw = run_claude_setup_token()
+    if agent_config["uses_proxy"]:
+        raw = run_claude_setup_token()
+    else:
+        raw = prompt_for_api_key(agent)
+
     stored = _parse_and_store_token(agent, raw)
     return stored["accessToken"]

@@ -191,7 +191,8 @@ class SandboxBackend:
         """Configure git user and safe directory settings inside the sandbox."""
         raise NotImplementedError
 
-    def run_iteration(self, sandbox_name, spec_content, model, env_vars=None):
+    def run_iteration(self, sandbox_name, spec_content, model, env_vars=None,
+                      agent="claude", api_key=None):
         """Run a single iteration inside the sandbox. Returns (exit_code, updated_spec)."""
         raise NotImplementedError
 

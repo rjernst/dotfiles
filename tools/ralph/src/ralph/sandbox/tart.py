@@ -342,7 +342,8 @@ class TartSandbox(SandboxBackend):
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False,
         )
 
-    def run_iteration(self, sandbox_name, spec_content, model, env_vars=None):
+    def run_iteration(self, sandbox_name, spec_content, model, env_vars=None,
+                      agent="claude", api_key=None):
         """Run a single Claude Code iteration inside the VM.
 
         Writes spec to /tmp/spec.md via tart exec, runs claude with env vars,

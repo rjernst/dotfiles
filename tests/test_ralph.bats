@@ -68,11 +68,15 @@ STUB
 
 @test "ralph fails when gh is not installed" {
   cd "$PROJECT"
-  # Remove gh stub from PATH
+  # Build a PATH without gh.  We can't just remove the stub and keep
+  # /usr/bin because Ubuntu CI runners ship gh at /usr/bin/gh.  Instead,
+  # construct a clean PATH: the stub dir (minus gh) plus symlinks to
+  # system utilities the ralph wrapper script needs.
   rm "$BATS_TEST_TMPDIR/bin/gh"
-  # Ensure python3 is available
-  ln -sf "$(command -v python3)" "$BATS_TEST_TMPDIR/bin/python3"
-  run env PATH="$BATS_TEST_TMPDIR/bin:/usr/bin" "$RALPH" --issue 1
+  for cmd in python3 dirname readlink; do
+    p="$(command -v "$cmd")" && ln -sf "$p" "$BATS_TEST_TMPDIR/bin/$cmd"
+  done
+  run env PATH="$BATS_TEST_TMPDIR/bin" "$RALPH" --issue 1
   [ "$status" -eq 1 ]
   [[ "$output" == *"gh is not installed"* ]]
 }

@@ -189,7 +189,7 @@ class TestTartWaitForGuestAgent:
         mock_run.return_value = MagicMock(returncode=0)
         self._make()._wait_for_guest_agent("test-vm", timeout=10)
         mock_run.assert_called_once_with(
-            ["tart", "exec", "test-vm", "--", "echo", "ok"],
+            ["tart", "exec", "test-vm", "echo", "ok"],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
             check=False,
         )
@@ -331,7 +331,7 @@ class TestTartExecOutput:
         result = TartSandbox.exec_output("test-vm", "echo", "hello")
         assert result == "hello world"
         mock_run.assert_called_once_with(
-            ["tart", "exec", "test-vm", "--", "echo", "hello"],
+            ["tart", "exec", "test-vm", "echo", "hello"],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False,
         )
 
@@ -443,15 +443,15 @@ class TestTartSetupGitConfig:
         calls = mock_run.call_args_list
         # user.name
         assert calls[0][0][0] == [
-            "tart", "exec", "test-vm", "--",
+            "tart", "exec", "test-vm",
             "git", "config", "--global", "user.name", "Test User"]
         # user.email
         assert calls[1][0][0] == [
-            "tart", "exec", "test-vm", "--",
+            "tart", "exec", "test-vm",
             "git", "config", "--global", "user.email", "test@example.com"]
         # safe.directory
         assert calls[2][0][0] == [
-            "tart", "exec", "test-vm", "--",
+            "tart", "exec", "test-vm",
             "git", "config", "--global", "--add", "safe.directory", "*"]
 
 
@@ -479,15 +479,15 @@ class TestTartRunIteration:
         # Check write command
         write_call = mock_run.call_args_list[0]
         assert write_call[0][0] == [
-            "tart", "exec", "-i", "test-vm", "--", "tee", "/tmp/spec.md"]
+            "tart", "exec", "-i", "test-vm", "tee", "/tmp/spec.md"]
         assert write_call.kwargs["input"] == "original spec"
 
         # Check claude command uses bash -c with env vars
         claude_call = mock_run.call_args_list[1]
         cmd = claude_call[0][0]
-        assert cmd[:5] == ["tart", "exec", "test-vm", "--", "bash"]
-        assert cmd[5] == "-c"
-        bash_cmd = cmd[6]
+        assert cmd[:4] == ["tart", "exec", "test-vm", "bash"]
+        assert cmd[4] == "-c"
+        bash_cmd = cmd[5]
         assert "env KEY='val'" in bash_cmd or "env KEY=val" in bash_cmd
         assert "--model" in bash_cmd
         assert "--dangerously-skip-permissions" in bash_cmd
@@ -496,7 +496,7 @@ class TestTartRunIteration:
         # Check read command
         read_call = mock_run.call_args_list[2]
         assert read_call[0][0] == [
-            "tart", "exec", "test-vm", "--", "cat", "/tmp/spec.md"]
+            "tart", "exec", "test-vm", "cat", "/tmp/spec.md"]
 
     @patch("ralph.sandbox.tart.subprocess.run")
     def test_write_failure_returns_original_spec(self, mock_run):
@@ -528,7 +528,7 @@ class TestTartRunIteration:
         t = self._make()
         t.run_iteration("test-vm", "spec", "sonnet")
         claude_call = mock_run.call_args_list[1]
-        bash_cmd = claude_call[0][0][6]
+        bash_cmd = claude_call[0][0][5]
         assert "env " not in bash_cmd or bash_cmd.startswith("cd ")
 
     @patch("ralph.sandbox.tart.subprocess.run")
@@ -543,7 +543,7 @@ class TestTartRunIteration:
         t.run_iteration("test-vm", "spec", "sonnet",
                         {"KEY": "val with spaces"})
         claude_call = mock_run.call_args_list[1]
-        bash_cmd = claude_call[0][0][6]
+        bash_cmd = claude_call[0][0][5]
         assert "KEY='val with spaces'" in bash_cmd
 
 

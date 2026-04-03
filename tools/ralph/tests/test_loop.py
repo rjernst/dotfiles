@@ -36,7 +36,7 @@ class TestProcessIssueSandbox:
 
         process_issue(
             42, git, "/dotfiles", gh, "claude", False, "sonnet",
-            "user", "user@test.com", 18080)
+            "user", "user@test.com", 18080, "sk-test")
 
         sandbox.check_in_sync.assert_called_once_with(
             "agent-loop-claude-my-branch", "/work/my-branch", git)
@@ -66,7 +66,7 @@ class TestProcessIssueSandbox:
 
         process_issue(
             42, git, "/dotfiles", gh, "claude", False, "sonnet",
-            "user", "user@test.com", 18080)
+            "user", "user@test.com", 18080, "sk-test")
 
         sandbox.remove_sandbox.assert_called_once_with("agent-loop-claude-my-branch")
         # ensure_sandbox called twice: initial + recreation
@@ -100,7 +100,7 @@ class TestProcessIssueSandbox:
 
         result = process_issue(
             42, git, "/dotfiles", gh, "claude", False, "sonnet",
-            "user", "user@test.com", 18080)
+            "user", "user@test.com", 18080, "sk-test")
         assert result == 0
 
         mock_config.assert_called_once_with("/repo/root")
@@ -145,7 +145,7 @@ class TestProcessIssueSandbox:
 
         process_issue(
             42, git, "/dotfiles", gh, "claude", False, "sonnet",
-            "user", "user@test.com", 18080)
+            "user", "user@test.com", 18080, "sk-test")
 
         sandbox.proxy_host.assert_called_once()
         call_args = sandbox.run_iteration.call_args
@@ -174,7 +174,7 @@ class TestProcessIssueSandbox:
 
         result = process_issue(
             42, git, "/dotfiles", gh, "claude", False, "sonnet",
-            "user", "user@test.com", 18080)
+            "user", "user@test.com", 18080, "sk-test")
         assert result == 1
 
         gh.issue_edit.assert_any_call(
@@ -208,7 +208,7 @@ class TestProcessIssueSandbox:
 
         result = process_issue(
             42, git, "/dotfiles", gh, "claude", False, "sonnet",
-            "user", "user@test.com", 18080)
+            "user", "user@test.com", 18080, "sk-test")
         assert result == 0
 
         mock_ensure.assert_called_once_with("claude", 18080, "/dotfiles")
@@ -243,7 +243,7 @@ class TestProcessIssueSandbox:
 
         result = process_issue(
             42, git, "/dotfiles", gh, "claude", False, "sonnet",
-            "user", "user@test.com", 18080)
+            "user", "user@test.com", 18080, "sk-test")
         assert result == 1
 
         gh.issue_edit.assert_any_call(
@@ -284,7 +284,7 @@ class TestProcessIssueSandbox:
 
         process_issue(
             42, git, "/dotfiles", gh, "claude", True, "sonnet",
-            "user", "user@test.com", 18080)
+            "user", "user@test.com", 18080, "sk-test")
 
         git.run.assert_any_call("push", cwd="/work/my-branch", check=False)
 
@@ -292,13 +292,13 @@ class TestProcessIssueSandbox:
     @patch("ralph.loop.load_sandbox_config", return_value={"type": "docker"})
     @patch("ralph.loop.ensure_worktree", return_value="/work/my-branch")
     @patch("ralph.loop.resolve_repo", return_value="owner/repo")
-    def test_agent_codex_uses_correct_names(self, mock_repo, mock_wt,
-                                             mock_config, mock_create):
+    def test_agent_cursor_uses_correct_names(self, mock_repo, mock_wt,
+                                              mock_config, mock_create):
         git = MagicMock()
         git.output.return_value = "/repo/root"
 
         sandbox = MagicMock()
-        sandbox.ensure_sandbox.return_value = "agent-loop-codex-my-branch"
+        sandbox.ensure_sandbox.return_value = "agent-loop-cursor-my-branch"
         sandbox.run_iteration.return_value = (0, "spec")
         mock_create.return_value = sandbox
 
@@ -307,11 +307,11 @@ class TestProcessIssueSandbox:
         gh.issue_view_body.return_value = "---\nbranch: my-branch\n---\nSpec"
 
         process_issue(
-            42, git, "/dotfiles", gh, "codex", False, "sonnet",
-            "user", "user@test.com", 18080)
+            42, git, "/dotfiles", gh, "cursor", False, "auto",
+            "user", "user@test.com", 18080, "cursor-key")
 
         sandbox.ensure_sandbox.assert_called_once_with(
-            "codex", "my-branch", "/work/my-branch",
+            "cursor", "my-branch", "/work/my-branch",
             project_dir="/repo/root", force_rebuild=False)
 
     @patch("ralph.loop.create_sandbox_backend")
@@ -335,7 +335,7 @@ class TestProcessIssueSandbox:
 
         process_issue(
             42, git, "/dotfiles", gh, "claude", False, "sonnet",
-            "user", "user@test.com", 18080, rebuild=True)
+            "user", "user@test.com", 18080, "sk-test", rebuild=True)
 
         sandbox.ensure_sandbox.assert_called_once_with(
             "claude", "my-branch", "/work/my-branch",
@@ -362,7 +362,7 @@ class TestProcessIssueSandbox:
 
         process_issue(
             42, git, "/dotfiles", gh, "claude", False, "sonnet",
-            "user", "user@test.com", 18080)
+            "user", "user@test.com", 18080, "sk-test")
 
         git.run.assert_any_call(
             "config", "branch.my-branch.issue", "42",
@@ -389,7 +389,7 @@ class TestProcessIssueSandbox:
 
         process_issue(
             99, git, "/dotfiles", gh, "claude", False, "sonnet",
-            "user", "user@test.com", 18080)
+            "user", "user@test.com", 18080, "sk-test")
 
         git.run.assert_any_call(
             "config", "branch.feat/slash-branch.issue", "99",
@@ -423,13 +423,107 @@ class TestProcessIssueSandbox:
 
         result = process_issue(
             42, git, "/dotfiles", gh, "claude", False, "sonnet",
-            "user", "user@test.com", 18080)
+            "user", "user@test.com", 18080, "sk-test")
         assert result == 0
 
         gh.issue_edit.assert_any_call(
             42, "owner/repo",
             remove_labels="status:in-progress",
             add_label="status:needs-attention")
+
+    @patch("ralph.loop.create_sandbox_backend")
+    @patch("ralph.loop.load_sandbox_config", return_value={"type": "docker"})
+    @patch("ralph.loop.unblock_ready_specs")
+    @patch("ralph.loop.ensure_worktree", return_value="/work/my-branch")
+    @patch("ralph.loop.resolve_repo", return_value="owner/repo")
+    def test_cursor_agent_passes_no_proxy_env_vars(self, mock_repo, mock_wt, mock_unblock,
+                                                    mock_config, mock_create):
+        """Cursor agent should pass empty env_vars and api_key to run_iteration."""
+        git = MagicMock()
+        git.output.return_value = "/repo/root"
+
+        sandbox = MagicMock()
+        sandbox.ensure_sandbox.return_value = "agent-loop-cursor-my-branch"
+        sandbox.run_iteration.return_value = (0, "updated spec")
+        mock_create.return_value = sandbox
+
+        gh = MagicMock()
+        gh.issue_view_title.return_value = "[my-branch] Test Issue"
+        gh.issue_view_body.return_value = "---\nbranch: my-branch\n---\nSpec"
+
+        process_issue(
+            42, git, "/dotfiles", gh, "cursor", False, "auto",
+            "user", "user@test.com", 18080, "cursor-key-123")
+
+        call_args = sandbox.run_iteration.call_args
+        env_vars = call_args[0][3]
+        # Cursor should not have proxy env vars
+        assert "CLAUDE_CODE_OAUTH_TOKEN" not in env_vars
+        assert "ANTHROPIC_BASE_URL" not in env_vars
+        assert env_vars == {}
+        # Should pass agent and api_key as kwargs
+        assert call_args[1]["agent"] == "cursor"
+        assert call_args[1]["api_key"] == "cursor-key-123"
+
+    @patch("ralph.loop.create_sandbox_backend")
+    @patch("ralph.loop.load_sandbox_config", return_value={"type": "docker"})
+    @patch("ralph.loop.unblock_ready_specs")
+    @patch("ralph.loop.ensure_worktree", return_value="/work/my-branch")
+    @patch("ralph.loop.resolve_repo", return_value="owner/repo")
+    def test_cursor_agent_does_not_check_proxy_on_failure(self, mock_repo, mock_wt, mock_unblock,
+                                                           mock_config, mock_create):
+        """Cursor iteration failure should not check proxy health."""
+        git = MagicMock()
+        git.output.return_value = "/repo/root"
+
+        sandbox = MagicMock()
+        sandbox.ensure_sandbox.return_value = "agent-loop-cursor-my-branch"
+        sandbox.run_iteration.return_value = (1, "spec")
+        mock_create.return_value = sandbox
+
+        gh = MagicMock()
+        gh.issue_view_title.return_value = "[my-branch] Test Issue"
+        gh.issue_view_body.return_value = "---\nbranch: my-branch\n---\nSpec"
+
+        with patch("ralph.loop.proxy_health_check") as mock_health:
+            result = process_issue(
+                42, git, "/dotfiles", gh, "cursor", False, "auto",
+                "user", "user@test.com", 18080, "cursor-key")
+            assert result == 1
+            # Should NOT have checked proxy health
+            mock_health.assert_not_called()
+
+    @patch("ralph.loop.create_sandbox_backend")
+    @patch("ralph.loop.load_sandbox_config", return_value={"type": "docker"})
+    @patch("ralph.loop.unblock_ready_specs")
+    @patch("ralph.loop.ensure_worktree", return_value="/work/my-branch")
+    @patch("ralph.loop.resolve_repo", return_value="owner/repo")
+    def test_claude_agent_passes_proxy_env_vars(self, mock_repo, mock_wt, mock_unblock,
+                                                 mock_config, mock_create):
+        """Claude agent should pass proxy env vars and agent/api_key kwargs."""
+        git = MagicMock()
+        git.output.return_value = "/repo/root"
+
+        sandbox = MagicMock()
+        sandbox.proxy_host.return_value = "host.docker.internal"
+        sandbox.ensure_sandbox.return_value = "agent-loop-claude-my-branch"
+        sandbox.run_iteration.return_value = (0, "updated spec")
+        mock_create.return_value = sandbox
+
+        gh = MagicMock()
+        gh.issue_view_title.return_value = "[my-branch] Test Issue"
+        gh.issue_view_body.return_value = "---\nbranch: my-branch\n---\nSpec"
+
+        process_issue(
+            42, git, "/dotfiles", gh, "claude", False, "sonnet",
+            "user", "user@test.com", 18080, "sk-test")
+
+        call_args = sandbox.run_iteration.call_args
+        env_vars = call_args[0][3]
+        assert env_vars["CLAUDE_CODE_OAUTH_TOKEN"] == "phantom"
+        assert env_vars["ANTHROPIC_BASE_URL"] == "http://host.docker.internal:18080"
+        assert call_args[1]["agent"] == "claude"
+        assert call_args[1]["api_key"] is None
 
     @patch("ralph.loop.create_sandbox_backend")
     @patch("ralph.loop.load_sandbox_config", return_value={"type": "docker"})
@@ -460,7 +554,7 @@ class TestProcessIssueSandbox:
 
         result = process_issue(
             42, git, "/dotfiles", gh, "claude", False, "sonnet",
-            "user", "user@test.com", 18080)
+            "user", "user@test.com", 18080, "sk-test")
         assert result == 0
 
         gh.issue_edit.assert_any_call(
@@ -493,7 +587,7 @@ class TestPollLoopExceptionHandling:
 
         with patch("ralph.loop.process_issue", side_effect=RuntimeError("boom")):
             poll_loop(git, "/dotfiles", gh, "claude", False, "sonnet",
-                            "user", "user@test.com", 18080, 30, 1)
+                            "user", "user@test.com", 18080, "sk-test", 30, 1)
 
         # Verify error was logged
         captured = capsys.readouterr()
@@ -525,4 +619,4 @@ class TestPollLoopExceptionHandling:
         with patch("ralph.loop.process_issue", side_effect=RuntimeError("boom")):
             # Should not raise
             poll_loop(git, "/dotfiles", gh, "claude", False, "sonnet",
-                            "user", "user@test.com", 18080, 30, 1)
+                            "user", "user@test.com", 18080, "sk-test", 30, 1)

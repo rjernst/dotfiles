@@ -5,11 +5,13 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
 import tempfile
 
+from ralph.agents import get_agent
 from ralph.sandbox import SandboxBackend
 
 
@@ -314,20 +316,24 @@ class DockerSandbox(SandboxBackend):
         return False
 
     @staticmethod
-    def _docker_sandbox_create(name, tag, worktree_path, git_common_dir=None):
+    def _docker_sandbox_create(name, tag, worktree_path, git_common_dir=None,
+                               sandbox_agent="claude"):
         """Create a new Docker sandbox.
 
         Passes worktree_path as the primary workspace.  When git_common_dir is
         provided (the repo's shared .git directory), it is added as a second
         workspace so that the worktree's .git pointer resolves inside the
         sandbox.
+
+        sandbox_agent is the docker sandbox subcommand (e.g. "claude" or
+        "shell") — looked up from the agent config's sandbox_agent field.
         """
         workspaces = [worktree_path]
         if git_common_dir:
             workspaces.append(git_common_dir)
         subprocess.run(
             ["docker", "sandbox", "create",
-             "--name", name, "-t", tag, "claude"] + workspaces,
+             "--name", name, "-t", tag, sandbox_agent] + workspaces,
             check=True,
         )
 
@@ -399,18 +405,17 @@ class DockerSandbox(SandboxBackend):
         print(f"ralph: synced commits to {work_dir}")
         return True
 
-    _BASE_ALLOWED_HOSTS = (
-        "localhost",
-        "api.anthropic.com",
-        "statsig.anthropic.com",
-        "sentry.io",
-    )
+    def apply_network_policy(self, name, allowed_hosts):
+        """Apply deny-by-default network policy with allowed hosts.
 
-    def apply_network_policy(self, name):
-        """Apply deny-by-default network policy with allowed hosts."""
+        allowed_hosts is the list of hosts from the agent config's
+        allowed_hosts field.  Project-level hosts from the constructor
+        are appended.  "localhost" is always included.
+        """
         cmd = ["docker", "sandbox", "network", "proxy", name,
-               "--policy", "deny"]
-        for host in self._BASE_ALLOWED_HOSTS + self.allowed_hosts:
+               "--policy", "deny",
+               "--allow-host", "localhost"]
+        for host in list(allowed_hosts) + list(self.allowed_hosts):
             cmd.extend(["--allow-host", host])
         subprocess.run(cmd, check=True)
 
@@ -424,6 +429,7 @@ class DockerSandbox(SandboxBackend):
         workspace so the worktree's .git pointer resolves inside the sandbox.
         Returns the sandbox name.
         """
+        agent_config = get_agent(agent)
         name = self.sandbox_name(agent, branch)
         self._worktree_path = worktree_path
         if self.sandbox_exists(name):
@@ -437,8 +443,9 @@ class DockerSandbox(SandboxBackend):
             tag = base_tag
         git_common_dir = self._resolve_git_common_dir(worktree_path)
         print(f"ralph: creating sandbox {name}...")
-        self._docker_sandbox_create(name, tag, worktree_path, git_common_dir)
-        self.apply_network_policy(name)
+        self._docker_sandbox_create(name, tag, worktree_path, git_common_dir,
+                                    sandbox_agent=agent_config["sandbox_agent"])
+        self.apply_network_policy(name, agent_config["allowed_hosts"])
         return name
 
     @staticmethod
@@ -511,14 +518,20 @@ class DockerSandbox(SandboxBackend):
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False,
         )
 
-    def run_iteration(self, sandbox_name, spec_content, model, env_vars=None):
-        """Run a single Claude Code iteration inside the sandbox.
+    def run_iteration(self, sandbox_name, spec_content, model, env_vars=None,
+                      agent="claude", api_key=None):
+        """Run a single agent iteration inside the sandbox.
 
-        Writes spec content to /tmp/spec.md inside the sandbox, runs claude
-        with the iteration prompt, then reads back the (possibly updated) spec.
+        Writes spec content to /tmp/spec.md inside the sandbox, runs the
+        agent CLI with the iteration prompt, then reads back the (possibly
+        updated) spec.
+
+        For cursor agent, the API key is delivered via a secret file that
+        is read into an env var and deleted before the agent process starts.
 
         Returns (exit_code, updated_spec_content).
         """
+        agent_config = get_agent(agent)
         spec_path = "/tmp/spec.md"
 
         # Write spec into sandbox (-i keeps stdin open for piping)
@@ -531,20 +544,53 @@ class DockerSandbox(SandboxBackend):
         if write_proc.returncode != 0:
             return write_proc.returncode, spec_content
 
-        # Run claude with iteration prompt
-        cmd = ["docker", "sandbox", "exec",
-               "-w", self._worktree_path]
-        if env_vars:
-            for k, v in env_vars.items():
-                cmd.extend(["-e", f"{k}={v}"])
-        cmd.extend([
-            sandbox_name, "claude",
-            "-p", self.ITERATION_PROMPT,
-            "--model", model,
-            "--dangerously-skip-permissions",
-            "--effort", "high",
-        ])
-        rc = subprocess.run(cmd, check=False).returncode
+        # For non-proxy agents, write the API key to a secret file
+        secret_path = "/tmp/.agent-api-key"
+        if not agent_config["uses_proxy"] and api_key:
+            key_proc = subprocess.run(
+                ["docker", "sandbox", "exec", "-i", sandbox_name,
+                 "tee", secret_path],
+                input=api_key, text=True, check=False,
+                stdout=subprocess.DEVNULL,
+            )
+            if key_proc.returncode != 0:
+                return key_proc.returncode, spec_content
+
+        # Build the agent command
+        cli_command = agent_config["cli_command"]
+        cli_flags = agent_config["cli_flags"](model)
+
+        if agent_config["uses_proxy"]:
+            # Direct exec: docker sandbox exec ... <cli_command> -p <prompt> --model <model> <flags>
+            cmd = ["docker", "sandbox", "exec",
+                   "-w", self._worktree_path]
+            if env_vars:
+                for k, v in env_vars.items():
+                    cmd.extend(["-e", f"{k}={v}"])
+            cmd.extend([
+                sandbox_name, cli_command,
+                "-p", self.ITERATION_PROMPT,
+                "--model", model,
+            ] + cli_flags)
+            rc = subprocess.run(cmd, check=False).returncode
+        else:
+            # Secret file lifecycle: read key into env var, delete file,
+            # then exec the agent (exec replaces the shell, so the key
+            # exists only in the agent process's environment).
+            env_var_name = agent_config["env_var_name"]
+            inner_cmd = (
+                f'export {env_var_name}="$(cat {secret_path})" && '
+                f"rm {secret_path} && "
+                f"exec {cli_command} -p "
+                + shlex.quote(self.ITERATION_PROMPT)
+                + f" --model {shlex.quote(model)}"
+            )
+            for flag in cli_flags:
+                inner_cmd += f" {shlex.quote(flag)}"
+            cmd = ["docker", "sandbox", "exec",
+                   "-w", self._worktree_path,
+                   sandbox_name, "sh", "-c", inner_cmd]
+            rc = subprocess.run(cmd, check=False).returncode
 
         # Read back (possibly updated) spec
         read_proc = subprocess.run(

@@ -4,6 +4,7 @@ import os
 import subprocess
 import time
 
+from ralph.agents import get_agent
 from ralph.proxy import (
     MODEL_ALIASES, proxy_port_for_agent, proxy_health_check,
     ensure_proxy, stop_proxy,
@@ -146,8 +147,10 @@ def _selftest_docker(sandbox, agent, sandbox_name, port, report):
     try:
         sandbox.remove_sandbox(sandbox_name)
         git_common_dir = DockerSandbox._resolve_git_common_dir(os.getcwd())
+        agent_config = get_agent(agent)
         sandbox._docker_sandbox_create(sandbox_name, tag, os.getcwd(),
-                                       git_common_dir)
+                                       git_common_dir,
+                                       sandbox_agent=agent_config["sandbox_agent"])
         report("create sandbox", True, sandbox_name)
     except Exception as e:
         report("create sandbox", False, str(e))
@@ -156,7 +159,8 @@ def _selftest_docker(sandbox, agent, sandbox_name, port, report):
 
     # 5. Apply network policy
     try:
-        sandbox.apply_network_policy(sandbox_name)
+        sandbox.apply_network_policy(sandbox_name,
+                                       agent_config["allowed_hosts"])
         report("network policy", True)
     except Exception as e:
         report("network policy", False, str(e))

@@ -6,6 +6,7 @@ from dotlib import DOTFILES_DIR
 from dotlib.git import Git
 from ralph.github import GitHub
 from ralph.loop import process_issue, poll_loop
+from ralph.agents import get_agent
 from ralph.orchestration import check_dependencies_prereq
 from ralph.proxy import ensure_proxy, proxy_port_for_agent, start_proxy_keepalive
 from ralph.sandbox.docker import DockerSandbox
@@ -38,7 +39,7 @@ Options:
   --timeout <duration>  Limit poll duration (e.g. 30m, 4h, 1d; requires --poll)
   --push                Git push after each iteration
   --rebuild             Force re-pull base image and rebuild sandbox
-  --model <model>       Claude model (default: sonnet)
+  --model <model>       Model name (default: per-agent, e.g. sonnet for claude)
   -h, --help            Show usage"""
 
 
@@ -162,7 +163,7 @@ def main():
     push = False
     rebuild = False
     timeout_val = 0
-    model = "sonnet"
+    model = None
     issue_number = ""
     poll = False
     interval = 30
@@ -226,6 +227,11 @@ def main():
         else:
             print(f"ralph: unknown option: {arg}", file=sys.stderr)
             usage(1)
+    # Resolve default model from agent config if not explicitly set
+    agent_config = get_agent(agent)
+    if model is None:
+        model = agent_config["default_model"]
+
     # Validation
     if poll and issue_number:
         print("ralph: --poll and --issue cannot be used together", file=sys.stderr)
@@ -248,12 +254,16 @@ def main():
 
     # Auth — ensure valid token exists before starting proxy
     # (auto-runs claude setup-token if missing/expired)
-    ensure_token(agent)
+    token = ensure_token(agent)
 
-    # Start proxy (reads token from Keychain internally)
-    proxy_port = proxy_port_for_agent(agent)
-    ensure_proxy(agent, proxy_port, DOTFILES_DIR)
-    start_proxy_keepalive(proxy_port)
+    # Start proxy for agents that need it (e.g. claude).
+    # Non-proxy agents (e.g. cursor) inject credentials via secret file.
+    if agent_config["uses_proxy"]:
+        proxy_port = proxy_port_for_agent(agent)
+        ensure_proxy(agent, proxy_port, DOTFILES_DIR)
+        start_proxy_keepalive(proxy_port)
+    else:
+        proxy_port = None
 
     # Git user config
     git = Git()
@@ -265,12 +275,12 @@ def main():
     if issue_number:
         rc = process_issue(int(issue_number), git, DOTFILES_DIR, gh, agent,
                            push, model, git_user, git_email, proxy_port,
-                           rebuild=rebuild)
+                           token, rebuild=rebuild)
         sys.exit(rc)
 
     # Poll mode
     if poll:
         poll_loop(git, DOTFILES_DIR, gh, agent, push, model, git_user,
-                  git_email, proxy_port, interval, timeout_val,
+                  git_email, proxy_port, token, interval, timeout_val,
                   rebuild=rebuild)
         sys.exit(0)

@@ -73,14 +73,13 @@ class TestMainTokenSubcommands:
 # ---------------------------------------------------------------------------
 
 class TestMainSandboxFlags:
-    @patch("ralph.cli.sys.argv", ["ralph", "--issue", "42", "--agent", "codex"])
+    @patch("ralph.cli.sys.argv", ["ralph", "--issue", "42", "--agent", "cursor"])
     @patch("ralph.cli.process_issue", return_value=0)
     @patch("ralph.cli.ensure_token", return_value="sk-test")
-    @patch("ralph.cli.ensure_proxy", return_value=18080)
     @patch("ralph.cli.Git")
     @patch("ralph.cli.check_dependencies_prereq")
     def test_agent_flag_passed_through(self, mock_prereq,
-                                       mock_git_cls, mock_proxy,
+                                       mock_git_cls,
                                        mock_token, mock_process):
         mock_git_cls.return_value = MagicMock(
             output=MagicMock(return_value="user"))
@@ -88,14 +87,15 @@ class TestMainSandboxFlags:
             main()
         assert exc_info.value.code == 0
 
-        # Verify ensure_token called with agent "codex"
-        mock_token.assert_called_once_with("codex")
+        # Verify ensure_token called with agent "cursor"
+        mock_token.assert_called_once_with("cursor")
 
-        # Verify process_issue called with agent "codex", proxy_port, and rebuild
+        # Verify process_issue called with agent "cursor", proxy_port=None, token, and rebuild
         call_args = mock_process.call_args[0]
         call_kwargs = mock_process.call_args[1]
-        assert call_args[4] == "codex"  # agent parameter
-        assert call_args[9] == 18080  # proxy_port (not an oauth token string)
+        assert call_args[4] == "cursor"  # agent parameter
+        assert call_args[9] is None  # proxy_port is None for non-proxy agents
+        assert call_args[10] == "sk-test"  # token passed through
         assert call_kwargs.get("rebuild") is False
 
     @patch("ralph.cli.sys.argv", ["ralph", "--issue", "42", "--rebuild"])
@@ -153,6 +153,111 @@ class TestMainSandboxFlags:
         with pytest.raises(SystemExit) as exc_info:
             main()
         assert exc_info.value.code == 1
+
+    @patch("ralph.cli.sys.argv", ["ralph", "--issue", "42", "--agent", "cursor"])
+    @patch("ralph.cli.process_issue", return_value=0)
+    @patch("ralph.cli.ensure_token", return_value="sk-test")
+    @patch("ralph.cli.ensure_proxy")
+    @patch("ralph.cli.start_proxy_keepalive")
+    @patch("ralph.cli.Git")
+    @patch("ralph.cli.check_dependencies_prereq")
+    def test_cursor_skips_proxy(self, mock_prereq, mock_git_cls,
+                                mock_keepalive, mock_proxy,
+                                mock_token, mock_process):
+        mock_git_cls.return_value = MagicMock(
+            output=MagicMock(return_value="user"))
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+        assert exc_info.value.code == 0
+
+        # Proxy should not be started for cursor
+        mock_proxy.assert_not_called()
+        mock_keepalive.assert_not_called()
+
+        # process_issue gets proxy_port=None, token="sk-test"
+        call_args = mock_process.call_args[0]
+        assert call_args[9] is None
+        assert call_args[10] == "sk-test"
+
+    @patch("ralph.cli.sys.argv", ["ralph", "--issue", "42", "--agent", "claude"])
+    @patch("ralph.cli.process_issue", return_value=0)
+    @patch("ralph.cli.ensure_token", return_value="sk-test")
+    @patch("ralph.cli.ensure_proxy")
+    @patch("ralph.cli.start_proxy_keepalive")
+    @patch("ralph.cli.proxy_port_for_agent", return_value=18080)
+    @patch("ralph.cli.Git")
+    @patch("ralph.cli.check_dependencies_prereq")
+    def test_claude_starts_proxy(self, mock_prereq, mock_git_cls,
+                                 mock_port, mock_keepalive, mock_proxy,
+                                 mock_token, mock_process):
+        mock_git_cls.return_value = MagicMock(
+            output=MagicMock(return_value="user"))
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+        assert exc_info.value.code == 0
+
+        # Proxy should be started for claude
+        mock_port.assert_called_once_with("claude")
+        mock_proxy.assert_called_once()
+        mock_keepalive.assert_called_once_with(18080)
+
+        # process_issue gets proxy_port=18080, token="sk-test"
+        call_args = mock_process.call_args[0]
+        assert call_args[9] == 18080
+        assert call_args[10] == "sk-test"
+
+
+# ---------------------------------------------------------------------------
+# main() — default model handling
+# ---------------------------------------------------------------------------
+
+class TestMainDefaultModel:
+    @patch("ralph.cli.sys.argv", ["ralph", "--issue", "42"])
+    @patch("ralph.cli.process_issue", return_value=0)
+    @patch("ralph.cli.ensure_token", return_value="sk-test")
+    @patch("ralph.cli.ensure_proxy", return_value=18080)
+    @patch("ralph.cli.Git")
+    @patch("ralph.cli.check_dependencies_prereq")
+    def test_claude_defaults_to_sonnet(self, mock_prereq, mock_git_cls,
+                                       mock_proxy, mock_token, mock_process):
+        mock_git_cls.return_value = MagicMock(
+            output=MagicMock(return_value="user"))
+        with pytest.raises(SystemExit):
+            main()
+        # model is positional arg 5 (index 5) in process_issue call
+        call_args = mock_process.call_args[0]
+        assert call_args[6] == "sonnet"  # model parameter
+
+    @patch("ralph.cli.sys.argv", ["ralph", "--issue", "42", "--agent", "cursor"])
+    @patch("ralph.cli.process_issue", return_value=0)
+    @patch("ralph.cli.ensure_token", return_value="sk-test")
+    @patch("ralph.cli.Git")
+    @patch("ralph.cli.check_dependencies_prereq")
+    def test_cursor_defaults_to_auto(self, mock_prereq, mock_git_cls,
+                                      mock_token, mock_process):
+        mock_git_cls.return_value = MagicMock(
+            output=MagicMock(return_value="user"))
+        with pytest.raises(SystemExit):
+            main()
+        call_args = mock_process.call_args[0]
+        assert call_args[6] == "auto"  # model parameter
+
+    @patch("ralph.cli.sys.argv",
+           ["ralph", "--issue", "42", "--agent", "cursor", "--model", "gpt-5"])
+    @patch("ralph.cli.process_issue", return_value=0)
+    @patch("ralph.cli.ensure_token", return_value="sk-test")
+    @patch("ralph.cli.Git")
+    @patch("ralph.cli.check_dependencies_prereq")
+    def test_explicit_model_overrides_agent_default(self, mock_prereq,
+                                                     mock_git_cls,
+                                                     mock_token,
+                                                     mock_process):
+        mock_git_cls.return_value = MagicMock(
+            output=MagicMock(return_value="user"))
+        with pytest.raises(SystemExit):
+            main()
+        call_args = mock_process.call_args[0]
+        assert call_args[6] == "gpt-5"  # model parameter
 
 
 # ---------------------------------------------------------------------------

@@ -714,8 +714,10 @@ class TestSandboxEnsureSandbox:
         assert name == "agent-loop-claude-fix-auth"
         mock_create.assert_called_once_with(
             "agent-loop-claude-fix-auth", "agent-loop-sandbox-claude:vabc",
-            "/work/fix-auth", "/repo/.git")
-        mock_policy.assert_called_once_with("agent-loop-claude-fix-auth")
+            "/work/fix-auth", "/repo/.git", sandbox_agent="claude")
+        mock_policy.assert_called_once_with(
+            "agent-loop-claude-fix-auth",
+            ["api.anthropic.com", "statsig.anthropic.com", "sentry.io"])
 
     @patch.object(DockerSandbox, "sandbox_exists", return_value=True)
     def test_reuses_existing_sandbox(self, mock_exists):
@@ -754,7 +756,7 @@ class TestSandboxEnsureSandbox:
         mock_create.assert_called_once_with(
             "agent-loop-claude-fix-auth",
             "agent-loop-sandbox-claude-myproj:vdef12345",
-            "/work/fix-auth", "/repo/.git")
+            "/work/fix-auth", "/repo/.git", sandbox_agent="claude")
 
     @patch.object(DockerSandbox, "apply_network_policy")
     @patch.object(DockerSandbox, "_docker_sandbox_create")
@@ -771,7 +773,7 @@ class TestSandboxEnsureSandbox:
         mock_create.assert_called_once_with(
             "agent-loop-claude-fix-auth",
             "agent-loop-sandbox-claude:vabc",
-            "/work/fix-auth", "/repo/.git")
+            "/work/fix-auth", "/repo/.git", sandbox_agent="claude")
 
     @patch.object(DockerSandbox, "apply_network_policy")
     @patch.object(DockerSandbox, "_docker_sandbox_create")
@@ -792,6 +794,24 @@ class TestSandboxEnsureSandbox:
             "claude", "agent-loop-sandbox-claude:vabc", "/repo/root",
             force_rebuild=True)
 
+    @patch.object(DockerSandbox, "apply_network_policy")
+    @patch.object(DockerSandbox, "_docker_sandbox_create")
+    @patch.object(DockerSandbox, "_resolve_git_common_dir", return_value="/repo/.git")
+    @patch.object(DockerSandbox, "ensure_image", return_value="agent-loop-sandbox-cursor:vabc")
+    @patch.object(DockerSandbox, "sandbox_exists", return_value=False)
+    def test_cursor_uses_shell_sandbox_agent(self, mock_exists, mock_img,
+                                             mock_resolve, mock_create,
+                                             mock_policy):
+        sb = DockerSandbox("/dotfiles")
+        name = sb.ensure_sandbox("cursor", "fix-auth", "/work/fix-auth")
+        assert name == "agent-loop-cursor-fix-auth"
+        mock_create.assert_called_once_with(
+            "agent-loop-cursor-fix-auth", "agent-loop-sandbox-cursor:vabc",
+            "/work/fix-auth", "/repo/.git", sandbox_agent="shell")
+        mock_policy.assert_called_once_with(
+            "agent-loop-cursor-fix-auth",
+            ["api2.cursor.sh", "api5.cursor.sh", "sentry.io"])
+
 
 # ---------------------------------------------------------------------------
 # DockerSandbox.apply_network_policy
@@ -799,8 +819,9 @@ class TestSandboxEnsureSandbox:
 
 class TestSandboxApplyNetworkPolicy:
     @patch("ralph.sandbox.docker.subprocess.run")
-    def test_correct_command(self, mock_run):
-        DockerSandbox("/dotfiles").apply_network_policy("agent-loop-claude-fix-auth")
+    def test_claude_hosts(self, mock_run):
+        allowed = ["api.anthropic.com", "statsig.anthropic.com", "sentry.io"]
+        DockerSandbox("/dotfiles").apply_network_policy("agent-loop-claude-fix-auth", allowed)
         mock_run.assert_called_once_with(
             ["docker", "sandbox", "network", "proxy", "agent-loop-claude-fix-auth",
              "--policy", "deny",
@@ -812,9 +833,24 @@ class TestSandboxApplyNetworkPolicy:
         )
 
     @patch("ralph.sandbox.docker.subprocess.run")
+    def test_cursor_hosts(self, mock_run):
+        allowed = ["api2.cursor.sh", "api5.cursor.sh", "sentry.io"]
+        DockerSandbox("/dotfiles").apply_network_policy("agent-loop-cursor-fix-auth", allowed)
+        mock_run.assert_called_once_with(
+            ["docker", "sandbox", "network", "proxy", "agent-loop-cursor-fix-auth",
+             "--policy", "deny",
+             "--allow-host", "localhost",
+             "--allow-host", "api2.cursor.sh",
+             "--allow-host", "api5.cursor.sh",
+             "--allow-host", "sentry.io"],
+            check=True,
+        )
+
+    @patch("ralph.sandbox.docker.subprocess.run")
     def test_extra_allowed_hosts(self, mock_run):
         sb = DockerSandbox("/dotfiles", allowed_hosts=["pypi.org", "registry.npmjs.org"])
-        sb.apply_network_policy("agent-loop-claude-fix-auth")
+        sb.apply_network_policy("agent-loop-claude-fix-auth",
+                                ["api.anthropic.com", "statsig.anthropic.com", "sentry.io"])
         mock_run.assert_called_once_with(
             ["docker", "sandbox", "network", "proxy", "agent-loop-claude-fix-auth",
              "--policy", "deny",
@@ -826,6 +862,15 @@ class TestSandboxApplyNetworkPolicy:
              "--allow-host", "registry.npmjs.org"],
             check=True,
         )
+
+    @patch("ralph.sandbox.docker.subprocess.run")
+    def test_localhost_always_included(self, mock_run):
+        DockerSandbox("/dotfiles").apply_network_policy("sandbox", ["example.com"])
+        cmd = mock_run.call_args[0][0]
+        # localhost should appear before the custom host
+        assert "--allow-host" in cmd
+        idx = cmd.index("localhost")
+        assert cmd[idx - 1] == "--allow-host"
 
 
 # ---------------------------------------------------------------------------
@@ -927,6 +972,47 @@ class TestSandboxDockerSandboxLs:
         mock_run.return_value = MagicMock(returncode=0, stdout="not json")
         result = DockerSandbox._docker_sandbox_ls()
         assert result == {"vms": []}
+
+
+# ---------------------------------------------------------------------------
+# DockerSandbox._docker_sandbox_create (mocked subprocess)
+# ---------------------------------------------------------------------------
+
+class TestSandboxDockerSandboxCreate:
+    @patch("ralph.sandbox.docker.subprocess.run")
+    def test_claude_uses_claude_subcommand(self, mock_run):
+        DockerSandbox._docker_sandbox_create(
+            "my-sandbox", "img:v1", "/work", sandbox_agent="claude")
+        cmd = mock_run.call_args[0][0]
+        assert cmd == [
+            "docker", "sandbox", "create",
+            "--name", "my-sandbox", "-t", "img:v1", "claude", "/work"]
+
+    @patch("ralph.sandbox.docker.subprocess.run")
+    def test_cursor_uses_shell_subcommand(self, mock_run):
+        DockerSandbox._docker_sandbox_create(
+            "my-sandbox", "img:v1", "/work", sandbox_agent="shell")
+        cmd = mock_run.call_args[0][0]
+        assert cmd == [
+            "docker", "sandbox", "create",
+            "--name", "my-sandbox", "-t", "img:v1", "shell", "/work"]
+
+    @patch("ralph.sandbox.docker.subprocess.run")
+    def test_defaults_to_claude(self, mock_run):
+        DockerSandbox._docker_sandbox_create("my-sandbox", "img:v1", "/work")
+        cmd = mock_run.call_args[0][0]
+        assert "claude" in cmd
+
+    @patch("ralph.sandbox.docker.subprocess.run")
+    def test_includes_git_common_dir(self, mock_run):
+        DockerSandbox._docker_sandbox_create(
+            "my-sandbox", "img:v1", "/work", "/repo/.git",
+            sandbox_agent="shell")
+        cmd = mock_run.call_args[0][0]
+        assert cmd == [
+            "docker", "sandbox", "create",
+            "--name", "my-sandbox", "-t", "img:v1", "shell",
+            "/work", "/repo/.git"]
 
 
 # ---------------------------------------------------------------------------
@@ -1182,6 +1268,94 @@ class TestSandboxRunIteration:
         rc, _ = sb.run_iteration("my-sandbox", "spec", "sonnet")
         assert rc == 42
 
+    @patch("ralph.sandbox.docker.subprocess.run")
+    def test_cursor_writes_secret_file_and_uses_shell_wrapper(self, mock_run):
+        mock_run.side_effect = [
+            MagicMock(returncode=0),  # write spec
+            MagicMock(returncode=0),  # write api key
+            MagicMock(returncode=0),  # run cursor-agent via sh -c
+            MagicMock(returncode=0, stdout="updated spec"),  # read spec
+        ]
+        sb = DockerSandbox("/dotfiles")
+        sb._worktree_path = "/work/tree"
+        rc, updated = sb.run_iteration(
+            "my-sandbox", "original spec", "auto",
+            agent="cursor", api_key="test-api-key-123")
+        assert rc == 0
+        assert updated == "updated spec"
+
+        # Verify secret file write
+        key_call = mock_run.call_args_list[1]
+        assert key_call[1]["input"] == "test-api-key-123"
+        assert "tee" in key_call[0][0]
+        assert "/tmp/.agent-api-key" in key_call[0][0]
+
+        # Verify shell wrapper command
+        agent_call = mock_run.call_args_list[2]
+        cmd = agent_call[0][0]
+        assert "sh" in cmd
+        assert "-c" in cmd
+        inner = cmd[cmd.index("-c") + 1]
+        assert 'CURSOR_API_KEY="$(cat /tmp/.agent-api-key)"' in inner
+        assert "rm /tmp/.agent-api-key" in inner
+        assert "exec cursor-agent" in inner
+        assert "--model auto" in inner
+        assert "--force" in inner
+        assert "--trust" in inner
+        assert "--output-format text" in inner
+
+    @patch("ralph.sandbox.docker.subprocess.run")
+    def test_cursor_no_env_vars_in_docker_exec(self, mock_run):
+        """Cursor agent should not pass env vars via docker exec -e flags."""
+        mock_run.side_effect = [
+            MagicMock(returncode=0),  # write spec
+            MagicMock(returncode=0),  # write api key
+            MagicMock(returncode=0),  # run cursor-agent
+            MagicMock(returncode=0, stdout="spec"),  # read spec
+        ]
+        sb = DockerSandbox("/dotfiles")
+        sb._worktree_path = "/work/tree"
+        sb.run_iteration("my-sandbox", "spec", "auto",
+                         agent="cursor", api_key="key123")
+
+        agent_call = mock_run.call_args_list[2]
+        cmd = agent_call[0][0]
+        assert "-e" not in cmd
+
+    @patch("ralph.sandbox.docker.subprocess.run")
+    def test_cursor_returns_original_spec_on_key_write_failure(self, mock_run):
+        mock_run.side_effect = [
+            MagicMock(returncode=0),  # write spec
+            MagicMock(returncode=1),  # write api key fails
+        ]
+        sb = DockerSandbox("/dotfiles")
+        sb._worktree_path = "/work/tree"
+        rc, updated = sb.run_iteration(
+            "my-sandbox", "original", "auto",
+            agent="cursor", api_key="key123")
+        assert rc == 1
+        assert updated == "original"
+        # Only spec write + key write calls
+        assert mock_run.call_count == 2
+
+    @patch("ralph.sandbox.docker.subprocess.run")
+    def test_cursor_workdir_set_in_exec(self, mock_run):
+        mock_run.side_effect = [
+            MagicMock(returncode=0),  # write spec
+            MagicMock(returncode=0),  # write api key
+            MagicMock(returncode=0),  # run cursor-agent
+            MagicMock(returncode=0, stdout="spec"),  # read spec
+        ]
+        sb = DockerSandbox("/dotfiles")
+        sb._worktree_path = "/work/my-project"
+        sb.run_iteration("my-sandbox", "spec", "auto",
+                         agent="cursor", api_key="key")
+
+        agent_call = mock_run.call_args_list[2]
+        cmd = agent_call[0][0]
+        assert "-w" in cmd
+        assert cmd[cmd.index("-w") + 1] == "/work/my-project"
+
 
 # ---------------------------------------------------------------------------
 # DockerSandbox.sync_to_host
@@ -1222,7 +1396,7 @@ class TestIterationPrompt:
         assert "Spec maintenance rules" in DockerSandbox.ITERATION_PROMPT
 
     def test_contains_step_structure(self):
-        assert "Each step follows this structure" in DockerSandbox.ITERATION_PROMPT
+        assert "For each task, follow this workflow" in DockerSandbox.ITERATION_PROMPT
 
     def test_contains_unfulfillable_tasks_section(self):
         assert "Unfulfillable tasks" in DockerSandbox.ITERATION_PROMPT

@@ -17,6 +17,7 @@ from ralph.token import (
     write_token_to_keychain,
     format_expiry_date,
     run_claude_setup_token,
+    prompt_for_api_key,
     _parse_and_store_token,
     store_token,
     check_token,
@@ -216,13 +217,12 @@ class TestStoreToken:
             store_token("claude")
         assert exc_info.value.code == 1
 
-    @_mock_validation_success()
     @patch("ralph.token.write_token_to_keychain")
     @patch("ralph.token.time.time", return_value=1700000000.0)
-    @patch("ralph.token.sys.stdin", new_callable=lambda: io.StringIO("sk-token"))
-    def test_uses_correct_agent(self, mock_stdin, mock_time, mock_write, mock_validate):
-        store_token("codex")
-        assert mock_write.call_args[0][0] == "codex"
+    @patch("ralph.token.sys.stdin", new_callable=lambda: io.StringIO("cur_token"))
+    def test_uses_correct_agent(self, mock_stdin, mock_time, mock_write):
+        store_token("cursor")
+        assert mock_write.call_args[0][0] == "cursor"
 
     @_mock_validation_success()
     @patch("ralph.token.write_token_to_keychain")
@@ -395,7 +395,7 @@ class TestEnsureToken:
         ensure_token("claude")
         captured = capsys.readouterr()
         assert "no token found" in captured.err
-        assert "running claude setup-token" in captured.err
+        assert "requesting new token" in captured.err
 
     @_mock_validation_success()
     @patch("ralph.token.write_token_to_keychain")
@@ -408,7 +408,7 @@ class TestEnsureToken:
         ensure_token("claude")
         captured = capsys.readouterr()
         assert "token expired" in captured.err
-        assert "running claude setup-token" in captured.err
+        assert "requesting new token" in captured.err
 
     @patch("ralph.token.read_token_from_keychain")
     @patch("ralph.token.time.time", return_value=1700000000.0)
@@ -437,3 +437,174 @@ class TestTokenRoundTrip:
         assert data["accessToken"] == "sk-round-trip-token"
         assert isinstance(data["expiresAt"], int)
         assert data["expiresAt"] > 1700000000000
+
+
+# ---------------------------------------------------------------------------
+# prompt_for_api_key (cursor-specific)
+# ---------------------------------------------------------------------------
+
+class TestPromptForApiKey:
+    @patch("builtins.input", return_value="cur_abc123xyz")
+    def test_returns_api_key(self, mock_input, capsys):
+        result = prompt_for_api_key("cursor")
+        assert result == "cur_abc123xyz"
+        captured = capsys.readouterr()
+        assert "Enter your cursor API key" in captured.err
+
+    @patch("builtins.input", return_value="  cur_abc123xyz  ")
+    def test_strips_whitespace(self, mock_input):
+        result = prompt_for_api_key("cursor")
+        assert result == "cur_abc123xyz"
+
+    @patch("builtins.input", return_value="")
+    def test_empty_input_exits(self, mock_input):
+        with pytest.raises(SystemExit) as exc_info:
+            prompt_for_api_key("cursor")
+        assert exc_info.value.code == 1
+
+    @patch("builtins.input", side_effect=EOFError)
+    def test_eof_exits(self, mock_input):
+        with pytest.raises(SystemExit) as exc_info:
+            prompt_for_api_key("cursor")
+        assert exc_info.value.code == 1
+
+
+# ---------------------------------------------------------------------------
+# store_token — cursor agent (no proxy, no validation)
+# ---------------------------------------------------------------------------
+
+class TestStoreTokenCursor:
+    @patch("ralph.token.write_token_to_keychain")
+    @patch("ralph.token.time.time", return_value=1700000000.0)
+    @patch("ralph.token.sys.stdin", new_callable=lambda: io.StringIO("cur_abc123"))
+    def test_bare_string_stores_without_validation(self, mock_stdin, mock_time, mock_write):
+        """Cursor tokens skip validation (no subprocess.run for claude)."""
+        store_token("cursor")
+        written_json = mock_write.call_args[0][1]
+        data = json.loads(written_json)
+        assert data["accessToken"] == "cur_abc123"
+        expected_expiry = 1700000000000 + 365 * 86400 * 1000
+        assert data["expiresAt"] == expected_expiry
+
+    @patch("ralph.token.write_token_to_keychain")
+    @patch("ralph.token.time.time", return_value=1700000000.0)
+    @patch("ralph.token.prompt_for_api_key", return_value="cur_interactive")
+    @patch("ralph.token.sys.stdin")
+    def test_interactive_calls_prompt_for_api_key(self, mock_stdin, mock_prompt, mock_time, mock_write):
+        mock_stdin.isatty.return_value = True
+        store_token("cursor")
+        mock_prompt.assert_called_once_with("cursor")
+        written_json = mock_write.call_args[0][1]
+        data = json.loads(written_json)
+        assert data["accessToken"] == "cur_interactive"
+
+    @patch("ralph.token.write_token_to_keychain")
+    @patch("ralph.token.time.time", return_value=1700000000.0)
+    @patch("ralph.token.sys.stdin", new_callable=lambda: io.StringIO("cur_abc123"))
+    def test_prints_confirmation(self, mock_stdin, mock_time, mock_write, capsys):
+        store_token("cursor")
+        captured = capsys.readouterr()
+        assert "ralph: token stored for agent cursor" in captured.out
+        assert "expires" in captured.out
+
+    @patch("ralph.token.write_token_to_keychain")
+    @patch("ralph.token.time.time", return_value=1700000000.0)
+    @patch("ralph.token.sys.stdin", new_callable=lambda: io.StringIO("cur_abc123"))
+    def test_does_not_validate_via_subprocess(self, mock_stdin, mock_time, mock_write):
+        """Cursor tokens should not trigger subprocess validation."""
+        with patch("ralph.token.subprocess.run") as mock_run:
+            store_token("cursor")
+            # subprocess.run should NOT be called for validation
+            mock_run.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# _parse_and_store_token — cursor agent (skips validation)
+# ---------------------------------------------------------------------------
+
+class TestParseAndStoreTokenCursor:
+    @patch("ralph.token.write_token_to_keychain")
+    @patch("ralph.token.time.time", return_value=1700000000.0)
+    def test_skips_validation_for_cursor(self, mock_time, mock_write):
+        with patch("ralph.token.subprocess.run") as mock_run:
+            _parse_and_store_token("cursor", "cur_abc123")
+            mock_run.assert_not_called()
+
+    @patch("ralph.token.write_token_to_keychain")
+    @patch("ralph.token.time.time", return_value=1700000000.0)
+    def test_stores_bare_token(self, mock_time, mock_write):
+        _parse_and_store_token("cursor", "cur_abc123")
+        written_json = mock_write.call_args[0][1]
+        data = json.loads(written_json)
+        assert data["accessToken"] == "cur_abc123"
+
+    @_mock_validation_success()
+    @patch("ralph.token.write_token_to_keychain")
+    @patch("ralph.token.time.time", return_value=1700000000.0)
+    def test_validates_for_claude(self, mock_time, mock_write, mock_run):
+        _parse_and_store_token("claude", "sk-ant-oat01-test")
+        mock_run.assert_called_once()
+        cmd = mock_run.call_args[0][0]
+        assert cmd[0] == "claude"
+
+
+# ---------------------------------------------------------------------------
+# ensure_token — cursor agent
+# ---------------------------------------------------------------------------
+
+class TestEnsureTokenCursor:
+    @patch("ralph.token.read_token_from_keychain")
+    @patch("ralph.token.time.time", return_value=1700000000.0)
+    def test_returns_cached_valid_token(self, mock_time, mock_read):
+        future_ms = 1700000000000 + 30 * 86400 * 1000
+        mock_read.return_value = {"accessToken": "cur_cached", "expiresAt": future_ms}
+        result = ensure_token("cursor")
+        assert result == "cur_cached"
+
+    @patch("ralph.token.write_token_to_keychain")
+    @patch("ralph.token.prompt_for_api_key", return_value="cur_fresh")
+    @patch("ralph.token.read_token_from_keychain", return_value=None)
+    @patch("ralph.token.time.time", return_value=1700000000.0)
+    def test_prompts_when_missing(self, mock_time, mock_read, mock_prompt, mock_write):
+        result = ensure_token("cursor")
+        assert result == "cur_fresh"
+        mock_prompt.assert_called_once_with("cursor")
+
+    @patch("ralph.token.write_token_to_keychain")
+    @patch("ralph.token.prompt_for_api_key", return_value="cur_renewed")
+    @patch("ralph.token.read_token_from_keychain")
+    @patch("ralph.token.time.time", return_value=1700000000.0)
+    def test_prompts_when_expired(self, mock_time, mock_read, mock_prompt, mock_write):
+        past_ms = 1700000000000 - 86400 * 1000
+        mock_read.return_value = {"accessToken": "cur_old", "expiresAt": past_ms}
+        result = ensure_token("cursor")
+        assert result == "cur_renewed"
+        mock_prompt.assert_called_once_with("cursor")
+
+    @patch("ralph.token.write_token_to_keychain")
+    @patch("ralph.token.prompt_for_api_key", return_value="cur_fresh")
+    @patch("ralph.token.read_token_from_keychain", return_value=None)
+    @patch("ralph.token.time.time", return_value=1700000000.0)
+    def test_does_not_call_claude_setup(self, mock_time, mock_read, mock_prompt, mock_write):
+        with patch("ralph.token.run_claude_setup_token") as mock_setup:
+            ensure_token("cursor")
+            mock_setup.assert_not_called()
+
+    @patch("ralph.token.write_token_to_keychain")
+    @patch("ralph.token.prompt_for_api_key", return_value="cur_fresh")
+    @patch("ralph.token.read_token_from_keychain", return_value=None)
+    @patch("ralph.token.time.time", return_value=1700000000.0)
+    def test_missing_token_prints_status(self, mock_time, mock_read, mock_prompt, mock_write, capsys):
+        ensure_token("cursor")
+        captured = capsys.readouterr()
+        assert "no token found" in captured.err
+        assert "requesting new token" in captured.err
+
+    @patch("ralph.token.read_token_from_keychain")
+    @patch("ralph.token.time.time", return_value=1700000000.0)
+    def test_valid_token_does_not_prompt(self, mock_time, mock_read):
+        future_ms = 1700000000000 + 30 * 86400 * 1000
+        mock_read.return_value = {"accessToken": "cur_cached", "expiresAt": future_ms}
+        with patch("ralph.token.prompt_for_api_key") as mock_prompt:
+            ensure_token("cursor")
+            mock_prompt.assert_not_called()
