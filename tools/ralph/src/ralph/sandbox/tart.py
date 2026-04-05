@@ -221,23 +221,88 @@ class TartSandbox(SandboxBackend):
         common = os.path.dirname(os.path.dirname(gitdir))
         return os.path.realpath(common)
 
+    def _wait_for_virtiofs_mounts(self, sandbox_name, mount_paths, timeout=30):
+        """Poll until all expected VirtioFS mount paths exist inside the VM.
+
+        VirtioFS mounts may not be immediately available after the guest agent
+        responds.  This waits until each path in mount_paths is reachable
+        inside the VM, or raises RuntimeError on timeout.
+        """
+        deadline = time.time() + timeout
+        remaining = set(mount_paths)
+        while remaining and time.time() < deadline:
+            still_missing = set()
+            for path in remaining:
+                result = subprocess.run(
+                    ["tart", "exec", sandbox_name, "test", "-d", path],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    check=False,
+                )
+                if result.returncode != 0:
+                    still_missing.add(path)
+            remaining = still_missing
+            if remaining:
+                time.sleep(1)
+        if remaining:
+            raise RuntimeError(
+                f"ralph: VirtioFS mounts not available in VM {sandbox_name} "
+                f"after {timeout}s: {', '.join(sorted(remaining))}")
+
     def _setup_git_common_dir_symlink(self, sandbox_name, git_common_dir):
         """Create a symlink inside the VM so the worktree .git pointer resolves.
 
         VirtioFS mounts the git common dir at /Volumes/My Shared Files/gitdir,
         but the worktree's .git file contains the host's absolute path. This
         creates the host path as a symlink to the VirtioFS mount so git can
-        follow the pointer.
+        follow the pointer.  Uses ln -sfn so it works both on fresh VMs and
+        when re-establishing the symlink on a reused VM.
         """
         parent = os.path.dirname(git_common_dir)
-        subprocess.run(
+        result = subprocess.run(
             ["tart", "exec", sandbox_name,
              "bash", "-c", f"mkdir -p {shlex.quote(parent)} && "
-             f"ln -s {shlex.quote(self.SHARED_DIR_GITDIR)} "
+             f"ln -sfn {shlex.quote(self.SHARED_DIR_GITDIR)} "
              f"{shlex.quote(git_common_dir)}"],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
             check=False,
         )
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"ralph: failed to create git symlink in VM {sandbox_name}: "
+                f"{result.stderr.strip()}")
+
+    def _verify_git_in_sandbox(self, sandbox_name):
+        """Verify that git works inside the VM workspace.
+
+        Runs 'git status' in the shared workspace directory.  If git cannot
+        resolve the worktree's .git pointer, this will fail — catching
+        broken symlinks or missing mounts before Claude Code runs.
+        """
+        result = subprocess.run(
+            ["tart", "exec", sandbox_name,
+             "bash", "-c", f"cd {shlex.quote(self.SHARED_DIR)} && git status"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"ralph: git not functional in VM {sandbox_name} workspace: "
+                f"{result.stderr.strip()}")
+
+    def _setup_worktree_git(self, sandbox_name, git_common_dir):
+        """Wait for VirtioFS mounts, create the git symlink, and verify git.
+
+        Called both when creating a new VM and when reusing a running one,
+        to ensure the worktree's git pointer chain is functional.
+        """
+        mounts = [self.SHARED_DIR]
+        if git_common_dir:
+            mounts.append(self.SHARED_DIR_GITDIR)
+        self._wait_for_virtiofs_mounts(sandbox_name, mounts)
+
+        if git_common_dir:
+            self._setup_git_common_dir_symlink(sandbox_name, git_common_dir)
+            self._verify_git_in_sandbox(sandbox_name)
 
     def ensure_sandbox(self, agent, branch, worktree_path, **kwargs):
         """Ensure a per-branch VM exists and is running. Returns VM name.
@@ -252,9 +317,13 @@ class TartSandbox(SandboxBackend):
         """
         name = self.sandbox_name(agent, branch)
         state = self._vm_state(name)
+        git_common_dir = self._resolve_git_common_dir(worktree_path)
 
         if state == "Running":
             print(f"ralph: reusing running VM {name}")
+            # Re-establish the git symlink — VirtioFS mounts may have
+            # changed between sessions or the previous symlink may be stale
+            self._setup_worktree_git(name, git_common_dir)
             self._touch_sandbox_timestamp(name)
             return name
 
@@ -274,9 +343,6 @@ class TartSandbox(SandboxBackend):
         print(f"ralph: cloning VM {name} from template {template}")
         subprocess.run(["tart", "clone", template, name], check=True)
 
-        # Resolve git common dir for worktrees
-        git_common_dir = self._resolve_git_common_dir(worktree_path)
-
         # Start headless with directory sharing
         print(f"ralph: starting VM {name}")
         run_cmd = ["tart", "run", name, "--no-graphics",
@@ -295,10 +361,7 @@ class TartSandbox(SandboxBackend):
             TartSandbox._atexit_registered = True
 
         self._wait_for_guest_agent(name)
-
-        # Create symlink inside VM so the worktree's .git file resolves
-        if git_common_dir:
-            self._setup_git_common_dir_symlink(name, git_common_dir)
+        self._setup_worktree_git(name, git_common_dir)
 
         self._touch_sandbox_timestamp(name)
         return name

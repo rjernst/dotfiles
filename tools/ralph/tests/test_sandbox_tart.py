@@ -360,13 +360,16 @@ class TestTartEnsureSandbox:
         config.update(kwargs)
         return TartSandbox("/dotfiles", config=config)
 
+    @patch.object(TartSandbox, "_setup_worktree_git")
+    @patch.object(TartSandbox, "_resolve_git_common_dir", return_value=None)
     @patch.object(TartSandbox, "_wait_for_guest_agent")
     @patch("ralph.sandbox.tart.subprocess.Popen")
     @patch("ralph.sandbox.tart.subprocess.run")
     @patch.object(TartSandbox, "ensure_image", return_value="template-name")
     @patch.object(TartSandbox, "_check_vm_limit")
     @patch.object(TartSandbox, "_vm_state", return_value=None)
-    def test_creates_new_vm(self, _state, _limit, _ensure, mock_run, mock_popen, _wait):
+    def test_creates_new_vm(self, _state, _limit, _ensure, mock_run, mock_popen,
+                            _wait, _resolve, _setup_wt):
         mock_popen.return_value = MagicMock()
         t = self._make()
         name = t.ensure_sandbox("claude", "my-branch", "/work/my-branch")
@@ -382,12 +385,24 @@ class TestTartEnsureSandbox:
         assert popen_args[:4] == ["tart", "run", name, "--no-graphics"]
         assert f"--dir=workspace:/work/my-branch" in popen_args
 
+    @patch.object(TartSandbox, "_setup_worktree_git")
+    @patch.object(TartSandbox, "_resolve_git_common_dir", return_value=None)
     @patch.object(TartSandbox, "_vm_state", return_value="Running")
-    def test_reuses_running_vm(self, _state):
+    def test_reuses_running_vm(self, _state, _resolve, _setup_wt):
         t = self._make()
         name = t.ensure_sandbox("claude", "my-branch", "/work/my-branch")
         assert name == TartSandbox.sandbox_name("claude", "my-branch")
 
+    @patch.object(TartSandbox, "_setup_worktree_git")
+    @patch.object(TartSandbox, "_resolve_git_common_dir", return_value=None)
+    @patch.object(TartSandbox, "_vm_state", return_value="Running")
+    def test_reuse_calls_setup_worktree_git(self, _state, _resolve, mock_setup_wt):
+        t = self._make()
+        t.ensure_sandbox("claude", "my-branch", "/work/my-branch")
+        mock_setup_wt.assert_called_once()
+
+    @patch.object(TartSandbox, "_setup_worktree_git")
+    @patch.object(TartSandbox, "_resolve_git_common_dir", return_value=None)
     @patch.object(TartSandbox, "_wait_for_guest_agent")
     @patch("ralph.sandbox.tart.subprocess.Popen")
     @patch("ralph.sandbox.tart.subprocess.run")
@@ -395,7 +410,8 @@ class TestTartEnsureSandbox:
     @patch.object(TartSandbox, "_check_vm_limit")
     @patch.object(TartSandbox, "_vm_state", return_value="Stopped")
     def test_deletes_stopped_vm_and_recreates(self, _state, _limit, _ensure,
-                                               mock_run, mock_popen, _wait):
+                                               mock_run, mock_popen, _wait,
+                                               _resolve, _setup_wt):
         mock_popen.return_value = MagicMock()
         t = self._make()
         name = t.ensure_sandbox("claude", "my-branch", "/work/my-branch")
@@ -407,26 +423,159 @@ class TestTartEnsureSandbox:
         clone_call = mock_run.call_args_list[1]
         assert clone_call[0][0] == ["tart", "clone", "template-name", name]
 
+    @patch.object(TartSandbox, "_resolve_git_common_dir", return_value=None)
     @patch.object(TartSandbox, "_vm_state", return_value=None)
     @patch.object(TartSandbox, "_check_vm_limit",
                   side_effect=RuntimeError("too many VMs"))
-    def test_vm_limit_check(self, _limit, _state):
+    def test_vm_limit_check(self, _limit, _state, _resolve):
         t = self._make()
         with pytest.raises(RuntimeError, match="too many VMs"):
             t.ensure_sandbox("claude", "my-branch", "/work/my-branch")
 
+    @patch.object(TartSandbox, "_setup_worktree_git")
+    @patch.object(TartSandbox, "_resolve_git_common_dir", return_value=None)
     @patch.object(TartSandbox, "_wait_for_guest_agent")
     @patch("ralph.sandbox.tart.subprocess.Popen")
     @patch("ralph.sandbox.tart.subprocess.run")
     @patch.object(TartSandbox, "ensure_image", return_value="template-name")
     @patch.object(TartSandbox, "_check_vm_limit")
     @patch.object(TartSandbox, "_vm_state", return_value=None)
-    def test_stores_vm_proc(self, _state, _limit, _ensure, _run, mock_popen, _wait):
+    def test_stores_vm_proc(self, _state, _limit, _ensure, _run, mock_popen,
+                            _wait, _resolve, _setup_wt):
         vm_proc = MagicMock()
         mock_popen.return_value = vm_proc
         t = self._make()
         name = t.ensure_sandbox("claude", "my-branch", "/work/my-branch")
         assert t._vm_procs[name] is vm_proc
+
+
+# ---------------------------------------------------------------------------
+# TartSandbox._wait_for_virtiofs_mounts
+# ---------------------------------------------------------------------------
+
+class TestTartWaitForVirtioFSMounts:
+    def _make(self):
+        return TartSandbox("/dotfiles", config={"base_image": "img:latest"})
+
+    @patch("ralph.sandbox.tart.subprocess.run")
+    def test_returns_immediately_when_mounts_exist(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=0)
+        t = self._make()
+        t._wait_for_virtiofs_mounts("test-vm", ["/Volumes/My Shared Files/workspace"])
+        # Should have checked the one mount
+        assert mock_run.call_count == 1
+
+    @patch("ralph.sandbox.tart.time.sleep")
+    @patch("ralph.sandbox.tart.time.time")
+    @patch("ralph.sandbox.tart.subprocess.run")
+    def test_polls_until_mount_appears(self, mock_run, mock_time, _sleep):
+        # First check fails, second succeeds
+        mock_run.side_effect = [
+            MagicMock(returncode=1),  # not ready
+            MagicMock(returncode=0),  # ready
+        ]
+        mock_time.side_effect = [0, 5, 10]
+        t = self._make()
+        t._wait_for_virtiofs_mounts("test-vm", ["/Volumes/My Shared Files/workspace"],
+                                    timeout=30)
+
+    @patch("ralph.sandbox.tart.time.sleep")
+    @patch("ralph.sandbox.tart.time.time")
+    @patch("ralph.sandbox.tart.subprocess.run")
+    def test_timeout_raises(self, mock_run, mock_time, _sleep):
+        mock_run.return_value = MagicMock(returncode=1)
+        mock_time.side_effect = [0, 10, 20, 31]
+        t = self._make()
+        with pytest.raises(RuntimeError, match="VirtioFS mounts not available"):
+            t._wait_for_virtiofs_mounts("test-vm",
+                                        ["/Volumes/My Shared Files/workspace"],
+                                        timeout=30)
+
+
+# ---------------------------------------------------------------------------
+# TartSandbox._setup_git_common_dir_symlink
+# ---------------------------------------------------------------------------
+
+class TestTartSetupGitCommonDirSymlink:
+    def _make(self):
+        return TartSandbox("/dotfiles", config={"base_image": "img:latest"})
+
+    @patch("ralph.sandbox.tart.subprocess.run")
+    def test_success(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+        t = self._make()
+        t._setup_git_common_dir_symlink("test-vm", "/Users/me/repo/.git")
+        cmd = mock_run.call_args[0][0]
+        assert cmd[:3] == ["tart", "exec", "test-vm"]
+        # Should use ln -sfn for idempotent symlink creation
+        bash_cmd = cmd[5]
+        assert "ln -sfn" in bash_cmd
+
+    @patch("ralph.sandbox.tart.subprocess.run")
+    def test_failure_raises(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="permission denied")
+        t = self._make()
+        with pytest.raises(RuntimeError, match="failed to create git symlink"):
+            t._setup_git_common_dir_symlink("test-vm", "/Users/me/repo/.git")
+
+
+# ---------------------------------------------------------------------------
+# TartSandbox._verify_git_in_sandbox
+# ---------------------------------------------------------------------------
+
+class TestTartVerifyGitInSandbox:
+    def _make(self):
+        return TartSandbox("/dotfiles", config={"base_image": "img:latest"})
+
+    @patch("ralph.sandbox.tart.subprocess.run")
+    def test_success(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+        t = self._make()
+        t._verify_git_in_sandbox("test-vm")  # should not raise
+
+    @patch("ralph.sandbox.tart.subprocess.run")
+    def test_failure_raises(self, mock_run):
+        mock_run.return_value = MagicMock(
+            returncode=128, stdout="",
+            stderr="fatal: not a git repository")
+        t = self._make()
+        with pytest.raises(RuntimeError, match="git not functional"):
+            t._verify_git_in_sandbox("test-vm")
+
+
+# ---------------------------------------------------------------------------
+# TartSandbox._setup_worktree_git
+# ---------------------------------------------------------------------------
+
+class TestTartSetupWorktreeGit:
+    def _make(self):
+        return TartSandbox("/dotfiles", config={"base_image": "img:latest"})
+
+    @patch.object(TartSandbox, "_verify_git_in_sandbox")
+    @patch.object(TartSandbox, "_setup_git_common_dir_symlink")
+    @patch.object(TartSandbox, "_wait_for_virtiofs_mounts")
+    def test_with_git_common_dir(self, mock_wait, mock_symlink, mock_verify):
+        t = self._make()
+        t._setup_worktree_git("test-vm", "/Users/me/repo/.git")
+        # Should wait for both workspace and gitdir mounts
+        mounts = mock_wait.call_args[0][1]
+        assert TartSandbox.SHARED_DIR in mounts
+        assert TartSandbox.SHARED_DIR_GITDIR in mounts
+        mock_symlink.assert_called_once()
+        mock_verify.assert_called_once()
+
+    @patch.object(TartSandbox, "_verify_git_in_sandbox")
+    @patch.object(TartSandbox, "_setup_git_common_dir_symlink")
+    @patch.object(TartSandbox, "_wait_for_virtiofs_mounts")
+    def test_without_git_common_dir(self, mock_wait, mock_symlink, mock_verify):
+        t = self._make()
+        t._setup_worktree_git("test-vm", None)
+        # Should only wait for workspace mount
+        mounts = mock_wait.call_args[0][1]
+        assert TartSandbox.SHARED_DIR in mounts
+        assert TartSandbox.SHARED_DIR_GITDIR not in mounts
+        mock_symlink.assert_not_called()
+        mock_verify.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
