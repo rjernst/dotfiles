@@ -507,9 +507,10 @@ class TestTartSetupGitCommonDirSymlink:
         t._setup_git_common_dir_symlink("test-vm", "/Users/me/repo/.git")
         cmd = mock_run.call_args[0][0]
         assert cmd[:3] == ["tart", "exec", "test-vm"]
-        # Should use ln -sfn for idempotent symlink creation
+        # Should use sudo for both mkdir and ln (VM user can't create host paths)
         bash_cmd = cmd[5]
-        assert "ln -sfn" in bash_cmd
+        assert "sudo mkdir -p" in bash_cmd
+        assert "sudo ln -sfn" in bash_cmd
 
     @patch("ralph.sandbox.tart.subprocess.run")
     def test_failure_raises(self, mock_run):

@@ -260,8 +260,8 @@ class TartSandbox(SandboxBackend):
         parent = os.path.dirname(git_common_dir)
         result = subprocess.run(
             ["tart", "exec", sandbox_name,
-             "bash", "-c", f"mkdir -p {shlex.quote(parent)} && "
-             f"ln -sfn {shlex.quote(self.SHARED_DIR_GITDIR)} "
+             "bash", "-c", f"sudo mkdir -p {shlex.quote(parent)} && "
+             f"sudo ln -sfn {shlex.quote(self.SHARED_DIR_GITDIR)} "
              f"{shlex.quote(git_common_dir)}"],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
             check=False,
