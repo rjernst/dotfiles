@@ -273,7 +273,7 @@ class TestMainSelftestRouting:
             main()
         assert exc_info.value.code == 0
         mock_selftest.assert_called_once_with(
-            "claude", mock_selftest.call_args[0][1], sandbox_type="docker")
+            "claude", mock_selftest.call_args[0][1], runtime_type="docker-sandbox")
 
     @patch("ralph.cli.selftest", return_value=0)
     @patch("ralph.cli.check_dependencies_prereq")
@@ -283,7 +283,7 @@ class TestMainSelftestRouting:
             main()
         assert exc_info.value.code == 0
         mock_selftest.assert_called_once_with(
-            "codex", mock_selftest.call_args[0][1], sandbox_type="docker")
+            "codex", mock_selftest.call_args[0][1], runtime_type="docker-sandbox")
 
     @patch("ralph.cli.sys.argv", ["ralph", "selftest", "--badopt"])
     def test_main_selftest_rejects_unknown_option(self):
@@ -293,69 +293,108 @@ class TestMainSelftestRouting:
 
     @patch("ralph.cli.selftest", return_value=0)
     @patch("ralph.cli.check_dependencies_prereq")
-    @patch("ralph.cli.sys.argv", ["ralph", "selftest", "--type", "tart"])
-    def test_main_routes_selftest_with_type(self, mock_prereq, mock_selftest):
+    @patch("ralph.cli.sys.argv", ["ralph", "selftest", "--runtime", "tart"])
+    def test_main_routes_selftest_with_runtime(self, mock_prereq, mock_selftest):
         with pytest.raises(SystemExit) as exc_info:
             main()
         assert exc_info.value.code == 0
         mock_selftest.assert_called_once_with(
-            "claude", mock_selftest.call_args[0][1], sandbox_type="tart")
+            "claude", mock_selftest.call_args[0][1], runtime_type="tart")
 
     @patch("ralph.cli.selftest", return_value=0)
     @patch("ralph.cli.check_dependencies_prereq")
     @patch("ralph.cli.sys.argv",
-           ["ralph", "selftest", "--type", "tart", "--agent", "codex"])
-    def test_main_routes_selftest_type_and_agent(self, mock_prereq,
-                                                  mock_selftest):
+           ["ralph", "selftest", "--runtime", "tart", "--agent", "codex"])
+    def test_main_routes_selftest_runtime_and_agent(self, mock_prereq,
+                                                     mock_selftest):
         with pytest.raises(SystemExit) as exc_info:
             main()
         assert exc_info.value.code == 0
         mock_selftest.assert_called_once_with(
-            "codex", mock_selftest.call_args[0][1], sandbox_type="tart")
+            "codex", mock_selftest.call_args[0][1], runtime_type="tart")
 
-    @patch("ralph.cli.sys.argv", ["ralph", "selftest", "--type", "podman"])
-    def test_main_selftest_rejects_unknown_type(self):
+    @patch("ralph.cli.selftest", return_value=0)
+    @patch("ralph.cli.check_dependencies_prereq")
+    @patch("ralph.cli.sys.argv",
+           ["ralph", "selftest", "--runtime", "docker-container"])
+    def test_main_routes_selftest_docker_container(self, mock_prereq,
+                                                     mock_selftest):
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+        assert exc_info.value.code == 0
+        mock_selftest.assert_called_once_with(
+            "claude", mock_selftest.call_args[0][1],
+            runtime_type="docker-container")
+
+    @patch("ralph.cli.sys.argv", ["ralph", "selftest", "--runtime", "podman"])
+    def test_main_selftest_rejects_unknown_runtime(self):
         with pytest.raises(SystemExit) as exc_info:
             main()
         assert exc_info.value.code == 2
 
 
 # ---------------------------------------------------------------------------
-# prune-sandboxes --type
+# prune-sandboxes --runtime
 # ---------------------------------------------------------------------------
 
-class TestPruneSandboxesType:
-    """Tests for --type flag on prune-sandboxes subcommand."""
+class TestPruneSandboxesRuntime:
+    """Tests for --runtime flag on prune-sandboxes subcommand."""
 
-    @patch("ralph.cli.DockerSandbox.prune_sandboxes", return_value=[])
+    @patch("ralph.cli.create_runtime")
     @patch("ralph.cli.sys.argv", ["ralph", "prune-sandboxes"])
-    def test_default_uses_docker(self, mock_prune, capsys):
+    def test_default_uses_docker_sandbox(self, mock_create, capsys):
+        mock_runtime = MagicMock()
+        mock_runtime.prune_sandboxes.return_value = []
+        mock_create.return_value = mock_runtime
         with pytest.raises(SystemExit) as exc_info:
             main()
         assert exc_info.value.code == 0
-        mock_prune.assert_called_once_with("claude")
+        mock_create.assert_called_once_with("docker-sandbox", mock_create.call_args[0][1])
+        mock_runtime.prune_sandboxes.assert_called_once_with("claude", max_age_days=None)
 
-    @patch("ralph.cli.TartSandbox.prune_sandboxes", return_value=["vm1"])
+    @patch("ralph.cli.create_runtime")
     @patch("ralph.cli.sys.argv",
-           ["ralph", "prune-sandboxes", "--type", "tart"])
-    def test_type_tart_uses_tart_sandbox(self, mock_prune):
+           ["ralph", "prune-sandboxes", "--runtime", "tart"])
+    def test_runtime_tart_uses_tart_runtime(self, mock_create):
+        mock_runtime = MagicMock()
+        mock_runtime.prune_sandboxes.return_value = ["vm1"]
+        mock_create.return_value = mock_runtime
         with pytest.raises(SystemExit) as exc_info:
             main()
         assert exc_info.value.code == 0
-        mock_prune.assert_called_once_with("claude")
+        mock_create.assert_called_once_with("tart", mock_create.call_args[0][1])
+        mock_runtime.prune_sandboxes.assert_called_once_with("claude", max_age_days=None)
 
-    @patch("ralph.cli.TartSandbox.prune_sandboxes", return_value=[])
+    @patch("ralph.cli.create_runtime")
     @patch("ralph.cli.sys.argv",
-           ["ralph", "prune-sandboxes", "--type", "tart", "--agent", "codex"])
-    def test_type_tart_with_agent(self, mock_prune, capsys):
+           ["ralph", "prune-sandboxes", "--runtime", "tart", "--agent", "codex"])
+    def test_runtime_tart_with_agent(self, mock_create, capsys):
+        mock_runtime = MagicMock()
+        mock_runtime.prune_sandboxes.return_value = []
+        mock_create.return_value = mock_runtime
         with pytest.raises(SystemExit) as exc_info:
             main()
         assert exc_info.value.code == 0
-        mock_prune.assert_called_once_with("codex")
+        mock_runtime.prune_sandboxes.assert_called_once_with("codex", max_age_days=None)
+
+    @patch("ralph.cli.create_runtime")
+    @patch("ralph.cli.sys.argv",
+           ["ralph", "prune-sandboxes", "--runtime", "docker-container"])
+    def test_runtime_docker_container(self, mock_create):
+        mock_runtime = MagicMock()
+        mock_runtime.prune_sandboxes.return_value = []
+        mock_create.return_value = mock_runtime
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+        assert exc_info.value.code == 0
+        mock_create.assert_called_once_with(
+            "docker-container", mock_create.call_args[0][1])
+        mock_runtime.prune_sandboxes.assert_called_once_with(
+            "claude", max_age_days=None)
 
     @patch("ralph.cli.sys.argv",
-           ["ralph", "prune-sandboxes", "--type", "podman"])
-    def test_rejects_unknown_type(self):
+           ["ralph", "prune-sandboxes", "--runtime", "podman"])
+    def test_rejects_unknown_runtime(self):
         with pytest.raises(SystemExit) as exc_info:
             main()
         assert exc_info.value.code == 2

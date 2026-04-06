@@ -9,8 +9,7 @@ from ralph.loop import process_issue, poll_loop
 from ralph.agents import get_agent
 from ralph.orchestration import check_dependencies_prereq
 from ralph.proxy import ensure_proxy, proxy_port_for_agent, start_proxy_keepalive
-from ralph.sandbox.docker import DockerSandbox
-from ralph.sandbox.tart import TartSandbox
+from ralph.runtime import create_runtime
 from ralph.selftest import selftest
 from ralph.token import store_token, check_token, get_token, ensure_token
 from ralph.util import parse_duration
@@ -25,9 +24,11 @@ Token commands:
   check-token           Check if stored token is valid
   get-token             Print stored token to stdout
 
-Sandbox commands:
+Runtime commands:
   selftest              Smoke test the full pipeline (proxy, sandbox, auth)
+    --runtime <type>      Runtime type: docker-sandbox, docker-container, tart
   prune-sandboxes       Remove orphaned and stale sandboxes
+    --runtime <type>      Runtime type: docker-sandbox, docker-container, tart
 
 Issue commands:
   --issue <number>      Execute a single GitHub Issue spec
@@ -87,10 +88,10 @@ def main():
             get_token(agent)
         sys.exit(0)
 
-    # Sandbox subcommands
+    # Runtime subcommands
     if args and args[0] == "prune-sandboxes":
         agent = "claude"
-        sandbox_type = "docker"
+        runtime_type = "docker-sandbox"
         max_age_days = None
         rest = args[1:]
         j = 0
@@ -101,13 +102,14 @@ def main():
                     sys.exit(2)
                 agent = rest[j + 1]
                 j += 2
-            elif rest[j] == "--type":
+            elif rest[j] == "--runtime":
                 if j + 1 >= len(rest):
-                    print("ralph: --type requires an argument", file=sys.stderr)
+                    print("ralph: --runtime requires an argument", file=sys.stderr)
                     sys.exit(2)
-                sandbox_type = rest[j + 1]
-                if sandbox_type not in ("docker", "tart"):
-                    print(f"ralph: unknown sandbox type: {sandbox_type}",
+                runtime_type = rest[j + 1]
+                if runtime_type not in ("docker-sandbox", "docker-container",
+                                        "tart"):
+                    print(f"ralph: unknown runtime type: {runtime_type}",
                           file=sys.stderr)
                     sys.exit(2)
                 j += 2
@@ -129,11 +131,8 @@ def main():
                       file=sys.stderr)
                 sys.exit(2)
 
-        if sandbox_type == "tart":
-            sb = TartSandbox(DOTFILES_DIR)
-        else:
-            sb = DockerSandbox(DOTFILES_DIR)
-        pruned = sb.prune_sandboxes(agent, max_age_days=max_age_days)
+        runtime = create_runtime(runtime_type, DOTFILES_DIR)
+        pruned = runtime.prune_sandboxes(agent, max_age_days=max_age_days)
         if not pruned:
             print("ralph: no stale sandboxes found")
         sys.exit(0)
@@ -141,7 +140,7 @@ def main():
     # Selftest subcommand
     if args and args[0] == "selftest":
         agent = "claude"
-        sandbox_type = "docker"
+        runtime_type = "docker-sandbox"
         rest = args[1:]
         j = 0
         while j < len(rest):
@@ -151,13 +150,14 @@ def main():
                     sys.exit(2)
                 agent = rest[j + 1]
                 j += 2
-            elif rest[j] == "--type":
+            elif rest[j] == "--runtime":
                 if j + 1 >= len(rest):
-                    print("ralph: --type requires an argument", file=sys.stderr)
+                    print("ralph: --runtime requires an argument", file=sys.stderr)
                     sys.exit(2)
-                sandbox_type = rest[j + 1]
-                if sandbox_type not in ("docker", "tart"):
-                    print(f"ralph: unknown sandbox type: {sandbox_type}",
+                runtime_type = rest[j + 1]
+                if runtime_type not in ("docker-sandbox", "docker-container",
+                                        "tart"):
+                    print(f"ralph: unknown runtime type: {runtime_type}",
                           file=sys.stderr)
                     sys.exit(2)
                 j += 2
@@ -169,7 +169,7 @@ def main():
                 sys.exit(2)
 
         check_dependencies_prereq()
-        sys.exit(selftest(agent, DOTFILES_DIR, sandbox_type=sandbox_type))
+        sys.exit(selftest(agent, DOTFILES_DIR, runtime_type=runtime_type))
 
     # Parse arguments manually to match zsh behavior exactly
     push = False

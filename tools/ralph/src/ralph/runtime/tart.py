@@ -1,4 +1,4 @@
-"""Tart macOS VM sandbox backend for ralph agent-loop isolation."""
+"""Tart macOS VM runtime backend for ralph agent-loop isolation."""
 
 import atexit
 import hashlib
@@ -10,10 +10,10 @@ import subprocess
 import sys
 import time
 
-from ralph.sandbox import SandboxBackend
+from ralph.runtime import Runtime
 
 
-class TartSandbox(SandboxBackend):
+class TartRuntime(Runtime):
     """Manages Tart macOS VM sandboxes for agent-loop isolation.
 
     Uses Tart (Virtualization.framework) to run macOS VMs on Apple Silicon.
@@ -67,7 +67,7 @@ class TartSandbox(SandboxBackend):
         in quick succession.
         """
         now = time.monotonic()
-        cached_time, cached_result = TartSandbox._vm_list_cache
+        cached_time, cached_result = TartRuntime._vm_list_cache
         if now - cached_time < self._VM_LIST_CACHE_TTL:
             return cached_result
 
@@ -83,7 +83,7 @@ class TartSandbox(SandboxBackend):
                 vms = json.loads(result.stdout)
             except (json.JSONDecodeError, ValueError):
                 vms = []
-        TartSandbox._vm_list_cache = (now, vms)
+        TartRuntime._vm_list_cache = (now, vms)
         return vms
 
     def _vm_exists(self, name):
@@ -356,9 +356,9 @@ class TartSandbox(SandboxBackend):
         self._vm_procs[name] = vm_proc
 
         # Register atexit handler once to stop all tracked VMs
-        if not TartSandbox._atexit_registered:
-            atexit.register(TartSandbox._atexit_stop_all)
-            TartSandbox._atexit_registered = True
+        if not TartRuntime._atexit_registered:
+            atexit.register(TartRuntime._atexit_stop_all)
+            TartRuntime._atexit_registered = True
 
         self._wait_for_guest_agent(name)
         self._setup_worktree_git(name, git_common_dir)
@@ -374,7 +374,7 @@ class TartSandbox(SandboxBackend):
         each Popen process, then clears the dict. Errors are suppressed
         since this runs during interpreter shutdown.
         """
-        for name, proc in list(TartSandbox._vm_procs.items()):
+        for name, proc in list(TartRuntime._vm_procs.items()):
             try:
                 subprocess.run(
                     ["tart", "stop", name],
@@ -387,7 +387,7 @@ class TartSandbox(SandboxBackend):
                 proc.wait(timeout=10)
             except Exception:
                 pass
-        TartSandbox._vm_procs.clear()
+        TartRuntime._vm_procs.clear()
 
     def setup_git_config(self, sandbox_name, user, email):
         """Configure git user and safe directory settings inside the VM."""

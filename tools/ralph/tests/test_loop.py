@@ -12,8 +12,8 @@ from ralph.loop import process_issue, poll_loop
 # ---------------------------------------------------------------------------
 
 class TestProcessIssueSandbox:
-    @patch("ralph.loop.create_sandbox_backend")
-    @patch("ralph.loop.load_sandbox_config", return_value={"type": "docker"})
+    @patch("ralph.loop.create_runtime")
+    @patch("ralph.loop.load_runtime_config", return_value={"type": "docker-sandbox"})
     @patch("ralph.loop.unblock_ready_specs")
     @patch("ralph.loop.ensure_worktree", return_value="/work/my-branch")
     @patch("ralph.loop.resolve_repo", return_value="owner/repo")
@@ -43,8 +43,8 @@ class TestProcessIssueSandbox:
         sandbox.reset_to_host.assert_called_once_with(
             "agent-loop-claude-my-branch", "/work/my-branch", git)
 
-    @patch("ralph.loop.create_sandbox_backend")
-    @patch("ralph.loop.load_sandbox_config", return_value={"type": "docker"})
+    @patch("ralph.loop.create_runtime")
+    @patch("ralph.loop.load_runtime_config", return_value={"type": "docker-sandbox"})
     @patch("ralph.loop.unblock_ready_specs")
     @patch("ralph.loop.ensure_worktree", return_value="/work/my-branch")
     @patch("ralph.loop.resolve_repo", return_value="owner/repo")
@@ -78,8 +78,8 @@ class TestProcessIssueSandbox:
         # setup_git_config called twice: initial + after recreation
         assert sandbox.setup_git_config.call_count == 2
 
-    @patch("ralph.loop.create_sandbox_backend")
-    @patch("ralph.loop.load_sandbox_config", return_value={"type": "docker"})
+    @patch("ralph.loop.create_runtime")
+    @patch("ralph.loop.load_runtime_config", return_value={"type": "docker-sandbox"})
     @patch("ralph.loop.unblock_ready_specs")
     @patch("ralph.loop.ensure_worktree", return_value="/work/my-branch")
     @patch("ralph.loop.resolve_repo", return_value="owner/repo")
@@ -104,7 +104,7 @@ class TestProcessIssueSandbox:
         assert result == 0
 
         mock_config.assert_called_once_with("/repo/root")
-        mock_create.assert_called_once_with("docker", "/dotfiles",
+        mock_create.assert_called_once_with("docker-sandbox", "/dotfiles",
                                             project_dir="/repo/root")
 
         sandbox.ensure_sandbox.assert_called_once_with(
@@ -121,8 +121,8 @@ class TestProcessIssueSandbox:
         assert env_vars["CLAUDE_CODE_OAUTH_TOKEN"] == "phantom"
         assert env_vars["ANTHROPIC_BASE_URL"] == "http://host.docker.internal:18080"
 
-    @patch("ralph.loop.create_sandbox_backend")
-    @patch("ralph.loop.load_sandbox_config", return_value={"type": "docker"})
+    @patch("ralph.loop.create_runtime")
+    @patch("ralph.loop.load_runtime_config", return_value={"type": "docker-sandbox"})
     @patch("ralph.loop.unblock_ready_specs")
     @patch("ralph.loop.ensure_worktree", return_value="/work/my-branch")
     @patch("ralph.loop.resolve_repo", return_value="owner/repo")
@@ -153,8 +153,8 @@ class TestProcessIssueSandbox:
         assert env_vars["ANTHROPIC_BASE_URL"] == "http://192.168.64.1:18080"
 
     @patch("ralph.loop.proxy_health_check", return_value=(True, "abc123"))
-    @patch("ralph.loop.create_sandbox_backend")
-    @patch("ralph.loop.load_sandbox_config", return_value={"type": "docker"})
+    @patch("ralph.loop.create_runtime")
+    @patch("ralph.loop.load_runtime_config", return_value={"type": "docker-sandbox"})
     @patch("ralph.loop.ensure_worktree", return_value="/work/my-branch")
     @patch("ralph.loop.resolve_repo", return_value="owner/repo")
     def test_iteration_failure_marks_needs_attention(self, mock_repo, mock_wt,
@@ -184,8 +184,8 @@ class TestProcessIssueSandbox:
 
     @patch("ralph.loop.ensure_proxy")
     @patch("ralph.loop.proxy_health_check", return_value=(False, None))
-    @patch("ralph.loop.create_sandbox_backend")
-    @patch("ralph.loop.load_sandbox_config", return_value={"type": "docker"})
+    @patch("ralph.loop.create_runtime")
+    @patch("ralph.loop.load_runtime_config", return_value={"type": "docker-sandbox"})
     @patch("ralph.loop.unblock_ready_specs")
     @patch("ralph.loop.ensure_worktree", return_value="/work/my-branch")
     @patch("ralph.loop.resolve_repo", return_value="owner/repo")
@@ -214,8 +214,8 @@ class TestProcessIssueSandbox:
         mock_ensure.assert_called_once_with("claude", 18080, "/dotfiles")
         assert sandbox.run_iteration.call_count == 2
 
-    @patch("ralph.loop.create_sandbox_backend")
-    @patch("ralph.loop.load_sandbox_config", return_value={"type": "docker"})
+    @patch("ralph.loop.create_runtime")
+    @patch("ralph.loop.load_runtime_config", return_value={"type": "docker-sandbox"})
     @patch("ralph.loop.try_fast_forward", return_value=None)
     @patch("ralph.loop.ensure_worktree", return_value="/work/my-branch")
     @patch("ralph.loop.resolve_repo", return_value="owner/repo")
@@ -251,8 +251,8 @@ class TestProcessIssueSandbox:
             remove_labels="status:in-progress",
             add_label="status:needs-attention")
 
-    @patch("ralph.loop.create_sandbox_backend")
-    @patch("ralph.loop.load_sandbox_config", return_value={"type": "docker"})
+    @patch("ralph.loop.create_runtime")
+    @patch("ralph.loop.load_runtime_config", return_value={"type": "docker-sandbox"})
     @patch("ralph.loop.try_fast_forward", return_value=None)
     @patch("ralph.loop.unblock_ready_specs")
     @patch("ralph.loop.ensure_worktree", return_value="/work/my-branch")
@@ -288,8 +288,8 @@ class TestProcessIssueSandbox:
 
         git.run.assert_any_call("push", cwd="/work/my-branch", check=False)
 
-    @patch("ralph.loop.create_sandbox_backend")
-    @patch("ralph.loop.load_sandbox_config", return_value={"type": "docker"})
+    @patch("ralph.loop.create_runtime")
+    @patch("ralph.loop.load_runtime_config", return_value={"type": "docker-sandbox"})
     @patch("ralph.loop.ensure_worktree", return_value="/work/my-branch")
     @patch("ralph.loop.resolve_repo", return_value="owner/repo")
     def test_agent_cursor_uses_correct_names(self, mock_repo, mock_wt,
@@ -314,8 +314,8 @@ class TestProcessIssueSandbox:
             "cursor", "my-branch", "/work/my-branch",
             project_dir="/repo/root", force_rebuild=False)
 
-    @patch("ralph.loop.create_sandbox_backend")
-    @patch("ralph.loop.load_sandbox_config", return_value={"type": "docker"})
+    @patch("ralph.loop.create_runtime")
+    @patch("ralph.loop.load_runtime_config", return_value={"type": "docker-sandbox"})
     @patch("ralph.loop.unblock_ready_specs")
     @patch("ralph.loop.ensure_worktree", return_value="/work/my-branch")
     @patch("ralph.loop.resolve_repo", return_value="owner/repo")
@@ -341,8 +341,8 @@ class TestProcessIssueSandbox:
             "claude", "my-branch", "/work/my-branch",
             project_dir="/repo/root", force_rebuild=True)
 
-    @patch("ralph.loop.create_sandbox_backend")
-    @patch("ralph.loop.load_sandbox_config", return_value={"type": "docker"})
+    @patch("ralph.loop.create_runtime")
+    @patch("ralph.loop.load_runtime_config", return_value={"type": "docker-sandbox"})
     @patch("ralph.loop.unblock_ready_specs")
     @patch("ralph.loop.ensure_worktree", return_value="/work/my-branch")
     @patch("ralph.loop.resolve_repo", return_value="owner/repo")
@@ -368,8 +368,8 @@ class TestProcessIssueSandbox:
             "config", "branch.my-branch.issue", "42",
             cwd="/work/my-branch", check=False)
 
-    @patch("ralph.loop.create_sandbox_backend")
-    @patch("ralph.loop.load_sandbox_config", return_value={"type": "docker"})
+    @patch("ralph.loop.create_runtime")
+    @patch("ralph.loop.load_runtime_config", return_value={"type": "docker-sandbox"})
     @patch("ralph.loop.unblock_ready_specs")
     @patch("ralph.loop.ensure_worktree", return_value="/work/feat/slash-branch")
     @patch("ralph.loop.resolve_repo", return_value="owner/repo")
@@ -395,8 +395,8 @@ class TestProcessIssueSandbox:
             "config", "branch.feat/slash-branch.issue", "99",
             cwd="/work/feat/slash-branch", check=False)
 
-    @patch("ralph.loop.create_sandbox_backend")
-    @patch("ralph.loop.load_sandbox_config", return_value={"type": "docker"})
+    @patch("ralph.loop.create_runtime")
+    @patch("ralph.loop.load_runtime_config", return_value={"type": "docker-sandbox"})
     @patch("ralph.loop.ensure_worktree", return_value="/work/my-branch")
     @patch("ralph.loop.resolve_repo", return_value="owner/repo")
     def test_blocked_marker_marks_needs_attention(self, mock_repo, mock_wt,
@@ -431,8 +431,8 @@ class TestProcessIssueSandbox:
             remove_labels="status:in-progress",
             add_label="status:needs-attention")
 
-    @patch("ralph.loop.create_sandbox_backend")
-    @patch("ralph.loop.load_sandbox_config", return_value={"type": "docker"})
+    @patch("ralph.loop.create_runtime")
+    @patch("ralph.loop.load_runtime_config", return_value={"type": "docker-sandbox"})
     @patch("ralph.loop.unblock_ready_specs")
     @patch("ralph.loop.ensure_worktree", return_value="/work/my-branch")
     @patch("ralph.loop.resolve_repo", return_value="owner/repo")
@@ -465,8 +465,8 @@ class TestProcessIssueSandbox:
         assert call_args[1]["agent"] == "cursor"
         assert call_args[1]["api_key"] == "cursor-key-123"
 
-    @patch("ralph.loop.create_sandbox_backend")
-    @patch("ralph.loop.load_sandbox_config", return_value={"type": "docker"})
+    @patch("ralph.loop.create_runtime")
+    @patch("ralph.loop.load_runtime_config", return_value={"type": "docker-sandbox"})
     @patch("ralph.loop.unblock_ready_specs")
     @patch("ralph.loop.ensure_worktree", return_value="/work/my-branch")
     @patch("ralph.loop.resolve_repo", return_value="owner/repo")
@@ -493,8 +493,8 @@ class TestProcessIssueSandbox:
             # Should NOT have checked proxy health
             mock_health.assert_not_called()
 
-    @patch("ralph.loop.create_sandbox_backend")
-    @patch("ralph.loop.load_sandbox_config", return_value={"type": "docker"})
+    @patch("ralph.loop.create_runtime")
+    @patch("ralph.loop.load_runtime_config", return_value={"type": "docker-sandbox"})
     @patch("ralph.loop.unblock_ready_specs")
     @patch("ralph.loop.ensure_worktree", return_value="/work/my-branch")
     @patch("ralph.loop.resolve_repo", return_value="owner/repo")
@@ -525,8 +525,8 @@ class TestProcessIssueSandbox:
         assert call_args[1]["agent"] == "claude"
         assert call_args[1]["api_key"] is None
 
-    @patch("ralph.loop.create_sandbox_backend")
-    @patch("ralph.loop.load_sandbox_config", return_value={"type": "docker"})
+    @patch("ralph.loop.create_runtime")
+    @patch("ralph.loop.load_runtime_config", return_value={"type": "docker-sandbox"})
     @patch("ralph.loop.unblock_ready_specs")
     @patch("ralph.loop.ensure_worktree", return_value="/work/my-branch")
     @patch("ralph.loop.resolve_repo", return_value="owner/repo")

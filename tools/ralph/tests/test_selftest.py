@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from ralph.docker_proxy import DOCKER_PROXY_PORT
 from ralph.selftest import _SelftestAbort, selftest
 
 
@@ -34,13 +35,13 @@ class TestSelftest:
 
     # proxy_health_check returns (False, None) for the initial
     # proxy_existed_before check, then (True, "v123") after ensure_proxy.
-    @patch("ralph.selftest.DockerSandbox.remove_sandbox")
+    @patch("ralph.selftest.DockerSandboxRuntime.remove_sandbox")
     @patch("ralph.selftest.stop_proxy")
     @patch("ralph.selftest.subprocess.run")
-    @patch("ralph.selftest.DockerSandbox.apply_network_policy")
-    @patch("ralph.selftest.DockerSandbox._docker_sandbox_create")
-    @patch("ralph.selftest.DockerSandbox._resolve_git_common_dir", return_value="/fake/.git")
-    @patch("ralph.selftest.DockerSandbox.ensure_image", return_value="agent-loop-sandbox-claude:vabc")
+    @patch("ralph.selftest.DockerSandboxRuntime.apply_network_policy")
+    @patch("ralph.selftest.DockerSandboxRuntime._docker_sandbox_create")
+    @patch("ralph.selftest.DockerSandboxRuntime._resolve_git_common_dir", return_value="/fake/.git")
+    @patch("ralph.selftest.DockerSandboxRuntime.ensure_image", return_value="agent-loop-sandbox-claude:vabc")
     @patch("ralph.selftest.proxy_health_check", side_effect=[(False, None), (True, "abc123")])
     @patch("ralph.selftest.ensure_proxy")
     @patch("ralph.selftest.read_token_from_keychain")
@@ -73,13 +74,13 @@ class TestSelftest:
         # Proxy was not running before selftest, so it should be stopped
         mock_stop.assert_called_once_with("claude")
 
-    @patch("ralph.selftest.DockerSandbox.remove_sandbox")
+    @patch("ralph.selftest.DockerSandboxRuntime.remove_sandbox")
     @patch("ralph.selftest.stop_proxy")
     @patch("ralph.selftest.subprocess.run")
-    @patch("ralph.selftest.DockerSandbox.apply_network_policy")
-    @patch("ralph.selftest.DockerSandbox._docker_sandbox_create")
-    @patch("ralph.selftest.DockerSandbox._resolve_git_common_dir", return_value="/fake/.git")
-    @patch("ralph.selftest.DockerSandbox.ensure_image", return_value="agent-loop-sandbox-claude:vabc")
+    @patch("ralph.selftest.DockerSandboxRuntime.apply_network_policy")
+    @patch("ralph.selftest.DockerSandboxRuntime._docker_sandbox_create")
+    @patch("ralph.selftest.DockerSandboxRuntime._resolve_git_common_dir", return_value="/fake/.git")
+    @patch("ralph.selftest.DockerSandboxRuntime.ensure_image", return_value="agent-loop-sandbox-claude:vabc")
     @patch("ralph.selftest.proxy_health_check", return_value=(True, "abc123"))
     @patch("ralph.selftest.ensure_proxy")
     @patch("ralph.selftest.read_token_from_keychain")
@@ -127,13 +128,13 @@ class TestSelftest:
         assert "FAIL: check token" in captured.out
         assert "token expired" in captured.out
 
-    @patch("ralph.selftest.DockerSandbox.remove_sandbox")
+    @patch("ralph.selftest.DockerSandboxRuntime.remove_sandbox")
     @patch("ralph.selftest.stop_proxy")
     @patch("ralph.selftest.subprocess.run")
-    @patch("ralph.selftest.DockerSandbox.apply_network_policy")
-    @patch("ralph.selftest.DockerSandbox._docker_sandbox_create")
-    @patch("ralph.selftest.DockerSandbox._resolve_git_common_dir", return_value="/fake/.git")
-    @patch("ralph.selftest.DockerSandbox.ensure_image", return_value="agent-loop-sandbox-claude:vabc")
+    @patch("ralph.selftest.DockerSandboxRuntime.apply_network_policy")
+    @patch("ralph.selftest.DockerSandboxRuntime._docker_sandbox_create")
+    @patch("ralph.selftest.DockerSandboxRuntime._resolve_git_common_dir", return_value="/fake/.git")
+    @patch("ralph.selftest.DockerSandboxRuntime.ensure_image", return_value="agent-loop-sandbox-claude:vabc")
     @patch("ralph.selftest.proxy_health_check", side_effect=[(False, None), (True, "abc123")])
     @patch("ralph.selftest.ensure_proxy")
     @patch("ralph.selftest.read_token_from_keychain")
@@ -157,13 +158,13 @@ class TestSelftest:
         mock_remove.assert_called_with("agent-loop-selftest-claude")
         mock_stop.assert_called_once_with("claude")
 
-    @patch("ralph.selftest.DockerSandbox.remove_sandbox")
+    @patch("ralph.selftest.DockerSandboxRuntime.remove_sandbox")
     @patch("ralph.selftest.stop_proxy")
     @patch("ralph.selftest.subprocess.run")
-    @patch("ralph.selftest.DockerSandbox.apply_network_policy")
-    @patch("ralph.selftest.DockerSandbox._docker_sandbox_create")
-    @patch("ralph.selftest.DockerSandbox._resolve_git_common_dir", return_value="/fake/.git")
-    @patch("ralph.selftest.DockerSandbox.ensure_image", return_value="agent-loop-sandbox-claude:vabc")
+    @patch("ralph.selftest.DockerSandboxRuntime.apply_network_policy")
+    @patch("ralph.selftest.DockerSandboxRuntime._docker_sandbox_create")
+    @patch("ralph.selftest.DockerSandboxRuntime._resolve_git_common_dir", return_value="/fake/.git")
+    @patch("ralph.selftest.DockerSandboxRuntime.ensure_image", return_value="agent-loop-sandbox-claude:vabc")
     @patch("ralph.selftest.proxy_health_check", side_effect=[(False, None), (True, "abc123")])
     @patch("ralph.selftest.ensure_proxy")
     @patch("ralph.selftest.read_token_from_keychain")
@@ -189,9 +190,9 @@ class TestSelftest:
         assert "FAIL: network isolation" in captured.out
         assert "2/9 checks failed" in captured.out
 
-    @patch("ralph.selftest.DockerSandbox.remove_sandbox")
+    @patch("ralph.selftest.DockerSandboxRuntime.remove_sandbox")
     @patch("ralph.selftest.stop_proxy")
-    @patch("ralph.selftest.DockerSandbox.ensure_image", side_effect=RuntimeError("build failed"))
+    @patch("ralph.selftest.DockerSandboxRuntime.ensure_image", side_effect=RuntimeError("build failed"))
     @patch("ralph.selftest.proxy_health_check", side_effect=[(False, None), (True, "abc123")])
     @patch("ralph.selftest.ensure_proxy")
     @patch("ralph.selftest.read_token_from_keychain")
@@ -208,13 +209,13 @@ class TestSelftest:
         # Proxy should still be stopped (was started, didn't exist before)
         mock_stop.assert_called_once_with("claude")
 
-    @patch("ralph.selftest.DockerSandbox.remove_sandbox")
+    @patch("ralph.selftest.DockerSandboxRuntime.remove_sandbox")
     @patch("ralph.selftest.stop_proxy")
-    @patch("ralph.selftest.DockerSandbox.apply_network_policy")
-    @patch("ralph.selftest.DockerSandbox._docker_sandbox_create",
+    @patch("ralph.selftest.DockerSandboxRuntime.apply_network_policy")
+    @patch("ralph.selftest.DockerSandboxRuntime._docker_sandbox_create",
            side_effect=subprocess.CalledProcessError(1, "docker"))
-    @patch("ralph.selftest.DockerSandbox._resolve_git_common_dir", return_value="/fake/.git")
-    @patch("ralph.selftest.DockerSandbox.ensure_image", return_value="agent-loop-sandbox-claude:vabc")
+    @patch("ralph.selftest.DockerSandboxRuntime._resolve_git_common_dir", return_value="/fake/.git")
+    @patch("ralph.selftest.DockerSandboxRuntime.ensure_image", return_value="agent-loop-sandbox-claude:vabc")
     @patch("ralph.selftest.proxy_health_check", side_effect=[(False, None), (True, "abc123")])
     @patch("ralph.selftest.ensure_proxy")
     @patch("ralph.selftest.read_token_from_keychain")
@@ -233,17 +234,17 @@ class TestSelftest:
         # Proxy should be stopped (didn't exist before)
         mock_stop.assert_called_once_with("claude")
 
-    @patch("ralph.selftest.DockerSandbox.remove_sandbox")
+    @patch("ralph.selftest.DockerSandboxRuntime.remove_sandbox")
     @patch("ralph.selftest.stop_proxy")
     @patch("ralph.selftest.subprocess.run")
-    @patch("ralph.selftest.DockerSandbox.apply_network_policy")
-    @patch("ralph.selftest.DockerSandbox._docker_sandbox_create")
-    @patch("ralph.selftest.DockerSandbox._resolve_git_common_dir", return_value="/fake/.git")
-    @patch("ralph.selftest.DockerSandbox.ensure_project_image",
+    @patch("ralph.selftest.DockerSandboxRuntime.apply_network_policy")
+    @patch("ralph.selftest.DockerSandboxRuntime._docker_sandbox_create")
+    @patch("ralph.selftest.DockerSandboxRuntime._resolve_git_common_dir", return_value="/fake/.git")
+    @patch("ralph.selftest.DockerSandboxRuntime.ensure_project_image",
            return_value="agent-loop-sandbox-claude-myproject:vdeadbeef")
-    @patch("ralph.selftest.DockerSandbox.find_project_config",
+    @patch("ralph.selftest.DockerSandboxRuntime.find_project_config",
            return_value=("dependencies", "/proj/.agent-loop/dependencies"))
-    @patch("ralph.selftest.DockerSandbox.ensure_image", return_value="agent-loop-sandbox-claude:vabc")
+    @patch("ralph.selftest.DockerSandboxRuntime.ensure_image", return_value="agent-loop-sandbox-claude:vabc")
     @patch("ralph.selftest.proxy_health_check", side_effect=[(False, None), (True, "abc123")])
     @patch("ralph.selftest.ensure_proxy")
     @patch("ralph.selftest.read_token_from_keychain")
@@ -268,17 +269,17 @@ class TestSelftest:
         assert "agent-loop-sandbox-claude-myproject:vdeadbeef" in captured.out
         assert "all 10 checks passed" in captured.out
 
-    @patch("ralph.selftest.DockerSandbox.remove_sandbox")
+    @patch("ralph.selftest.DockerSandboxRuntime.remove_sandbox")
     @patch("ralph.selftest.stop_proxy")
     @patch("ralph.selftest.subprocess.run")
-    @patch("ralph.selftest.DockerSandbox.apply_network_policy")
-    @patch("ralph.selftest.DockerSandbox._docker_sandbox_create")
-    @patch("ralph.selftest.DockerSandbox._resolve_git_common_dir", return_value="/fake/.git")
-    @patch("ralph.selftest.DockerSandbox.ensure_project_image",
+    @patch("ralph.selftest.DockerSandboxRuntime.apply_network_policy")
+    @patch("ralph.selftest.DockerSandboxRuntime._docker_sandbox_create")
+    @patch("ralph.selftest.DockerSandboxRuntime._resolve_git_common_dir", return_value="/fake/.git")
+    @patch("ralph.selftest.DockerSandboxRuntime.ensure_project_image",
            return_value="agent-loop-sandbox-claude-myproject:vdeadbeef")
-    @patch("ralph.selftest.DockerSandbox.find_project_config",
+    @patch("ralph.selftest.DockerSandboxRuntime.find_project_config",
            return_value=("dockerfile", "/proj/.agent-loop/Dockerfile.sandbox"))
-    @patch("ralph.selftest.DockerSandbox.ensure_image", return_value="agent-loop-sandbox-claude:vabc")
+    @patch("ralph.selftest.DockerSandboxRuntime.ensure_image", return_value="agent-loop-sandbox-claude:vabc")
     @patch("ralph.selftest.proxy_health_check", side_effect=[(False, None), (True, "abc123")])
     @patch("ralph.selftest.ensure_proxy")
     @patch("ralph.selftest.read_token_from_keychain")
@@ -302,14 +303,14 @@ class TestSelftest:
         assert "PASS: build project image" in captured.out
         assert "all 10 checks passed" in captured.out
 
-    @patch("ralph.selftest.DockerSandbox.remove_sandbox")
+    @patch("ralph.selftest.DockerSandboxRuntime.remove_sandbox")
     @patch("ralph.selftest.stop_proxy")
     @patch("ralph.selftest.subprocess.run")
-    @patch("ralph.selftest.DockerSandbox.apply_network_policy")
-    @patch("ralph.selftest.DockerSandbox._docker_sandbox_create")
-    @patch("ralph.selftest.DockerSandbox._resolve_git_common_dir", return_value="/fake/.git")
-    @patch("ralph.selftest.DockerSandbox.find_project_config", return_value=None)
-    @patch("ralph.selftest.DockerSandbox.ensure_image", return_value="agent-loop-sandbox-claude:vabc")
+    @patch("ralph.selftest.DockerSandboxRuntime.apply_network_policy")
+    @patch("ralph.selftest.DockerSandboxRuntime._docker_sandbox_create")
+    @patch("ralph.selftest.DockerSandboxRuntime._resolve_git_common_dir", return_value="/fake/.git")
+    @patch("ralph.selftest.DockerSandboxRuntime.find_project_config", return_value=None)
+    @patch("ralph.selftest.DockerSandboxRuntime.ensure_image", return_value="agent-loop-sandbox-claude:vabc")
     @patch("ralph.selftest.proxy_health_check", side_effect=[(False, None), (True, "abc123")])
     @patch("ralph.selftest.ensure_proxy")
     @patch("ralph.selftest.read_token_from_keychain")
@@ -333,16 +334,16 @@ class TestSelftest:
         assert "skipping project image check" in captured.out
         assert "all 9 checks passed" in captured.out
 
-    @patch("ralph.selftest.DockerSandbox.remove_sandbox")
+    @patch("ralph.selftest.DockerSandboxRuntime.remove_sandbox")
     @patch("ralph.selftest.stop_proxy")
     @patch("ralph.selftest.subprocess.run")
-    @patch("ralph.selftest.DockerSandbox.apply_network_policy")
-    @patch("ralph.selftest.DockerSandbox._docker_sandbox_create")
-    @patch("ralph.selftest.DockerSandbox.ensure_project_image",
+    @patch("ralph.selftest.DockerSandboxRuntime.apply_network_policy")
+    @patch("ralph.selftest.DockerSandboxRuntime._docker_sandbox_create")
+    @patch("ralph.selftest.DockerSandboxRuntime.ensure_project_image",
            side_effect=RuntimeError("project build failed"))
-    @patch("ralph.selftest.DockerSandbox.find_project_config",
+    @patch("ralph.selftest.DockerSandboxRuntime.find_project_config",
            return_value=("dependencies", "/proj/.agent-loop/dependencies"))
-    @patch("ralph.selftest.DockerSandbox.ensure_image", return_value="agent-loop-sandbox-claude:vabc")
+    @patch("ralph.selftest.DockerSandboxRuntime.ensure_image", return_value="agent-loop-sandbox-claude:vabc")
     @patch("ralph.selftest.proxy_health_check", side_effect=[(False, None), (True, "abc123")])
     @patch("ralph.selftest.ensure_proxy")
     @patch("ralph.selftest.read_token_from_keychain")
@@ -377,15 +378,15 @@ class TestSelftestTart:
 
     FUTURE_MS = 1700000000000 + 30 * 86400 * 1000  # 30 days from now
 
-    @patch("ralph.selftest.TartSandbox.remove_sandbox")
+    @patch("ralph.selftest.TartRuntime.remove_sandbox")
     @patch("ralph.selftest.stop_proxy")
     @patch("ralph.selftest.subprocess.run")
     @patch("ralph.selftest.subprocess.Popen")
-    @patch("ralph.selftest.TartSandbox._wait_for_guest_agent")
-    @patch("ralph.selftest.TartSandbox.proxy_host", return_value="192.168.64.1")
-    @patch("ralph.selftest.TartSandbox.ensure_image",
+    @patch("ralph.selftest.TartRuntime._wait_for_guest_agent")
+    @patch("ralph.selftest.TartRuntime.proxy_host", return_value="192.168.64.1")
+    @patch("ralph.selftest.TartRuntime.ensure_image",
            return_value="agent-loop-template-claude-abc123")
-    @patch("ralph.selftest.TartSandbox.check_prerequisites", return_value=[])
+    @patch("ralph.selftest.TartRuntime.check_prerequisites", return_value=[])
     @patch("ralph.selftest.proxy_health_check",
            side_effect=[(False, None), (True, "abc123")])
     @patch("ralph.selftest.ensure_proxy")
@@ -406,7 +407,7 @@ class TestSelftestTart:
             MagicMock(returncode=0),   # claude via proxy
         ]
 
-        rc = selftest("claude", "/fake/dotfiles", sandbox_type="tart")
+        rc = selftest("claude", "/fake/dotfiles", runtime_type="tart")
         assert rc == 0
 
         captured = capsys.readouterr()
@@ -423,11 +424,11 @@ class TestSelftestTart:
         # proxy was not running before, so should be stopped
         mock_stop.assert_called_once_with("claude")
 
-    @patch("ralph.selftest.TartSandbox.remove_sandbox")
+    @patch("ralph.selftest.TartRuntime.remove_sandbox")
     @patch("ralph.selftest.stop_proxy")
-    @patch("ralph.selftest.TartSandbox.ensure_image",
+    @patch("ralph.selftest.TartRuntime.ensure_image",
            side_effect=RuntimeError("clone failed"))
-    @patch("ralph.selftest.TartSandbox.check_prerequisites", return_value=[])
+    @patch("ralph.selftest.TartRuntime.check_prerequisites", return_value=[])
     @patch("ralph.selftest.proxy_health_check",
            side_effect=[(False, None), (True, "abc123")])
     @patch("ralph.selftest.ensure_proxy")
@@ -439,15 +440,15 @@ class TestSelftestTart:
                                             mock_stop, mock_remove, capsys):
         mock_read.return_value = {"accessToken": "sk-test",
                                   "expiresAt": self.FUTURE_MS}
-        rc = selftest("claude", "/fake/dotfiles", sandbox_type="tart")
+        rc = selftest("claude", "/fake/dotfiles", runtime_type="tart")
         assert rc == 1
         captured = capsys.readouterr()
         assert "FAIL: build template" in captured.out
         assert "selftest aborted" in captured.out
 
-    @patch("ralph.selftest.TartSandbox.remove_sandbox")
+    @patch("ralph.selftest.TartRuntime.remove_sandbox")
     @patch("ralph.selftest.stop_proxy")
-    @patch("ralph.selftest.TartSandbox.check_prerequisites",
+    @patch("ralph.selftest.TartRuntime.check_prerequisites",
            return_value=["tart is not installed"])
     @patch("ralph.selftest.proxy_health_check", return_value=(False, None))
     @patch("ralph.selftest.read_token_from_keychain")
@@ -457,8 +458,189 @@ class TestSelftestTart:
                                           mock_stop, mock_remove, capsys):
         mock_read.return_value = {"accessToken": "sk-test",
                                   "expiresAt": self.FUTURE_MS}
-        rc = selftest("claude", "/fake/dotfiles", sandbox_type="tart")
+        rc = selftest("claude", "/fake/dotfiles", runtime_type="tart")
         assert rc == 1
         captured = capsys.readouterr()
         assert "FAIL: prerequisites" in captured.out
         assert "prerequisites not met" in captured.out
+
+
+# ---------------------------------------------------------------------------
+# selftest — Docker Container
+# ---------------------------------------------------------------------------
+
+class TestSelftestDockerContainer:
+    """Tests for docker-container-specific selftest path."""
+
+    FUTURE_MS = 1700000000000 + 30 * 86400 * 1000  # 30 days from now
+
+    @patch("ralph.selftest.stop_network_proxy")
+    @patch("ralph.selftest.stop_docker_proxy")
+    @patch("ralph.selftest.DockerContainerRuntime.remove_sandbox")
+    @patch("ralph.selftest.stop_proxy")
+    @patch("ralph.selftest.subprocess.run")
+    @patch("ralph.selftest.DockerContainerRuntime._ensure_network")
+    @patch("ralph.selftest.DockerContainerRuntime._resolve_git_common_dir",
+           return_value="/fake/.git")
+    @patch("ralph.selftest.DockerContainerRuntime.ensure_image",
+           return_value="agent-loop-sandbox-claude:vabc")
+    @patch("ralph.selftest.ensure_network_proxy")
+    @patch("ralph.selftest.network_proxy_health_check",
+           side_effect=[(False, None, None), (True, "def456", frozenset())])
+    @patch("ralph.selftest.docker_proxy_health_check",
+           side_effect=[(False, None), (True, "abc123")])
+    @patch("ralph.selftest.ensure_docker_proxy")
+    @patch("ralph.selftest.proxy_health_check",
+           side_effect=[(False, None), (True, "abc123")])
+    @patch("ralph.selftest.ensure_proxy")
+    @patch("ralph.selftest.read_token_from_keychain")
+    @patch("ralph.selftest.time.time", return_value=1700000000.0)
+    def test_all_checks_pass(self, mock_time, mock_read, mock_ensure_proxy,
+                              mock_proxy_health, mock_ensure_docker_proxy,
+                              mock_docker_health, mock_network_health,
+                              mock_ensure_network, mock_img, mock_resolve,
+                              mock_network, mock_run, mock_stop_proxy,
+                              mock_remove, mock_stop_docker,
+                              mock_stop_network, capsys):
+        mock_read.return_value = {"accessToken": "sk-test",
+                                  "expiresAt": self.FUTURE_MS}
+        # subprocess.run calls:
+        # 1. docker run -d (create container)
+        # 2. curl credential proxy health
+        # 3. claude via proxy
+        # 4. curl google (blocked)
+        # 5. curl docker socket proxy from container
+        # 6. curl network proxy from container
+        # 7. curl allowed host (api.anthropic.com)
+        # 8. curl non-allowed host (example.com, blocked)
+        mock_run.side_effect = [
+            MagicMock(returncode=0),   # docker run -d
+            MagicMock(returncode=0, stdout="ok", stderr=""),   # curl proxy
+            MagicMock(returncode=0, stdout="ok", stderr=""),   # claude
+            MagicMock(returncode=28, stdout="", stderr=""),    # curl google
+            MagicMock(returncode=0, stdout="ok", stderr=""),   # curl docker proxy
+            MagicMock(returncode=0, stdout="ok", stderr=""),   # curl network proxy
+            MagicMock(returncode=0, stdout="ok", stderr=""),   # curl allowed host
+            MagicMock(returncode=28, stdout="", stderr=""),    # curl non-allowed
+        ]
+
+        rc = selftest("claude", "/fake/dotfiles",
+                       runtime_type="docker-container")
+        assert rc == 0
+
+        captured = capsys.readouterr()
+        assert "selftest starting (docker-container)" in captured.out
+        assert "PASS: check token" in captured.out
+        assert "PASS: docker socket proxy" in captured.out
+        assert "PASS: network proxy" in captured.out
+        assert "PASS: build image" in captured.out
+        assert "PASS: create container" in captured.out
+        assert "PASS: proxy reachable from container" in captured.out
+        assert "PASS: claude auth via proxy" in captured.out
+        assert "PASS: network isolation" in captured.out
+        assert "PASS: docker socket proxy from container" in captured.out
+        assert "PASS: network proxy from container" in captured.out
+        assert "PASS: allowed host via proxy" in captured.out
+        assert "PASS: non-allowed host blocked" in captured.out
+        # Docker proxy didn't exist before, so should be stopped
+        mock_stop_docker.assert_called_once()
+        # Network proxy didn't exist before, so should be stopped
+        mock_stop_network.assert_called_once()
+
+    @patch("ralph.selftest.stop_network_proxy")
+    @patch("ralph.selftest.stop_docker_proxy")
+    @patch("ralph.selftest.DockerContainerRuntime.remove_sandbox")
+    @patch("ralph.selftest.stop_proxy")
+    @patch("ralph.selftest.DockerContainerRuntime.ensure_image",
+           side_effect=RuntimeError("build failed"))
+    @patch("ralph.selftest.ensure_network_proxy")
+    @patch("ralph.selftest.network_proxy_health_check",
+           side_effect=[(False, None, None), (True, "def456", frozenset())])
+    @patch("ralph.selftest.docker_proxy_health_check",
+           side_effect=[(False, None), (True, "abc123")])
+    @patch("ralph.selftest.ensure_docker_proxy")
+    @patch("ralph.selftest.proxy_health_check",
+           side_effect=[(False, None), (True, "abc123")])
+    @patch("ralph.selftest.ensure_proxy")
+    @patch("ralph.selftest.read_token_from_keychain")
+    @patch("ralph.selftest.time.time", return_value=1700000000.0)
+    def test_image_build_failure_aborts(self, mock_time, mock_read,
+                                         mock_ensure_proxy, mock_proxy_health,
+                                         mock_ensure_docker, mock_docker_health,
+                                         mock_network_health,
+                                         mock_ensure_network, mock_img,
+                                         mock_stop_proxy,
+                                         mock_remove, mock_stop_docker,
+                                         mock_stop_network, capsys):
+        mock_read.return_value = {"accessToken": "sk-test",
+                                  "expiresAt": self.FUTURE_MS}
+        rc = selftest("claude", "/fake/dotfiles",
+                       runtime_type="docker-container")
+        assert rc == 1
+        captured = capsys.readouterr()
+        assert "FAIL: build image" in captured.out
+        assert "selftest aborted" in captured.out
+
+    @patch("ralph.selftest.stop_network_proxy")
+    @patch("ralph.selftest.stop_docker_proxy")
+    @patch("ralph.selftest.DockerContainerRuntime.remove_sandbox")
+    @patch("ralph.selftest.stop_proxy")
+    @patch("ralph.selftest.network_proxy_health_check",
+           return_value=(False, None, None))
+    @patch("ralph.selftest.docker_proxy_health_check",
+           side_effect=[(False, None), (False, None)])
+    @patch("ralph.selftest.ensure_docker_proxy",
+           side_effect=RuntimeError("socket not available"))
+    @patch("ralph.selftest.proxy_health_check",
+           side_effect=[(False, None), (True, "abc123")])
+    @patch("ralph.selftest.ensure_proxy")
+    @patch("ralph.selftest.read_token_from_keychain")
+    @patch("ralph.selftest.time.time", return_value=1700000000.0)
+    def test_docker_proxy_failure_aborts(self, mock_time, mock_read,
+                                          mock_ensure_proxy, mock_proxy_health,
+                                          mock_ensure_docker,
+                                          mock_docker_health,
+                                          mock_network_health,
+                                          mock_stop_proxy, mock_remove,
+                                          mock_stop_docker,
+                                          mock_stop_network, capsys):
+        mock_read.return_value = {"accessToken": "sk-test",
+                                  "expiresAt": self.FUTURE_MS}
+        rc = selftest("claude", "/fake/dotfiles",
+                       runtime_type="docker-container")
+        assert rc == 1
+        captured = capsys.readouterr()
+        assert "FAIL: docker socket proxy" in captured.out
+
+    @patch("ralph.selftest.stop_network_proxy")
+    @patch("ralph.selftest.stop_docker_proxy")
+    @patch("ralph.selftest.DockerContainerRuntime.remove_sandbox")
+    @patch("ralph.selftest.stop_proxy")
+    @patch("ralph.selftest.network_proxy_health_check",
+           side_effect=[(False, None, None), (False, None, None)])
+    @patch("ralph.selftest.ensure_network_proxy",
+           side_effect=RuntimeError("proxy failed"))
+    @patch("ralph.selftest.docker_proxy_health_check",
+           side_effect=[(False, None), (True, "abc123")])
+    @patch("ralph.selftest.ensure_docker_proxy")
+    @patch("ralph.selftest.proxy_health_check",
+           side_effect=[(False, None), (True, "abc123")])
+    @patch("ralph.selftest.ensure_proxy")
+    @patch("ralph.selftest.read_token_from_keychain")
+    @patch("ralph.selftest.time.time", return_value=1700000000.0)
+    def test_network_proxy_failure_aborts(self, mock_time, mock_read,
+                                           mock_ensure_proxy, mock_proxy_health,
+                                           mock_ensure_docker,
+                                           mock_docker_health,
+                                           mock_ensure_network,
+                                           mock_network_health,
+                                           mock_stop_proxy, mock_remove,
+                                           mock_stop_docker,
+                                           mock_stop_network, capsys):
+        mock_read.return_value = {"accessToken": "sk-test",
+                                  "expiresAt": self.FUTURE_MS}
+        rc = selftest("claude", "/fake/dotfiles",
+                       runtime_type="docker-container")
+        assert rc == 1
+        captured = capsys.readouterr()
+        assert "FAIL: network proxy" in captured.out

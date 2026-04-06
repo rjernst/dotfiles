@@ -11,7 +11,7 @@ from ralph.orchestration import (
     ensure_worktree, try_fast_forward,
 )
 from ralph.proxy import MODEL_ALIASES, proxy_health_check, ensure_proxy
-from ralph.sandbox import load_sandbox_config, create_sandbox_backend
+from ralph.runtime import load_runtime_config, create_runtime
 from ralph.util import parse_frontmatter, parse_issue_branch
 
 
@@ -82,40 +82,40 @@ def process_issue(issue_number, git, dotfiles_dir, gh, agent, push, model,
     # Resolve project root for project-level sandbox dependencies
     repo_root = git.output("rev-parse", "--show-toplevel")
 
-    # Create sandbox backend based on project config
-    config = load_sandbox_config(repo_root)
+    # Create runtime backend based on project config
+    config = load_runtime_config(repo_root)
     config["project_dir"] = repo_root
-    sandbox_type = config.pop("type")
-    sandbox = create_sandbox_backend(sandbox_type, dotfiles_dir, **config)
+    runtime_type = config.pop("type")
+    runtime = create_runtime(runtime_type, dotfiles_dir, **config)
 
     # Auto-prune stale sandboxes before creating/reusing ours
     try:
-        pruned = sandbox.prune_sandboxes(agent)
+        pruned = runtime.prune_sandboxes(agent)
         if pruned:
             print(f"ralph: pruned {len(pruned)} stale sandbox(es)")
     except Exception:
         pass  # best-effort — don't block issue processing
 
     # Ensure sandbox
-    sandbox_name = sandbox.ensure_sandbox(agent, branch, work_dir,
+    sandbox_name = runtime.ensure_sandbox(agent, branch, work_dir,
                                           project_dir=repo_root,
                                           force_rebuild=rebuild)
 
     # Configure git inside sandbox
-    sandbox.setup_git_config(sandbox_name, git_user, git_email)
+    runtime.setup_git_config(sandbox_name, git_user, git_email)
 
     # Ensure sandbox can access the shared git state
-    if not sandbox.check_in_sync(sandbox_name, work_dir, git):
+    if not runtime.check_in_sync(sandbox_name, work_dir, git):
         print("ralph: sandbox out of sync with host, resetting...")
-        if sandbox.reset_to_host(sandbox_name, work_dir, git):
+        if runtime.reset_to_host(sandbox_name, work_dir, git):
             print("ralph: sandbox reset to match host")
         else:
             print("ralph: reset failed, recreating sandbox...")
-            sandbox.remove_sandbox(sandbox_name)
-            sandbox_name = sandbox.ensure_sandbox(agent, branch, work_dir,
+            runtime.remove_sandbox(sandbox_name)
+            sandbox_name = runtime.ensure_sandbox(agent, branch, work_dir,
                                                   project_dir=repo_root,
                                                   force_rebuild=rebuild)
-            sandbox.setup_git_config(sandbox_name, git_user, git_email)
+            runtime.setup_git_config(sandbox_name, git_user, git_email)
 
     # Label in-progress
     gh.issue_edit(issue_number, repo,
@@ -134,7 +134,7 @@ def process_issue(issue_number, git, dotfiles_dir, gh, agent, push, model,
         model_id = MODEL_ALIASES.get(model, model)
         env_vars = {
             "CLAUDE_CODE_OAUTH_TOKEN": "phantom",
-            "ANTHROPIC_BASE_URL": f"http://{sandbox.proxy_host()}:{proxy_port}",
+            "ANTHROPIC_BASE_URL": f"http://{runtime.proxy_host()}:{proxy_port}",
             "ANTHROPIC_CUSTOM_MODEL_OPTION": model_id,
         }
         api_key = None
@@ -152,7 +152,7 @@ def process_issue(issue_number, git, dotfiles_dir, gh, agent, push, model,
 
             # Run iteration
             print(f"ralph: starting iteration (sandbox={sandbox_name}, issue=#{issue_number}, model={model})")
-            rc, body = sandbox.run_iteration(sandbox_name, body, model,
+            rc, body = runtime.run_iteration(sandbox_name, body, model,
                                              env_vars, agent=agent,
                                              api_key=api_key)
             if rc != 0:
@@ -185,11 +185,11 @@ def process_issue(issue_number, git, dotfiles_dir, gh, agent, push, model,
                                   remove_labels="status:in-progress",
                                   add_label="status:done")
                     unblock_ready_specs(repo, gh)
-                    sandbox.cleanup_sandbox(agent, branch)
+                    runtime.cleanup_sandbox(agent, branch)
                 break
 
             # Sync commits from sandbox to host worktree
-            if not sandbox.sync_to_host(sandbox_name, head_before, head_after, work_dir):
+            if not runtime.sync_to_host(sandbox_name, head_before, head_after, work_dir):
                 print(f"ralph: sync failed, marking issue #{issue_number} needs-attention",
                       file=sys.stderr)
                 gh.issue_edit(issue_number, repo,

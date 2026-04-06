@@ -17,7 +17,7 @@ from dotlib import DOTFILES_DIR
 from ralph.agents import VALID_AGENTS, get_agent
 from ralph.proxy import proxy_port_for_agent, ensure_proxy, stop_proxy
 from ralph.selftest import selftest
-from ralph.sandbox.docker import DockerSandbox
+from ralph.runtime.docker_sandbox import DockerSandboxRuntime
 from ralph.token import read_token_from_keychain
 
 # Skip entire module unless integration tests are enabled
@@ -77,21 +77,21 @@ class TestSandboxInfrastructure:
 
     @pytest.fixture
     def sandbox_image(self, agent):
-        sandbox = DockerSandbox(REPO_ROOT)
+        sandbox = DockerSandboxRuntime(REPO_ROOT)
         return sandbox.ensure_image(agent)
 
     @pytest.fixture
     def test_sandbox(self, agent, sandbox_image):
         agent_config = get_agent(agent)
-        sandbox = DockerSandbox(REPO_ROOT)
+        sandbox = DockerSandboxRuntime(REPO_ROOT)
         name = f"agent-loop-selftest-{agent}"
         sandbox.remove_sandbox(name)
 
-        git_common_dir = DockerSandbox._resolve_git_common_dir(os.getcwd())
+        git_common_dir = DockerSandboxRuntime._resolve_git_common_dir(os.getcwd())
         sandbox._docker_sandbox_create(
             name, sandbox_image, os.getcwd(), git_common_dir,
             sandbox_agent=agent_config["sandbox_agent"])
-        DockerSandbox.apply_network_policy(name, agent_config["allowed_hosts"])
+        DockerSandboxRuntime.apply_network_policy(name, agent_config["allowed_hosts"])
         yield name
 
         sandbox.remove_sandbox(name)
@@ -155,12 +155,12 @@ class TestSecretFileLifecycle:
     @pytest.fixture
     def test_sandbox(self, agent):
         agent_config = get_agent(agent)
-        sandbox = DockerSandbox(REPO_ROOT)
+        sandbox = DockerSandboxRuntime(REPO_ROOT)
         tag = sandbox.ensure_image(agent)
         name = f"agent-loop-selftest-secret-{agent}"
         sandbox.remove_sandbox(name)
 
-        git_common_dir = DockerSandbox._resolve_git_common_dir(os.getcwd())
+        git_common_dir = DockerSandboxRuntime._resolve_git_common_dir(os.getcwd())
         sandbox._docker_sandbox_create(
             name, tag, os.getcwd(), git_common_dir,
             sandbox_agent=agent_config["sandbox_agent"])
@@ -247,16 +247,16 @@ class TestClaudeAuth:
     @pytest.fixture
     def test_sandbox(self):
         agent_config = get_agent("claude")
-        sandbox = DockerSandbox(REPO_ROOT)
+        sandbox = DockerSandboxRuntime(REPO_ROOT)
         tag = sandbox.ensure_image("claude")
         name = "agent-loop-selftest-claude"
         sandbox.remove_sandbox(name)
 
-        git_common_dir = DockerSandbox._resolve_git_common_dir(os.getcwd())
+        git_common_dir = DockerSandboxRuntime._resolve_git_common_dir(os.getcwd())
         sandbox._docker_sandbox_create(
             name, tag, os.getcwd(), git_common_dir,
             sandbox_agent=agent_config["sandbox_agent"])
-        DockerSandbox.apply_network_policy(name, agent_config["allowed_hosts"])
+        DockerSandboxRuntime.apply_network_policy(name, agent_config["allowed_hosts"])
         yield name
 
         sandbox.remove_sandbox(name)
