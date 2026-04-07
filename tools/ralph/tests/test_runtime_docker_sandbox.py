@@ -727,13 +727,14 @@ class TestSandboxEnsureSandbox:
         (agent_dir / "Dockerfile").write_text(dockerfile)
         return DockerSandboxRuntime(str(tmp_path))
 
+    @patch.object(DockerSandboxRuntime, "_write_sandbox_fingerprint")
     @patch.object(DockerSandboxRuntime, "apply_network_policy")
     @patch.object(DockerSandboxRuntime, "_docker_sandbox_create")
     @patch.object(DockerSandboxRuntime, "_resolve_git_common_dir", return_value="/repo/.git")
     @patch.object(DockerSandboxRuntime, "ensure_image", return_value="agent-loop-sandbox-claude:vabc")
     @patch.object(DockerSandboxRuntime, "sandbox_exists", return_value=False)
     def test_creates_new_sandbox(self, mock_exists, mock_img, mock_resolve,
-                                 mock_create, mock_policy):
+                                 mock_create, mock_policy, mock_write_fp):
         sb = DockerSandboxRuntime("/dotfiles")
         name = sb.ensure_sandbox("claude", "fix-auth", "/work/fix-auth")
         assert name == "agent-loop-claude-fix-auth"
@@ -743,24 +744,55 @@ class TestSandboxEnsureSandbox:
         mock_policy.assert_called_once_with(
             "agent-loop-claude-fix-auth",
             ["api.anthropic.com", "statsig.anthropic.com", "sentry.io"])
+        mock_write_fp.assert_called_once()
 
+    @patch.object(DockerSandboxRuntime, "_config_fingerprint", return_value="match")
+    @patch.object(DockerSandboxRuntime, "_read_sandbox_fingerprint", return_value="match")
+    @patch.object(DockerSandboxRuntime, "_resolve_git_common_dir", return_value="/repo/.git")
+    @patch.object(DockerSandboxRuntime, "ensure_image", return_value="agent-loop-sandbox-claude:vabc")
     @patch.object(DockerSandboxRuntime, "sandbox_exists", return_value=True)
-    def test_reuses_existing_sandbox(self, mock_exists):
+    def test_reuses_existing_sandbox(self, mock_exists, mock_img, mock_resolve,
+                                     mock_read_fp, mock_fp):
         sb = DockerSandboxRuntime("/dotfiles")
         name = sb.ensure_sandbox("claude", "fix-auth", "/work/fix-auth")
         assert name == "agent-loop-claude-fix-auth"
 
+    @patch.object(DockerSandboxRuntime, "_config_fingerprint", return_value="match")
+    @patch.object(DockerSandboxRuntime, "_read_sandbox_fingerprint", return_value="match")
     @patch.object(DockerSandboxRuntime, "apply_network_policy")
     @patch.object(DockerSandboxRuntime, "_docker_sandbox_create")
+    @patch.object(DockerSandboxRuntime, "_resolve_git_common_dir", return_value="/repo/.git")
     @patch.object(DockerSandboxRuntime, "ensure_image", return_value="agent-loop-sandbox-claude:vabc")
     @patch.object(DockerSandboxRuntime, "sandbox_exists", return_value=True)
-    def test_reuse_skips_create_and_policy(self, mock_exists, mock_img, mock_create, mock_policy):
+    def test_reuse_skips_create_and_policy(self, mock_exists, mock_img, mock_resolve,
+                                           mock_create, mock_policy,
+                                           mock_read_fp, mock_fp):
         sb = DockerSandboxRuntime("/dotfiles")
         sb.ensure_sandbox("claude", "fix-auth", "/work/fix-auth")
         mock_create.assert_not_called()
         mock_policy.assert_not_called()
-        mock_img.assert_not_called()
 
+    @patch.object(DockerSandboxRuntime, "_write_sandbox_fingerprint")
+    @patch.object(DockerSandboxRuntime, "_config_fingerprint", return_value="new")
+    @patch.object(DockerSandboxRuntime, "_read_sandbox_fingerprint", return_value="old")
+    @patch.object(DockerSandboxRuntime, "apply_network_policy")
+    @patch.object(DockerSandboxRuntime, "_docker_sandbox_create")
+    @patch.object(DockerSandboxRuntime, "remove_sandbox")
+    @patch.object(DockerSandboxRuntime, "_resolve_git_common_dir", return_value="/repo/.git")
+    @patch.object(DockerSandboxRuntime, "ensure_image", return_value="agent-loop-sandbox-claude:vabc")
+    @patch.object(DockerSandboxRuntime, "sandbox_exists", return_value=True)
+    def test_recreates_on_config_change(self, mock_exists, mock_img, mock_resolve,
+                                        mock_remove, mock_create, mock_policy,
+                                        mock_read_fp, mock_fp, mock_write_fp):
+        sb = DockerSandboxRuntime("/dotfiles")
+        name = sb.ensure_sandbox("claude", "fix-auth", "/work/fix-auth")
+        assert name == "agent-loop-claude-fix-auth"
+        mock_remove.assert_called_once_with("agent-loop-claude-fix-auth")
+        mock_create.assert_called_once()
+        mock_policy.assert_called_once()
+        mock_write_fp.assert_called_once()
+
+    @patch.object(DockerSandboxRuntime, "_write_sandbox_fingerprint")
     @patch.object(DockerSandboxRuntime, "apply_network_policy")
     @patch.object(DockerSandboxRuntime, "_docker_sandbox_create")
     @patch.object(DockerSandboxRuntime, "_resolve_git_common_dir", return_value="/repo/.git")
@@ -771,7 +803,7 @@ class TestSandboxEnsureSandbox:
     @patch.object(DockerSandboxRuntime, "sandbox_exists", return_value=False)
     def test_calls_ensure_project_image_when_project_dir(
             self, mock_exists, mock_img, mock_proj, mock_resolve,
-            mock_create, mock_policy):
+            mock_create, mock_policy, mock_write_fp):
         sb = DockerSandboxRuntime("/dotfiles")
         sb.ensure_sandbox("claude", "fix-auth", "/work/fix-auth",
                           project_dir="/repo/root")
@@ -783,6 +815,7 @@ class TestSandboxEnsureSandbox:
             "agent-loop-sandbox-claude-myproj:vdef12345",
             "/work/fix-auth", "/repo/.git", sandbox_agent="claude")
 
+    @patch.object(DockerSandboxRuntime, "_write_sandbox_fingerprint")
     @patch.object(DockerSandboxRuntime, "apply_network_policy")
     @patch.object(DockerSandboxRuntime, "_docker_sandbox_create")
     @patch.object(DockerSandboxRuntime, "_resolve_git_common_dir", return_value="/repo/.git")
@@ -790,7 +823,8 @@ class TestSandboxEnsureSandbox:
                   return_value="agent-loop-sandbox-claude:vabc")
     @patch.object(DockerSandboxRuntime, "sandbox_exists", return_value=False)
     def test_skips_project_image_when_no_project_dir(
-            self, mock_exists, mock_img, mock_resolve, mock_create, mock_policy):
+            self, mock_exists, mock_img, mock_resolve, mock_create,
+            mock_policy, mock_write_fp):
         sb = DockerSandboxRuntime("/dotfiles")
         with patch.object(DockerSandboxRuntime, "ensure_project_image") as mock_proj:
             sb.ensure_sandbox("claude", "fix-auth", "/work/fix-auth")
@@ -800,6 +834,7 @@ class TestSandboxEnsureSandbox:
             "agent-loop-sandbox-claude:vabc",
             "/work/fix-auth", "/repo/.git", sandbox_agent="claude")
 
+    @patch.object(DockerSandboxRuntime, "_write_sandbox_fingerprint")
     @patch.object(DockerSandboxRuntime, "apply_network_policy")
     @patch.object(DockerSandboxRuntime, "_docker_sandbox_create")
     @patch.object(DockerSandboxRuntime, "_resolve_git_common_dir", return_value="/repo/.git")
@@ -810,7 +845,7 @@ class TestSandboxEnsureSandbox:
     @patch.object(DockerSandboxRuntime, "sandbox_exists", return_value=False)
     def test_force_rebuild_passed_through(
             self, mock_exists, mock_img, mock_proj, mock_resolve,
-            mock_create, mock_policy):
+            mock_create, mock_policy, mock_write_fp):
         sb = DockerSandboxRuntime("/dotfiles")
         sb.ensure_sandbox("claude", "fix-auth", "/work/fix-auth",
                           project_dir="/repo/root", force_rebuild=True)
@@ -819,6 +854,7 @@ class TestSandboxEnsureSandbox:
             "claude", "agent-loop-sandbox-claude:vabc", "/repo/root",
             force_rebuild=True)
 
+    @patch.object(DockerSandboxRuntime, "_write_sandbox_fingerprint")
     @patch.object(DockerSandboxRuntime, "apply_network_policy")
     @patch.object(DockerSandboxRuntime, "_docker_sandbox_create")
     @patch.object(DockerSandboxRuntime, "_resolve_git_common_dir", return_value="/repo/.git")
@@ -826,7 +862,7 @@ class TestSandboxEnsureSandbox:
     @patch.object(DockerSandboxRuntime, "sandbox_exists", return_value=False)
     def test_cursor_uses_shell_sandbox_agent(self, mock_exists, mock_img,
                                              mock_resolve, mock_create,
-                                             mock_policy):
+                                             mock_policy, mock_write_fp):
         sb = DockerSandboxRuntime("/dotfiles")
         name = sb.ensure_sandbox("cursor", "fix-auth", "/work/fix-auth")
         assert name == "agent-loop-cursor-fix-auth"

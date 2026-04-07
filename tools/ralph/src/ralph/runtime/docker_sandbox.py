@@ -1,5 +1,6 @@
 """Docker sandbox runtime backend for ralph agent-loop isolation."""
 
+import hashlib
 import json
 import os
 import shlex
@@ -160,11 +161,40 @@ class DockerSandboxRuntime(DockerImageMixin, Runtime):
             cmd.extend(["--allow-host", host])
         subprocess.run(cmd, check=True)
 
+    @staticmethod
+    def _config_fingerprint(tag, allowed_hosts, worktree_path, git_common_dir):
+        """Compute a fingerprint of the sandbox configuration.
+
+        Captures everything that goes into sandbox creation so that config
+        changes (image, network policy, workspace paths) trigger a recreate.
+        """
+        config = json.dumps({
+            "tag": tag,
+            "allowed_hosts": sorted(set(allowed_hosts)),
+            "worktree_path": worktree_path,
+            "git_common_dir": git_common_dir,
+        }, sort_keys=True)
+        return hashlib.sha256(config.encode()).hexdigest()[:16]
+
+    def _read_sandbox_fingerprint(self, name):
+        """Read the stored config fingerprint from inside the sandbox."""
+        return self.exec_output(name, "cat", "/tmp/.sandbox-config")
+
+    def _write_sandbox_fingerprint(self, name, fingerprint):
+        """Write the config fingerprint inside the sandbox."""
+        subprocess.run(
+            ["docker", "sandbox", "exec", "-i", name,
+             "tee", "/tmp/.sandbox-config"],
+            input=fingerprint, text=True, check=False,
+            stdout=subprocess.DEVNULL,
+        )
+
     def ensure_sandbox(self, agent, branch, worktree_path,
                        project_dir=None, force_rebuild=False):
         """Ensure a sandbox exists for the given agent and branch.
 
-        Reuses an existing sandbox or creates a new one with network policy.
+        Reuses an existing sandbox if its config fingerprint matches.
+        Otherwise removes the stale sandbox and creates a fresh one.
         If project_dir is provided, builds a project-level image layer.
         The host repo's shared .git directory is mounted as a second
         workspace so the worktree's .git pointer resolves inside the sandbox.
@@ -173,22 +203,33 @@ class DockerSandboxRuntime(DockerImageMixin, Runtime):
         agent_config = get_agent(agent)
         name = self.sandbox_name(agent, branch)
         self._worktree_path = worktree_path
-        if self.sandbox_exists(name):
-            print(f"ralph: reusing sandbox {name}")
-            self._touch_sandbox_timestamp(name)
-            return name
+
         base_tag = self.ensure_image(agent, force_rebuild=force_rebuild)
         if project_dir:
             tag = self.ensure_project_image(agent, base_tag, project_dir,
                                             force_rebuild=force_rebuild)
         else:
             tag = base_tag
+
+        all_hosts = list(agent_config["allowed_hosts"]) + list(self.allowed_hosts)
         git_common_dir = self._resolve_git_common_dir(worktree_path)
+        fingerprint = self._config_fingerprint(tag, all_hosts, worktree_path,
+                                               git_common_dir)
+
+        if self.sandbox_exists(name):
+            stored = self._read_sandbox_fingerprint(name)
+            if stored == fingerprint:
+                print(f"ralph: reusing sandbox {name}")
+                return name
+            print(f"ralph: config changed, recreating sandbox {name}")
+            self.remove_sandbox(name)
+
         print(f"ralph: creating sandbox {name}...")
         self._docker_sandbox_create(name, tag, worktree_path, git_common_dir,
                                     sandbox_agent=agent_config["sandbox_agent"])
         self.apply_network_policy(name, agent_config["allowed_hosts"])
         self._touch_sandbox_timestamp(name)
+        self._write_sandbox_fingerprint(name, fingerprint)
         return name
 
     @staticmethod
