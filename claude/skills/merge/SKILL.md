@@ -28,20 +28,22 @@ Parse `git worktree list --porcelain` output. Each worktree block starts with `w
 1. Get the current branch: `git branch --show-current`
 2. Follow the [Base branch detection](#base-branch-detection) procedure.
 
-#### Step 3A: Capture spec issue and craft commit message
+#### Step 3A: Craft commit message and merge
 
-Follow the [Pre-merge: capture spec issue number](#pre-merge-capture-spec-issue-number) procedure for `<current-branch>`.
+Follow the [Spec issue check](#spec-issue-check) procedure for `<current-branch>` to build the optional confirmation suffix.
 
 Follow the [Commit message crafting](#commit-message-crafting) procedure to produce a commit message for the branch (`git log <base-branch>..<current-branch>`).
 
 Present to the user for confirmation:
 ```
-Merge `<current-branch>` into `<base-branch>` with this commit message?
+Merge `<current-branch>` into `<base-branch>`?<spec-issue-suffix>
 
 ---
 <proposed commit message>
 ---
 ```
+
+Where `<spec-issue-suffix>` is ` (will also close spec issue #N)` if the branch has a spec issue, or empty otherwise.
 
 If the user requests changes, revise the message and update the temp file. Repeat until approved.
 
@@ -50,9 +52,7 @@ Once confirmed, run:
 ta wt merge --target <base-branch> --message-file "$tmp_msg" <current-branch>
 ```
 
-Report the output. If it fails, show the error and stop.
-
-If the merge succeeds and an issue number was captured, follow the [Post-merge: close spec issue](#post-merge-close-spec-issue) procedure using the captured issue number.
+Report the output. If it fails (non-zero exit), show the error and stop. `ta wt merge` handles spec issue verification and closing internally — do not run any post-merge commands from the skill, because the command's last step kills the tmux session this agent is running in.
 
 ---
 
@@ -100,18 +100,20 @@ If any worktree the user selects has status `wip` or `conflict`, warn them:
 
 Ask the user which branch(es) to merge. For each selected branch:
 
-1. Follow the [Pre-merge: capture spec issue number](#pre-merge-capture-spec-issue-number) procedure for `<selected-branch>`.
+1. Follow the [Spec issue check](#spec-issue-check) procedure for `<selected-branch>` to build the confirmation suffix.
 
 2. Follow the [Commit message crafting](#commit-message-crafting) procedure (`git log <current-branch>..<selected-branch>`).
 
 3. Show the proposed message as part of the merge confirmation:
    ```
-   Merge `<selected-branch>` into `<current-branch>` with this commit message?
+   Merge `<selected-branch>` into `<current-branch>`?<spec-issue-suffix>
 
    ---
    <proposed commit message>
    ---
    ```
+
+   Where `<spec-issue-suffix>` is ` (will also close spec issue #N)` if the branch has a spec issue, or empty otherwise.
 
    If the user requests changes, revise the message and update the temp file. Repeat until approved.
 
@@ -120,9 +122,7 @@ Ask the user which branch(es) to merge. For each selected branch:
    ta wt merge --target <current-branch> --message-file "$tmp_msg" <selected-branch>
    ```
 
-Report results for each merge. If a merge fails, show the error and ask whether to continue with remaining branches.
-
-After each successful merge where an issue number was captured, follow the [Post-merge: close spec issue](#post-merge-close-spec-issue) procedure using the captured issue number.
+Report results for each merge. If a merge fails (non-zero exit), show the error and ask whether to continue with remaining branches. `ta wt merge` handles spec issue verification and closing internally — the skill does not run any post-merge commands.
 
 ---
 
@@ -179,40 +179,17 @@ Use this procedure whenever a commit message is needed for a merge:
    MSG
    ```
 
-## Pre-merge: capture spec issue number
+## Spec issue check
 
-Before running `ta wt merge`, read the spec issue number from the branch being merged. This must happen before the merge because `ta wt merge` removes the worktree and branch ref.
+Use this procedure to decide whether to enrich the merge confirmation prompt with a "will also close spec issue #N" note. This is purely cosmetic — `ta wt merge` handles the actual verification and close internally, and will refuse to merge if the spec issue is not ready.
 
 ```
 git config branch.<branch-to-merge>.issue
 ```
 
-If no value is set, there is no associated spec issue — skip and proceed with the merge normally.
-If a value is set, hold it for use in the post-merge close procedure.
+- If unset or empty: the branch has no associated spec issue. The confirmation suffix is empty.
+- If set to a number N: the confirmation suffix is ` (will also close spec issue #N)`.
 
-## Post-merge: close spec issue
-
-After a successful merge, if a spec issue number was captured in the pre-merge step, offer to close it. This must run while the Claude session is still active — before any workspace teardown.
-
-1. Resolve the origin repo:
-   ```
-   git remote get-url origin | sed -E 's#.*github\.com[:/]##; s#\.git$##'
-   ```
-
-2. Fetch the issue labels:
-   ```
-   gh issue view <number> --repo <origin-repo> --json labels --jq '.labels[].name'
-   ```
-   Confirm the issue has both a `spec` label and a `status:done` label. If either is missing, skip silently.
-
-3. Offer to close:
-   > Spec issue #N is marked done. Close it?
-
-4. If the user confirms, close the issue:
-   ```
-   gh issue close <number> --repo <origin-repo>
-   ```
-
-5. If the user declines, skip without error.
+Do not attempt to verify labels, fetch issue metadata, or close the issue yourself. `ta wt merge` owns that logic, runs it atomically in the same process as the merge, and exits non-zero (with a clear error) if anything is misaligned. If the merge command fails, show its error output and stop — the user can fix the underlying problem and re-run `/merge`, or run `/tidy` to recover from a partial state.
 
 $ARGUMENTS

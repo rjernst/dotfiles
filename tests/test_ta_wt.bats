@@ -475,6 +475,43 @@ setup() {
   [ -z "$output" ]
 }
 
+@test "wt remove refuses to remove current worktree" {
+  cd "$PROJECT"
+  git checkout -b feat-self-remove
+  git commit --allow-empty -m "self remove"
+  git checkout main
+  git worktree add "$BATS_TEST_TMPDIR/wt-self-remove" feat-self-remove
+
+  # Run ta wt remove from inside the worktree we're trying to remove.
+  # This would leave the shell with a dangling cwd and silently break
+  # subsequent git operations, so it must be refused.
+  cd "$BATS_TEST_TMPDIR/wt-self-remove"
+  run "$TA_WT" remove feat-self-remove
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"cannot remove worktree 'feat-self-remove' while inside it"* ]]
+
+  # Nothing was modified
+  [ -d "$BATS_TEST_TMPDIR/wt-self-remove" ]
+  run git -C "$PROJECT" branch --list feat-self-remove
+  [[ "$output" == *"feat-self-remove"* ]]
+}
+
+@test "wt remove refuses from a subdirectory of the current worktree" {
+  cd "$PROJECT"
+  git checkout -b feat-self-sub
+  git commit --allow-empty -m "self sub"
+  git checkout main
+  git worktree add "$BATS_TEST_TMPDIR/wt-self-sub" feat-self-sub
+  mkdir "$BATS_TEST_TMPDIR/wt-self-sub/nested"
+
+  cd "$BATS_TEST_TMPDIR/wt-self-sub/nested"
+  run "$TA_WT" remove feat-self-sub
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"cannot remove worktree 'feat-self-sub' while inside it"* ]]
+
+  [ -d "$BATS_TEST_TMPDIR/wt-self-sub" ]
+}
+
 @test "wt remove calls workspace kill for session cleanup" {
   cd "$PROJECT"
   git checkout -b feat-rm-ws
@@ -1002,4 +1039,338 @@ MOCK
 
   # Commit exists on main
   [ -f "$PROJECT/explicit-main.txt" ]
+}
+
+# --- gh stub helper (used by spec-issue tests) ---
+#
+# Install a programmable gh stub at $BATS_TEST_TMPDIR/bin/gh that responds
+# to `gh issue view`, `gh issue close`, and `gh pr list`. Behavior is
+# controlled via env vars the test sets before running ta-wt:
+#
+#   GH_STUB_LABELS    comma-separated labels returned by `gh issue view`
+#                     (default: "spec,status:done")
+#   GH_STUB_VIEW_RC   exit code for `gh issue view` (default: 0)
+#   GH_STUB_CLOSE_RC  exit code for `gh issue close` (default: 0)
+#   GH_STUB_LOG       if set, each invocation's args are appended here
+_install_gh_stub() {
+  mkdir -p "$BATS_TEST_TMPDIR/bin"
+  cat > "$BATS_TEST_TMPDIR/bin/gh" <<'STUB'
+#!/bin/bash
+if [[ -n "${GH_STUB_LOG:-}" ]]; then
+  printf '%s\n' "$*" >> "$GH_STUB_LOG"
+fi
+case "${1:-} ${2:-}" in
+  "issue view")
+    if [[ "${GH_STUB_VIEW_RC:-0}" != "0" ]]; then
+      echo "gh stub: issue view error" >&2
+      exit "${GH_STUB_VIEW_RC}"
+    fi
+    echo "${GH_STUB_LABELS:-spec,status:done}"
+    ;;
+  "issue close")
+    if [[ "${GH_STUB_CLOSE_RC:-0}" != "0" ]]; then
+      echo "gh stub: issue close error" >&2
+      exit "${GH_STUB_CLOSE_RC}"
+    fi
+    ;;
+  "pr list")
+    echo "[]"
+    ;;
+esac
+exit 0
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/gh"
+  export PATH="$BATS_TEST_TMPDIR/bin:$PATH"
+}
+
+# --- ta wt merge spec issue tests ---
+
+@test "wt merge closes spec issue on happy path" {
+  cd "$PROJECT"
+  _install_gh_stub
+  export GH_STUB_LOG="$BATS_TEST_TMPDIR/gh.log"
+
+  git checkout -b feat-spec
+  echo "spec content" > spec.txt
+  git add spec.txt
+  git commit -m "spec commit"
+  git checkout main
+  git worktree add "$BATS_TEST_TMPDIR/wt-spec" feat-spec
+
+  git -C "$PROJECT" config branch.feat-spec.issue 42
+
+  run "$TA_WT" merge feat-spec
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"closed spec issue #42"* ]]
+  [[ "$output" == *"merged 'feat-spec' into main"* ]]
+
+  # Both gh view (pre-flight) and gh close (post-merge) were invoked
+  grep -q "issue view 42" "$BATS_TEST_TMPDIR/gh.log"
+  grep -q "issue close 42" "$BATS_TEST_TMPDIR/gh.log"
+
+  # Config entry was unset on successful close
+  run git -C "$PROJECT" config --get branch.feat-spec.issue
+  [ "$status" -ne 0 ]
+
+  # Branch was deleted
+  run git -C "$PROJECT" branch --list feat-spec
+  [ -z "$output" ]
+}
+
+@test "wt merge without spec issue does not invoke gh" {
+  cd "$PROJECT"
+  _install_gh_stub
+  export GH_STUB_LOG="$BATS_TEST_TMPDIR/gh.log"
+
+  git checkout -b feat-noissue
+  echo "noissue content" > noissue.txt
+  git add noissue.txt
+  git commit -m "no issue"
+  git checkout main
+  git worktree add "$BATS_TEST_TMPDIR/wt-noissue" feat-noissue
+
+  # No branch.feat-noissue.issue config set — not a ralph-managed branch.
+
+  run "$TA_WT" merge feat-noissue
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"merged 'feat-noissue' into main"* ]]
+  [[ "$output" != *"closed spec issue"* ]]
+
+  # gh must not have been invoked for issue view/close
+  if [ -f "$BATS_TEST_TMPDIR/gh.log" ]; then
+    run grep -E "^issue (view|close)" "$BATS_TEST_TMPDIR/gh.log"
+    [ "$status" -ne 0 ]
+  fi
+}
+
+@test "wt merge refuses when spec issue is not status:done" {
+  cd "$PROJECT"
+  _install_gh_stub
+  export GH_STUB_LABELS="spec,status:in-progress"
+
+  git checkout -b feat-inprog
+  echo "inprog content" > inprog.txt
+  git add inprog.txt
+  git commit -m "in progress"
+  git checkout main
+  git worktree add "$BATS_TEST_TMPDIR/wt-inprog" feat-inprog
+
+  git -C "$PROJECT" config branch.feat-inprog.issue 99
+
+  run "$TA_WT" merge feat-inprog
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"#99"* ]]
+  [[ "$output" == *"status:done"* ]]
+
+  # Merge did NOT happen — no new file on main
+  [ ! -f "$PROJECT/inprog.txt" ]
+
+  # Worktree, branch, and config entry all untouched
+  [ -d "$BATS_TEST_TMPDIR/wt-inprog" ]
+  run git -C "$PROJECT" branch --list feat-inprog
+  [[ "$output" == *"feat-inprog"* ]]
+  run git -C "$PROJECT" config --get branch.feat-inprog.issue
+  [ "$status" -eq 0 ]
+  [[ "$output" == "99" ]]
+}
+
+@test "wt merge refuses when gh view fails in pre-flight" {
+  cd "$PROJECT"
+  _install_gh_stub
+  export GH_STUB_VIEW_RC=1
+
+  git checkout -b feat-ghfail
+  echo "ghfail content" > ghfail.txt
+  git add ghfail.txt
+  git commit -m "gh fail"
+  git checkout main
+  git worktree add "$BATS_TEST_TMPDIR/wt-ghfail" feat-ghfail
+
+  git -C "$PROJECT" config branch.feat-ghfail.issue 77
+
+  run "$TA_WT" merge feat-ghfail
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"failed to fetch spec issue #77"* ]]
+
+  # Merge did NOT happen
+  [ ! -f "$PROJECT/ghfail.txt" ]
+  [ -d "$BATS_TEST_TMPDIR/wt-ghfail" ]
+}
+
+@test "wt merge fails loudly if gh close fails after merge landed" {
+  cd "$PROJECT"
+  _install_gh_stub
+  export GH_STUB_CLOSE_RC=1
+
+  git checkout -b feat-closefail
+  echo "closefail content" > closefail.txt
+  git add closefail.txt
+  git commit -m "close fail"
+  git checkout main
+  git worktree add "$BATS_TEST_TMPDIR/wt-closefail" feat-closefail
+
+  git -C "$PROJECT" config branch.feat-closefail.issue 55
+
+  run "$TA_WT" merge feat-closefail
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"failed to close spec issue #55"* ]]
+  [[ "$output" == *"merge landed"* ]]
+  [[ "$output" == *"/tidy"* ]]
+
+  # Merge DID land on main
+  [ -f "$PROJECT/closefail.txt" ]
+
+  # Worktree and branch still exist (cleanup aborted before cmd_remove)
+  [ -d "$BATS_TEST_TMPDIR/wt-closefail" ]
+  run git -C "$PROJECT" branch --list feat-closefail
+  [[ "$output" == *"feat-closefail"* ]]
+
+  # Config entry still present — /tidy can retry the close
+  run git -C "$PROJECT" config --get branch.feat-closefail.issue
+  [ "$status" -eq 0 ]
+  [[ "$output" == "55" ]]
+}
+
+@test "wt merge from inside branch worktree actually deletes branch" {
+  # Regression test for the zombie-branches bug. Before the os.chdir(main_wt)
+  # anchor in cmd_merge, running ta wt merge from inside the branch worktree
+  # caused git branch -D in cmd_remove to fail silently (check=False), because
+  # Python's cwd was wiped by git worktree remove. The branch was left behind.
+  cd "$PROJECT"
+
+  git checkout -b feat-zombie
+  echo "zombie content" > zombie.txt
+  git add zombie.txt
+  git commit -m "zombie"
+  git checkout main
+  git worktree add "$BATS_TEST_TMPDIR/wt-zombie" feat-zombie
+
+  cd "$BATS_TEST_TMPDIR/wt-zombie"
+  run "$TA_WT" merge feat-zombie
+  [ "$status" -eq 0 ]
+
+  # The actual regression assertion: branch must be deleted.
+  run git -C "$PROJECT" branch --list feat-zombie
+  [ -z "$output" ]
+
+  # Worktree dir is also gone.
+  [ ! -d "$BATS_TEST_TMPDIR/wt-zombie" ]
+}
+
+# --- ta wt prune spec issue tests ---
+
+@test "wt prune --apply closes spec issue before removing merged worktree" {
+  cd "$PROJECT"
+  _install_gh_stub
+  export GH_STUB_LOG="$BATS_TEST_TMPDIR/gh.log"
+
+  git checkout -b feat-prune-issue
+  echo "prune issue content" > pi.txt
+  git add pi.txt
+  git commit -m "prune issue"
+  git checkout main
+  git merge feat-prune-issue
+  git worktree add "$BATS_TEST_TMPDIR/wt-prune-issue" feat-prune-issue
+
+  git -C "$PROJECT" config branch.feat-prune-issue.issue 11
+
+  run "$TA_WT" prune --apply
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"closed spec issue #11 for 'feat-prune-issue'"* ]]
+
+  grep -q "issue close 11" "$BATS_TEST_TMPDIR/gh.log"
+
+  # Worktree and branch gone
+  [ ! -d "$BATS_TEST_TMPDIR/wt-prune-issue" ]
+  run git -C "$PROJECT" branch --list feat-prune-issue
+  [ -z "$output" ]
+
+  # Config entry unset
+  run git -C "$PROJECT" config --get branch.feat-prune-issue.issue
+  [ "$status" -ne 0 ]
+}
+
+@test "wt prune --apply skips merged worktree with wrong-label issue" {
+  cd "$PROJECT"
+  _install_gh_stub
+  export GH_STUB_LABELS="spec,status:in-progress"
+
+  git checkout -b feat-prune-wrong
+  echo "prune wrong content" > pw.txt
+  git add pw.txt
+  git commit -m "prune wrong"
+  git checkout main
+  git merge feat-prune-wrong
+  git worktree add "$BATS_TEST_TMPDIR/wt-prune-wrong" feat-prune-wrong
+
+  git -C "$PROJECT" config branch.feat-prune-wrong.issue 22
+
+  run "$TA_WT" prune --apply
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"skipping 'feat-prune-wrong'"* ]]
+  [[ "$output" == *"status:done"* ]]
+
+  # Worktree and branch still exist — nothing was removed
+  [ -d "$BATS_TEST_TMPDIR/wt-prune-wrong" ]
+  run git -C "$PROJECT" branch --list feat-prune-wrong
+  [[ "$output" == *"feat-prune-wrong"* ]]
+
+  # Config entry still present — user can fix labels and retry
+  run git -C "$PROJECT" config --get branch.feat-prune-wrong.issue
+  [ "$status" -eq 0 ]
+}
+
+@test "wt prune dry-run shows will close spec issue suffix" {
+  cd "$PROJECT"
+  _install_gh_stub
+
+  git checkout -b feat-dry-issue
+  echo "dry content" > dry.txt
+  git add dry.txt
+  git commit -m "dry"
+  git checkout main
+  git merge feat-dry-issue
+  git worktree add "$BATS_TEST_TMPDIR/wt-dry-issue" feat-dry-issue
+
+  git -C "$PROJECT" config branch.feat-dry-issue.issue 33
+
+  run "$TA_WT" prune
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"would remove 'feat-dry-issue'"* ]]
+  [[ "$output" == *"will close spec issue #33"* ]]
+
+  # Dry-run: worktree still exists
+  [ -d "$BATS_TEST_TMPDIR/wt-dry-issue" ]
+}
+
+@test "wt prune --apply closes orphaned spec issue configs" {
+  cd "$PROJECT"
+  _install_gh_stub
+  export GH_STUB_LOG="$BATS_TEST_TMPDIR/gh.log"
+
+  # Stale config entry for a branch that never existed in this repo.
+  git -C "$PROJECT" config branch.deleted-long-ago.issue 88
+
+  run "$TA_WT" prune --apply
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"closed orphaned spec issue #88"* ]]
+  [[ "$output" == *"deleted-long-ago"* ]]
+
+  grep -q "issue close 88" "$BATS_TEST_TMPDIR/gh.log"
+
+  # Config entry unset
+  run git -C "$PROJECT" config --get branch.deleted-long-ago.issue
+  [ "$status" -ne 0 ]
+}
+
+@test "wt prune dry-run lists orphaned spec issue configs" {
+  cd "$PROJECT"
+  _install_gh_stub
+
+  git -C "$PROJECT" config branch.deleted-other.issue 77
+
+  run "$TA_WT" prune
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"would close orphaned spec issue #77"* ]]
+  [[ "$output" == *"deleted-other"* ]]
 }
