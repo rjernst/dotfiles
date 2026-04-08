@@ -228,31 +228,54 @@ Source issue: #<number> (or <repo>#<number> if cross-repo)
 ```
 
 ## Creating the Issue
-Use this command to create the issue (replace placeholders).
+
+Spec bodies are long and contain markdown characters (backticks, `$`, `%`, code fences) that reliably break shell string escaping. **Always** use `--body-file` with a unique temp file, and **always** follow this exact three-step procedure. Do not improvise — every alternative listed in the "Do NOT" section below has been seen to fail.
+
+### Label selection
 
 The `--label` value depends on dependency status:
 - No dependencies, or all dependencies already `status:done` → `spec,status:ready`
 - Any dependency not yet `status:done` → `spec,status:blocked`
 
+### Step 1 — Generate a unique temp path (Bash tool)
+
+Run exactly this command:
+
+```zsh
+mktemp -u /tmp/create-spec-body.XXXXXXXX
+```
+
+This prints a unique path (e.g. `/tmp/create-spec-body.aB3xZ9qP`) **without** creating the file on disk. Capture the exact path from the command's stdout and use it verbatim in Steps 2 and 3. Do not edit, rename, or add an extension to it.
+
+### Step 2 — Write the spec body (Write tool, not Bash)
+
+Use the Claude Code `Write` tool with:
+- `file_path`: the exact path printed by Step 1
+- `content`: the raw spec body (frontmatter + markdown, verbatim — no shell escaping, no backslash escapes)
+
+Because `mktemp -u` does not create the file, `Write` can create it fresh without needing a prior `Read`. The Write tool passes `content` through the tool-call JSON channel, so backticks, `$`, `%`, code fences, and embedded `EOF` markers all pass through untouched.
+
+### Step 3 — Create the issue (Bash tool)
+
 ```zsh
 gh issue create \
   --repo "<origin-repo>" \
   --title "<Feature Name>" \
   --label "spec,status:ready" \
-  --body "<spec body with frontmatter>"
+  --body-file "<path from Step 1>"
 ```
 
-For long spec bodies, write the body to a temp file and use `--body-file`:
+### Do NOT
 
-```zsh
-tmp_spec=$(mktemp /tmp/spec-body-XXXXXX.md)
-# ... write spec body to "$tmp_spec" ...
-gh issue create \
-  --repo "<origin-repo>" \
-  --title "<Feature Name>" \
-  --label "spec,status:ready" \
-  --body-file "$tmp_spec"
-```
+Every item below is a real failure mode that has been observed. None of them are acceptable substitutes for the three-step procedure above:
+
+- **Do not use heredocs** (`cat <<EOF > "$f"` / `cat <<'EOF'`). Unquoted `EOF` causes shell expansion of `$` and backticks inside the spec; the delimiter can collide with content; and trailing-newline handling is fragile.
+- **Do not use `echo` or `printf`** to emit the body. Newlines, `%`, and backslashes misbehave across shells and `echo` variants.
+- **Do not pass `--body "<inline string>"`**. Shell quoting of multi-line markdown is a guaranteed breakage on spec content.
+- **Do not use a fixed temp path** like `/tmp/spec-body.md` or `/tmp/create-spec.md`. Multiple concurrent `/create-spec` invocations will clobber each other.
+- **Do not put `X`s anywhere except the end of the `mktemp` basename** (e.g. never `mktemp /tmp/foo-XXXXXX.md`). On macOS (BSD `mktemp`), trailing characters after the `X`s break the placeholder — `mktemp` may fail or literally create a file named `foo-XXXXXX.md`, defeating uniqueness. `gh issue create --body-file` does not care about file extensions, so drop the `.md`.
+- **Do not omit `-u` from `mktemp`**. Without `-u`, `mktemp` creates an empty file, which then forces the `Write` tool to require a prior `Read` before overwriting. `-u` generates the name without creating the file, which is what Step 2 needs.
+- **Do not try to combine Steps 1 and 2 in a single Bash command** (e.g. `mktemp -u ... | xargs ...`). Keep them as two explicit tool calls so the path is captured cleanly.
 
 The spec body must start with frontmatter containing at least the `branch` field:
 ```markdown
