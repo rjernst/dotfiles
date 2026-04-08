@@ -2,6 +2,7 @@
 
 import datetime
 import json
+import os
 import subprocess
 import time
 from unittest.mock import MagicMock, patch
@@ -713,6 +714,79 @@ class TestSandboxName:
 
     def test_custom_agent(self):
         assert DockerSandboxRuntime.sandbox_name("codex", "my-branch") == "agent-loop-codex-my-branch"
+
+
+# ---------------------------------------------------------------------------
+# Runtime.sandbox_name length capping (addresses macOS sun_path limit)
+# ---------------------------------------------------------------------------
+
+class TestSandboxNameTruncation:
+    def test_runtime_base_has_no_limit(self):
+        """Base Runtime declares no length constraint — names are unclamped."""
+        assert Runtime._max_sandbox_name_length() is None
+        name = Runtime.sandbox_name("claude", "x" * 200)
+        assert name == "agent-loop-claude-" + "x" * 200
+
+    def test_docker_sandbox_limit_matches_socket_budget(self):
+        """DockerSandboxRuntime limit = 103 - len(socket_dir) - len(socket_file)."""
+        limit = DockerSandboxRuntime._max_sandbox_name_length()
+        socket_dir = os.path.expanduser("~/.docker/sandboxes/vm/")
+        expected = 103 - len(socket_dir) - len("/docker-public.sock")
+        assert limit == expected
+
+    def test_no_truncation_when_under_limit(self):
+        """Short names pass through unchanged."""
+        name = DockerSandboxRuntime.sandbox_name("claude", "short-branch")
+        assert name == "agent-loop-claude-short-branch"
+
+    @patch.object(DockerSandboxRuntime, "_max_sandbox_name_length")
+    def test_truncation_applied_when_over_limit(self, mock_max):
+        mock_max.return_value = 48
+        name = DockerSandboxRuntime.sandbox_name(
+            "claude", "extension-layers-modularization")
+        assert len(name) <= 48
+        assert name.startswith("agent-loop-claude-")
+
+    @patch.object(DockerSandboxRuntime, "_max_sandbox_name_length")
+    def test_truncation_is_deterministic(self, mock_max):
+        """Same input always yields same truncated name (sandbox reuse)."""
+        mock_max.return_value = 48
+        a = DockerSandboxRuntime.sandbox_name("claude", "extension-layers-modularization")
+        b = DockerSandboxRuntime.sandbox_name("claude", "extension-layers-modularization")
+        assert a == b
+
+    @patch.object(DockerSandboxRuntime, "_max_sandbox_name_length")
+    def test_truncation_distinguishes_sibling_branches(self, mock_max):
+        """Different branches sharing a common prefix get distinct names."""
+        mock_max.return_value = 48
+        long_prefix = "feature-with-a-really-long-descriptive-name"
+        a = DockerSandboxRuntime.sandbox_name("claude", long_prefix + "-alpha")
+        b = DockerSandboxRuntime.sandbox_name("claude", long_prefix + "-beta")
+        assert a != b
+        assert len(a) <= 48 and len(b) <= 48
+
+    @patch.object(DockerSandboxRuntime, "_max_sandbox_name_length")
+    def test_truncation_strips_trailing_hyphen_before_hash(self, mock_max):
+        """Avoid '--' artifact when truncation lands on a hyphen."""
+        mock_max.return_value = 48
+        # 18-char prefix "agent-loop-claude-" + 20 'a's + '-' would make
+        # character index 39 land exactly on a hyphen; the 39-char cut
+        # (48 - 9 for the "-<8 hash>" suffix) should have its trailing
+        # hyphen stripped.
+        branch = "a" * 20 + "-tail-that-pushes-well-over-the-limit"
+        name = DockerSandboxRuntime.sandbox_name("claude", branch)
+        assert "--" not in name
+        assert len(name) <= 48
+        # Hash suffix is always exactly 9 chars: "-" + 8 hex chars.
+        assert name[-9] == "-"
+        assert all(c in "0123456789abcdef" for c in name[-8:])
+
+    @patch.object(DockerSandboxRuntime, "_max_sandbox_name_length")
+    def test_truncation_preserves_agent_loop_prefix(self, mock_max):
+        """The 'agent-loop-<agent>-' prefix is always preserved."""
+        mock_max.return_value = 48
+        name = DockerSandboxRuntime.sandbox_name("claude", "x" * 100)
+        assert name.startswith("agent-loop-claude-")
 
 
 # ---------------------------------------------------------------------------

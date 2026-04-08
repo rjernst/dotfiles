@@ -449,16 +449,39 @@ class Runtime:
         "without actually running the checks."
     )
 
-    @staticmethod
-    def sandbox_name(agent, branch):
+    @classmethod
+    def _max_sandbox_name_length(cls):
+        """Upper bound on sandbox names imposed by the backend.
+
+        Some backends provision macOS Unix domain sockets whose paths embed
+        the sandbox name.  Because ``sockaddr_un.sun_path`` is 104 bytes
+        (including the null terminator) on macOS, those backends must cap
+        the name length to keep the resulting socket path valid.  Backends
+        that have this constraint override this method to declare their
+        budget.  The default ``None`` means no length constraint.
+        """
+        return None
+
+    @classmethod
+    def sandbox_name(cls, agent, branch):
         """Generate sandbox name from agent and branch.
 
         Sanitizes the branch: replaces '/' with '-', strips leading/trailing
-        hyphens, collapses consecutive hyphens, and lowercases.
+        hyphens, collapses consecutive hyphens, and lowercases.  If the
+        resulting name exceeds the backend's ``_max_sandbox_name_length``,
+        it is truncated and a short content hash suffix of the untruncated
+        name is appended so distinct branches sharing a common prefix still
+        produce distinct sandbox names.
         """
         sanitized = branch.replace("/", "-").lower()
         sanitized = re.sub(r'-+', '-', sanitized).strip("-")
-        return f"agent-loop-{agent}-{sanitized}"
+        name = f"agent-loop-{agent}-{sanitized}"
+        max_len = cls._max_sandbox_name_length()
+        if max_len is None or len(name) <= max_len:
+            return name
+        hash_suffix = "-" + hashlib.sha1(name.encode()).hexdigest()[:8]
+        truncated = name[: max_len - len(hash_suffix)].rstrip("-")
+        return truncated + hash_suffix
 
     def proxy_host(self):
         """Return the hostname for reaching the credential proxy."""

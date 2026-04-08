@@ -1,6 +1,7 @@
 """Unit tests for ralph.runtime.tart — TartRuntime backend."""
 
 import json
+import os
 import subprocess
 import time
 from unittest.mock import MagicMock, patch
@@ -46,6 +47,30 @@ class TestTartTemplateName:
     def test_changes_with_agent(self):
         t = self._make()
         assert t._template_name("claude") != t._template_name("cursor")
+
+
+# ---------------------------------------------------------------------------
+# TartRuntime._max_sandbox_name_length (macOS sun_path cap)
+# ---------------------------------------------------------------------------
+
+class TestTartSandboxNameLimit:
+    def test_limit_matches_control_socket_budget(self):
+        """Limit = 103 - len(~/.tart/vms/) - len(/control.sock)."""
+        limit = TartRuntime._max_sandbox_name_length()
+        socket_dir = os.path.expanduser("~/.tart/vms/")
+        expected = 103 - len(socket_dir) - len("/control.sock")
+        assert limit == expected
+
+    def test_short_name_is_not_truncated(self):
+        name = TartRuntime.sandbox_name("claude", "my-branch")
+        assert name == "agent-loop-claude-my-branch"
+
+    @patch.object(TartRuntime, "_max_sandbox_name_length")
+    def test_long_name_is_truncated(self, mock_max):
+        mock_max.return_value = 40
+        name = TartRuntime.sandbox_name("claude", "x" * 100)
+        assert len(name) <= 40
+        assert name.startswith("agent-loop-claude-")
 
 
 # ---------------------------------------------------------------------------

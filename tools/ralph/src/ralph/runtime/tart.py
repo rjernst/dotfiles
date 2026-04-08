@@ -32,6 +32,20 @@ class TartRuntime(Runtime):
         self.base_image = config.get("base_image", "")
         self.dependencies_content = config.get("dependencies_content", "")
 
+    @classmethod
+    def _max_sandbox_name_length(cls):
+        """Max sandbox name length that keeps the VM's control socket path
+        within the macOS ``sockaddr_un.sun_path`` limit (104 bytes
+        including the null terminator, so 103 usable).
+
+        Tart provisions each VM with a control socket at
+        ``~/.tart/vms/<name>/control.sock``.  If the full path exceeds 103
+        bytes, ``bind(2)`` fails with EINVAL and VM startup aborts.
+        """
+        socket_dir = os.path.expanduser("~/.tart/vms/")
+        socket_file = "/control.sock"
+        return 103 - len(socket_dir) - len(socket_file)
+
     def check_prerequisites(self):
         """Check that tart and docker (for proxy) are available.
 

@@ -25,6 +25,21 @@ class DockerSandboxRuntime(DockerImageMixin, Runtime):
         """Return the hostname for reaching the credential proxy."""
         return "host.docker.internal"
 
+    @classmethod
+    def _max_sandbox_name_length(cls):
+        """Max sandbox name length that keeps the VM's Unix domain socket
+        path within the macOS ``sockaddr_un.sun_path`` limit (104 bytes
+        including the null terminator, so 103 usable).
+
+        Docker Desktop provisions each sandbox with a socket at
+        ``~/.docker/sandboxes/vm/<name>/docker-public.sock``.  If the full
+        path exceeds 103 bytes, ``bind(2)`` fails with EINVAL and sandbox
+        creation aborts with "invalid argument".
+        """
+        socket_dir = os.path.expanduser("~/.docker/sandboxes/vm/")
+        socket_file = "/docker-public.sock"
+        return 103 - len(socket_dir) - len(socket_file)
+
     def check_prerequisites(self):
         """Check that Docker is available. Returns list of error messages."""
         errors = []
