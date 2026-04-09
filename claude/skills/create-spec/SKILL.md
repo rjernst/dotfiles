@@ -1,3 +1,9 @@
+---
+name: create-spec
+description: Interactive Ralph spec generator. Collaboratively creates a self-contained feature spec and opens it as a GitHub Issue (labels `spec` + `status:ready`/`status:blocked`) for execution via Ralph, the dockerized AI coding loop. Use when the user invokes `/create-spec`, asks to draft a Ralph spec, or wants to turn a feature idea / existing issue into an executable spec issue.
+allowed-tools: Bash(mktemp:*), Write(/tmp/**), Bash(gh issue create:*), Bash(ta agent-loop:*)
+---
+
 You are an AI planning agent. Your job is to collaboratively create a new feature spec for execution via Ralph, the dockerized AI coding loop.
 
 ## Rules
@@ -76,8 +82,9 @@ gh issue view <number> --repo <origin-repo or upstream-repo> --json title,body,l
 2. Agent resolves origin and upstream repos
 3. Agent processes input (issue lookup, search, conversation analysis, or blank)
 4. Agent interviews user and drafts spec (following protocol below)
-5. Agent creates a GitHub Issue via `gh issue create --repo <origin-repo>` with the spec as the body
-6. User runs `ralph --issue <number>` or `ralph --poll` to execute
+5. Agent presents the drafted spec to the user for review and iterates on feedback until the user explicitly approves
+6. Agent creates a GitHub Issue via `gh issue create --repo <origin-repo>` with the approved spec as the body
+7. User runs `ralph --issue <number>` or `ralph --poll` to execute
 
 ## Interview Protocol (conversational, one topic at a time)
 Do NOT dump all questions at once. Run a short, dynamic interview that asks only what's needed, one topic per message, until you have enough to produce the spec in the exact template below.
@@ -131,24 +138,59 @@ Potential topics (ask in this order, skipping any that are clearly implied):
 ### Stopping rule
 You're done interviewing when you can fill every required field in the spec template with concrete, self-contained information (defaults are allowed if clearly stated).
 
-### Then: create the GitHub Issue immediately (no draft review step)
+### Then: draft the spec and review with the user
 Once you have enough info:
-- Draft the spec body in the exact template format (see below), including frontmatter
-- If created from a source issue, include the source reference in the spec body
-- Determine the initial status label:
-  - If the spec has **no dependencies** → use `status:ready`
+- Draft the spec body in the exact template format (see below), including frontmatter.
+- If created from a source issue, include the source reference in the spec body.
+- Determine the initial status label (you'll use this at creation time):
+  - If the spec has **no dependencies** → `status:ready`
   - If the spec has dependencies, check each dep issue for a `status:done` label:
-    - **All deps done** → use `status:ready` (no point blocking)
-    - **Any dep not done** → use `status:blocked`
+    - **All deps done** → `status:ready` (no point blocking)
+    - **Any dep not done** → `status:blocked`
   - Check dep labels with: `gh issue view <number> --json labels --jq '.labels[].name'`
-- Create a GitHub Issue using `gh issue create --repo <origin-repo>` with:
-  - **Title:** `Feature Name` (clean title, no branch prefix)
-  - **Labels:** `spec,status:ready` or `spec,status:blocked` (based on dependency check above)
-  - **Body:** The spec content with frontmatter (see template below)
-- Display the issue URL so the user can review
-- If created with `status:blocked`, report: "Created with status:blocked — waiting on #X, #Y" (listing the unmet dependency issue numbers)
 
-If anything is ambiguous, ask the minimum follow-up questions, then create the issue.
+**Review step (required — do NOT skip):**
+
+This step is mandatory and its format is fixed. Use the exact template and `AskUserQuestion` call below every time — substitute only the `<...>` placeholders, and do not rephrase headers, reorder fields, change emphasis, or alter fence style. Consistency across invocations is the entire point of this step.
+
+**Step 1 — Post this display template as a single chat message, verbatim:**
+
+    **Spec draft — please review before I create the issue.**
+
+    - **Repo:** `<origin-repo>`
+    - **Title:** `<Feature Name>`
+    - **Label:** `<label line — see rules below>`
+
+    ````markdown
+    <full spec body verbatim, including frontmatter>
+    ````
+
+Rules for the template:
+- **Outer fence must be four backticks**, not three. The spec body contains its own triple-backtick code fences (e.g. the `markdown` frontmatter example and `zsh` snippets), and a three-backtick outer wrapper will close early and render broken. Do not substitute `~~~` or any other fence style — four backticks only.
+- **Label line**: when the spec has no unmet dependencies, show exactly `Label: \`spec,status:ready\``. When dependencies are not yet `status:done`, show `Label: \`spec,status:blocked\` — waiting on #X, #Y` instead, listing the unmet dependency issue numbers.
+- **No other header fields.** Do not add Branch, Base, Depends, or Source Issue lines to the header — those are already visible inside the fenced spec body and adding them is noisy duplication.
+
+**Step 2 — Immediately call `AskUserQuestion`** with these exact parameters:
+
+- `question`: `Approve this spec, or cancel? To request changes, select 'Other' and describe what to change.`
+- `header`: `Review spec`
+- `multiSelect`: `false`
+- `options` (exactly these two, in this order):
+  1. `label`: `Approve — create the issue`, `description`: `Create the GitHub issue with this spec as the body.`
+  2. `label`: `Cancel — discard this draft`, `description`: `Stop without creating the issue or writing any files.`
+
+Do **not** add a third "Revise" option. `AskUserQuestion` automatically appends an "Other" free-text slot, and the signposting in the `question` text routes revision requests through it. Adding an explicit "Revise" option would force a second round-trip to collect the revision text — defeating the purpose.
+
+Do **not** add `(Recommended)` to Approve. This is a neutral human checkpoint; the agent should not lobby the user to rubber-stamp its draft.
+
+**Step 3 — Handle the answer string:**
+- Exactly `Approve — create the issue` → proceed to the "Creating the Issue" section below.
+- Exactly `Cancel — discard this draft` → stop immediately. Do not create the issue, do not write any files, do not call `mktemp`. Briefly confirm to the user that the draft was discarded.
+- **Anything else** (the user selected "Other" and typed text) → treat the returned string as revision instructions. Update the draft in place, then **re-post the full display template from Step 1 again** with the updated spec body — not a diff, not a "here's what I changed" summary, not a partial block. Then call `AskUserQuestion` again with the exact same parameters from Step 2. Repeat until the user selects Approve or Cancel.
+
+Even though the tools used to create the issue (`mktemp`, `Write` to `/tmp`, `gh issue create`) are auto-approved via this skill's `allowed-tools` frontmatter, this review step is the human checkpoint — it cannot be skipped and its format cannot be improvised.
+
+If anything is ambiguous during drafting, ask the minimum follow-up questions *before* presenting the draft — once the template is posted, further questions should flow through the "Other" revision channel, not through ad-hoc chat messages.
 
 ### After issue creation: offer to start an agent loop
 After creating the issue, check if an agent loop is already running for the current repo:
@@ -228,6 +270,8 @@ Source issue: #<number> (or <repo>#<number> if cross-repo)
 ```
 
 ## Creating the Issue
+
+**Precondition:** Do not start this section until the user has explicitly approved the drafted spec in the Review step above. The `mktemp`, `Write(/tmp/**)`, and `gh issue create` steps below are auto-approved by this skill's `allowed-tools` frontmatter, which is why the review gate is non-optional.
 
 Spec bodies are long and contain markdown characters (backticks, `$`, `%`, code fences) that reliably break shell string escaping. **Always** use `--body-file` with a unique temp file, and **always** follow this exact three-step procedure. Do not improvise — every alternative listed in the "Do NOT" section below has been seen to fail.
 
