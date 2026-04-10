@@ -42,8 +42,7 @@ AGENTS = {
         "sandbox_agent": "shell",
         "cli_flags": _cursor_cli_flags,
         "allowed_hosts": [
-            "api2.cursor.sh",
-            "api5.cursor.sh",
+            "*.cursor.sh",
             "sentry.io",
         ],
         "default_model": "auto",
