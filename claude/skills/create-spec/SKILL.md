@@ -1,7 +1,7 @@
 ---
 name: create-spec
 description: Interactive Ralph spec generator. Collaboratively creates a self-contained feature spec and opens it as a GitHub Issue (labels `spec` + `status:ready`/`status:blocked`) for execution via Ralph, the dockerized AI coding loop. Use when the user invokes `/create-spec`, asks to draft a Ralph spec, or wants to turn a feature idea / existing issue into an executable spec issue.
-allowed-tools: Bash(mktemp:*), Write(/tmp/**), Bash(gh issue create:*), Bash(ta agent-loop:*)
+allowed-tools: Bash(mktemp:*), Write(/tmp/**), Bash(gh issue create:*), Bash(ta agent-loop:*), Bash(git remote get-url:*)
 ---
 
 You are an AI planning agent. Your job is to collaboratively create a new feature spec for execution via Ralph, the dockerized AI coding loop.
@@ -20,17 +20,11 @@ You are an AI planning agent. Your job is to collaboratively create a new featur
 
 Determine the target repo and upstream repo at the start of every invocation:
 
-1. **Origin (target for spec creation):**
-   ```
-   git remote get-url origin | sed -E 's#.*github\.com[:/]##; s#\.git$##'
-   ```
-   This gives the user's fork (e.g., `rjernst/elasticsearch`).
+1. **Origin (target for spec creation):** Run `git remote get-url origin` and parse the output into `owner/repo` form. The URL will be either `git@github.com:owner/repo.git` or `https://github.com/owner/repo.git` — strip everything up to and including `github.com[:/]` and strip any trailing `.git`. Result is the user's fork (e.g., `rjernst/elasticsearch`).
 
-2. **Upstream (fallback for issue search):**
-   ```
-   git remote get-url upstream | sed -E 's#.*github\.com[:/]##; s#\.git$##'
-   ```
-   This gives the parent repo (e.g., `elastic/elasticsearch`). If no `upstream` remote exists, skip upstream fallback.
+2. **Upstream (fallback for issue search):** Run `git remote get-url upstream` and parse the same way. If the command exits non-zero, no `upstream` remote exists — skip upstream fallback. Otherwise you get the parent repo (e.g., `elastic/elasticsearch`).
+
+Do **not** pipe these into `sed`, `awk`, or other filters — the permission allow-list only covers `git remote get-url`, and any extra command in the pipeline will trigger a permission prompt. Parse the raw URL yourself.
 
 If origin cannot be resolved to a GitHub `owner/repo`, inform the user and stop.
 
