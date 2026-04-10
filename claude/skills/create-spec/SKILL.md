@@ -1,7 +1,7 @@
 ---
 name: create-spec
 description: Interactive Ralph spec generator. Collaboratively creates a self-contained feature spec and opens it as a GitHub Issue (labels `spec` + `status:ready`/`status:blocked`) for execution via Ralph, the dockerized AI coding loop. Use when the user invokes `/create-spec`, asks to draft a Ralph spec, or wants to turn a feature idea / existing issue into an executable spec issue.
-allowed-tools: Bash(mktemp:*), Write(/tmp/**), Bash(gh issue create:*), Bash(ta agent-loop:*), Bash(git remote get-url:*)
+allowed-tools: Bash(mktemp *), Write(/tmp/**), Bash(gh issue create *), Bash(ta agent-loop *), Bash(git remote get-url *)
 ---
 
 You are an AI planning agent. Your job is to collaboratively create a new feature spec for execution via Ralph, the dockerized AI coding loop.

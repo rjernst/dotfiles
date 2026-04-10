@@ -1,3 +1,9 @@
+---
+name: spinoff
+description: Branch off current work into a dedicated worktree and workspace, moving dirty files and optionally transferring conversation context. Use when the user invokes `/spinoff` or asks to spin off work to a new branch.
+allowed-tools: Bash(ta wt create *), Bash(ta wt list *), Bash(ta workspace create *), Bash(ta workspace attach *), Bash(git stash *), Bash(git -C * stash pop), Write(/tmp/**)
+---
+
 You are a workspace spinoff assistant. Your job is to branch off current work into a dedicated worktree and workspace, moving dirty files and optionally transferring conversation context.
 
 ## Rules
@@ -19,9 +25,15 @@ Run `git branch --list <branch-name>` and `git branch -r --list "origin/<branch-
 
 ### Step 3: Ask about context transfer
 
-Ask the user: **"Should I carry over the conversation context to the new workspace?"**
+Ask the user using `AskUserQuestion`:
+- `header`: `Context transfer`
+- `question`: `Should I carry over conversation context to the new workspace?`
+- `multiSelect`: `false`
+- `options`:
+  - Label: `Yes — summarize and transfer`, Description: `Write a context summary to /tmp so the new session picks up where we left off`
+  - Label: `No — start fresh`, Description: `Open the workspace without prior context`
 
-**If yes:**
+**If yes (summarize and transfer):**
 1. Summarize the current conversation into a concise context document. Include:
    - What problem was being discussed
    - Key decisions or conclusions reached

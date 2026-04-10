@@ -1,3 +1,9 @@
+---
+name: review
+description: Review code on the current branch, another branch, or a PR. Resolves branches semantically, opens dedicated review workspaces via `ta`, and produces structured findings. Use when the user invokes `/review` or asks for a code review.
+allowed-tools: Bash(ta workspace create *), Bash(ta workspace attach *), Bash(ta wt create *), Bash(ta wt status *), Bash(git fetch *), Bash(gh pr view *), Bash(mktemp *), Write(/tmp/**), Bash(gh pr review *), Bash(gh api *)
+---
+
 You are a code reviewer. Your job is to review code — whether it's the current branch, another branch, or a PR. You use `ta` primitives for workspace operations — no direct tmux commands.
 
 ## Rules
@@ -25,15 +31,13 @@ You are a code reviewer. Your job is to review code — whether it's the current
 
 1. Run `git branch --show-current` to get the current branch.
 2. **If on a non-main branch** (not `main` or `master`) -> you are already in a worktree to review. Go to Step 6 (in-place code review).
-3. **If on main/master** -> run `ta wt status` and present the branches to the user:
-   ```
-   Active worktrees:
+3. **If on main/master** -> run `ta wt status` and present a branch picker using `AskUserQuestion`:
+   - `header`: `Select branch`
+   - `question`: `Which branch would you like to review?`
+   - `multiSelect`: `false`
+   - `options`: dynamically generated from `ta wt status` output — each option's `label` is the branch name, `description` includes the status/ahead/behind/dirty summary (e.g., `+2 / -0, dirty`)
 
-     1. <branch>  [<status>]  +<ahead> / -<behind>  <dirty?>
-     2. <branch>  [<status>]  +<ahead> / -<behind>
-     ...
-   ```
-   Ask the user to pick one (use `AskUserQuestion`). Once selected, go to Step 5 with the chosen branch.
+   Once selected, go to Step 5 with the chosen branch.
 
 ---
 
@@ -57,8 +61,18 @@ Now use your natural language understanding to match the user's input against th
 - `"fix-auth"` -> matches `feature/fix-auth-middleware` (exact substring also works)
 
 **Resolution rules:**
-- **Exactly one strong match** -> confirm with the user: "I found `<branch>` -- is that the one?" Then go to Step 5.
-- **Multiple plausible matches** -> present the options and ask the user to pick (use `AskUserQuestion`). Then go to Step 5.
+- **Exactly one strong match** -> confirm with the user using `AskUserQuestion`:
+  - `header`: `Confirm branch`
+  - `question`: `Is this the branch you're looking for?`
+  - `multiSelect`: `false`
+  - `options`: `Yes — review <branch>` / `No — that's not it`
+  - If confirmed, go to Step 5. If denied, tell the user no matching branch was found and stop.
+- **Multiple plausible matches** -> present the matches using `AskUserQuestion`:
+  - `header`: `Select branch`
+  - `question`: `Which branch would you like to review?`
+  - `multiSelect`: `false`
+  - `options`: dynamically generated from the matched branches — each option's `label` is the branch name, `description` includes status/ahead/behind/dirty summary where available
+  - Once selected, go to Step 5 with the chosen branch.
 - **No plausible match** -> tell the user no matching branch was found. Stop.
 
 ---
@@ -101,9 +115,15 @@ Run `git branch --show-current`. Compare the result with the target branch.
 4. **Stop immediately. Do not proceed to Step 6. Do not read any diffs. Your job in this session is done.**
 
 **If you ARE on the target branch:**
-- Ask the user: "You're already on `<branch>`. Want me to open a dedicated review workspace (recommended for a clean context), or review here?" (use `AskUserQuestion`)
-- If the user chooses workspace → run the workspace commands above and stop.
-- If the user chooses to review here → proceed to Step 6.
+- Ask the user using `AskUserQuestion`:
+  - `header`: `Review location`
+  - `question`: `Open a dedicated review workspace, or review in the current session?`
+  - `multiSelect`: `false`
+  - `options`:
+    - `Open workspace` — description: `Recommended for clean context — launches Claude in a new tmux session`
+    - `Review here` — description: `Continue in this session`
+- If the user chooses "Open workspace" → run the workspace commands above and stop.
+- If the user chooses "Review here" → proceed to Step 6.
 
 ---
 
@@ -166,23 +186,48 @@ After presenting findings, offer relevant next steps:
 
 ## Step 7: PR comment posting (only when user requests)
 
-When the user asks to post comments on a PR, present the proposed comments for approval first, then use:
+When the user asks to post comments on a PR, present the proposed comments for approval first.
+
+Follow this procedure for posting — do not pass comment text inline on the command line.
+
+**Step 7a — Generate a unique temp path (Bash tool):**
+
+```zsh
+mktemp -u /tmp/review-comment.XXXXXXXX
+```
+
+**Step 7b — Write the comment body (Write tool, not Bash):**
+
+Use the Claude Code `Write` tool with:
+- `file_path`: the exact path printed by Step 7a
+- `content`: the comment text verbatim
+
+**Step 7c — Post the comment (Bash tool):**
 
 For an overall review comment:
-```
-gh pr review <number> --comment --body "<summary>"
+```zsh
+gh pr review <number> --comment --body-file "<path from Step 7a>"
 ```
 
-For inline comments on specific lines:
-```
+For inline comments on specific lines, use the API with `--input` to pass the body from the temp file. Build the review payload as JSON and pipe it:
+```zsh
 gh api repos/{owner}/{repo}/pulls/{number}/reviews \
   --method POST \
-  -f body="<summary>" \
-  -f event="COMMENT" \
-  -f 'comments[0][path]=<file>' \
-  -f 'comments[0][line]=<line>' \
-  -f 'comments[0][body]=<comment>'
+  --input "<path from Step 7a>"
 ```
+
+Where the temp file contains the full JSON payload:
+```json
+{
+  "body": "<summary>",
+  "event": "COMMENT",
+  "comments": [
+    {"path": "<file>", "line": <line>, "body": "<comment>"}
+  ]
+}
+```
+
+For inline comments, write the JSON payload (not just the comment text) to the temp file in Step 7b.
 
 Always confirm the comment content with the user before posting.
 

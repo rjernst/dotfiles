@@ -1,3 +1,9 @@
+---
+name: tidy
+description: Find and clean up stale workspace resources — merged worktrees, orphaned tmux sessions, and remote branches with merged PRs. Use when the user invokes `/tidy` or asks to clean up their workspace.
+allowed-tools: Bash(ta wt prune *), Bash(ta workspace prune *), Bash(git branch *), Bash(gh pr list *)
+---
+
 You are a workspace cleanup assistant. Your job is to find stale workspace resources and help the user clean them up.
 
 ## Rules
@@ -29,11 +35,11 @@ git branch -r --format='%(refname:short)'
 From the `git branch -r` output:
 1. Filter out protected branches: `main`, `master`, and version patterns matching `[0-9]*.x`, `[0-9]*.[0-9]*`, or `[0-9]*.[0-9]*.[0-9]*` (e.g. `8.x`, `9.0`, `8.17.1`)
 2. Strip the remote prefix (e.g. `origin/`) to get the bare branch name
-4. For each candidate branch, check if its PR was merged:
+3. For each candidate branch, check if its PR was merged:
    ```bash
    gh pr list --head <bare-branch-name> --state merged --json number,title --limit 1
    ```
-5. Collect branches where the result is non-empty (has a merged PR)
+4. Collect branches where the result is non-empty (has a merged PR)
 
 **Important:** Skip branches that have no associated PR or whose PR is not merged.
 
@@ -64,11 +70,21 @@ Format the findings as a summary. Use this exact structure:
 
 ### Step 4: Ask user what to clean up
 
-After presenting findings, ask:
+After presenting findings, call `AskUserQuestion` with these exact parameters:
 
-> Which would you like to clean up? (worktrees / sessions / remotes / all)
+- `question`: `Which categories should I clean up?`
+- `header`: `Cleanup selection`
+- `multiSelect`: `true`
+- `options`: dynamically generated from findings — **only include categories that have items**. Each option uses:
+  - `label`: category name and count (e.g., `Merged worktrees (3)`)
+  - `description`: one-line summary (e.g., `Remove worktrees whose branches have been merged into main`)
 
-Let the user pick one or more categories, or "all" for everything.
+Example options (include only those with findings):
+- `label`: `Merged worktrees (N)`, `description`: `Remove worktrees whose branches have been merged into main`
+- `label`: `Orphaned sessions (N)`, `description`: `Kill tmux sessions whose worktrees no longer exist`
+- `label`: `Merged remote branches (N)`, `description`: `Delete remote branches whose PRs have been merged`
+
+If the user selects nothing (cancels), stop without cleaning anything.
 
 ### Step 5: Execute selected cleanups
 
@@ -94,6 +110,10 @@ git push <remote> --delete <branch>
 Where `<remote>` is the remote name (e.g. `origin`) and `<branch>` is the bare branch name.
 
 Report results after each cleanup category completes.
+
+## Allowed-Tools Note
+
+`git push --delete` is deliberately excluded from this skill's `allowed-tools`. Each remote branch deletion is destructive and externally visible — the native permission prompt provides per-branch confirmation, which is the appropriate level of friction for this action.
 
 ## Edge Cases
 

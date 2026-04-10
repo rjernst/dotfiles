@@ -1,3 +1,9 @@
+---
+name: workon
+description: Open or create a workspace for a branch. Resolves branches semantically, creates worktrees and tmux sessions via `ta`. Use when the user invokes `/workon` or asks to switch to a branch workspace.
+allowed-tools: Bash(ta wt status *), Bash(ta wt create *), Bash(ta workspace create *), Bash(ta workspace attach *), Bash(ta workspace list *), Bash(git branch *)
+---
+
 You are a workspace switcher. Your job is to open (or create) a workspace for a branch and start a Claude session there. You use `ta` primitives for all operations — no direct tmux commands.
 
 ## Rules
@@ -19,17 +25,12 @@ You are a workspace switcher. Your job is to open (or create) a workspace for a 
 ### Step 2: No input — interactive picker
 
 1. Run: `ta wt status --json`
-2. Parse the JSON output and present worktrees to the user:
-   ```
-   Active worktrees:
-
-     1. <branch>  [<status>]  +<ahead> / -<behind>  <dirty?>
-     2. <branch>  [<status>]  +<ahead> / -<behind>
-     ...
-   ```
-   Where `<status>` is the status field (e.g., "wip", "clean"), `<ahead>`/`<behind>` are commit counts, and `(dirty)` is shown if the dirty field is not "clean".
-3. Ask the user to pick one (use `AskUserQuestion`).
-4. Once selected, go to Step 4 with the chosen branch.
+2. Parse the JSON output and present a branch picker using `AskUserQuestion`:
+   - `header`: `Select branch`
+   - `question`: `Which branch would you like to open?`
+   - `multiSelect`: `false`
+   - `options`: dynamically generated from `ta wt status` output — each option's `label` is the branch name, `description` includes the status/ahead/behind/dirty summary (e.g., `+2 / -0, dirty`)
+3. Once selected, go to Step 4 with the chosen branch.
 
 ---
 
@@ -53,8 +54,18 @@ Now use your natural language understanding to match the user's input against th
 - `"fix-auth"` -> matches `feature/fix-auth-middleware` (exact substring also works)
 
 **Resolution rules:**
-- **Exactly one strong match** -> confirm with the user: "I found `<branch>` -- is that the one?" Then go to Step 4.
-- **Multiple plausible matches** -> present the options and ask the user to pick (use `AskUserQuestion`). Then go to Step 4.
+- **Exactly one strong match** -> confirm with the user using `AskUserQuestion`:
+  - `header`: `Confirm branch`
+  - `question`: `Is this the branch you're looking for?`
+  - `multiSelect`: `false`
+  - `options`: `Yes — open <branch>` / `No — that's not it`
+  - If confirmed, go to Step 4. If denied, ask the user to clarify what they're looking for.
+- **Multiple plausible matches** -> present the matches using `AskUserQuestion`:
+  - `header`: `Select branch`
+  - `question`: `Which branch would you like to open?`
+  - `multiSelect`: `false`
+  - `options`: dynamically generated from the matched branches — each option's `label` is the branch name, `description` includes status/ahead/behind/dirty summary where available
+  - Once selected, go to Step 4 with the chosen branch.
 - **No plausible match** -> ask the user if they want to create a new branch. If yes, ask for the branch name (suggest one based on their input) and go to Step 4 with `create_new=true`.
 
 ---
