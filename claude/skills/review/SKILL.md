@@ -124,16 +124,8 @@ Run `git branch --show-current`. Compare the result with the target branch.
 3. Report: "Opened review workspace for `<branch>`. Code review is running in the review window."
 4. **Stop immediately. Do not proceed to Step 6. Do not read any diffs. Your job in this session is done.**
 
-**If you ARE on the target branch:**
-- Ask the user using `AskUserQuestion`:
-  - `header`: `Review location`
-  - `question`: `Open a dedicated review workspace, or review in the current session?`
-  - `multiSelect`: `false`
-  - `options`:
-    - `Open workspace` — description: `Recommended for clean context — launches Claude in a new tmux session`
-    - `Review here` — description: `Continue in this session`
-- If the user chooses "Open workspace" → run the workspace commands above and stop.
-- If the user chooses "Review here" → proceed to Step 6.
+**If you ARE on the target branch (and it is not main/master):**
+- You are already in the right worktree. Proceed directly to Step 6. Do not ask whether to open a separate workspace — the worktree was created for this branch and asking adds unnecessary friction.
 
 ---
 

@@ -767,7 +767,7 @@ def cmd_status(git: Git, as_json: bool = False):
 
 def cmd_merge(git: Git, branch: str, target: str = "main", message: str = "",
               message_file: str = ""):
-    """Squash-merge branch into target with cleanup."""
+    """Squash-rebase branch and fast-forward merge into target with cleanup."""
     msg = message
     msg_file = message_file
 
@@ -823,14 +823,26 @@ def cmd_merge(git: Git, branch: str, target: str = "main", message: str = "",
             print(f"ta: {e}", file=sys.stderr)
             sys.exit(1)
 
-    # Squash merge
-    result = git.run("merge", "--squash", branch, cwd=main_wt, check=False)
-    if result.returncode != 0:
-        print("ta: merge conflicts detected, aborting merge", file=sys.stderr)
-        git.run("reset", "--hard", "HEAD", cwd=main_wt, check=False)
+    # Squash-rebase: collapse the branch into a single commit, then
+    # fast-forward merge into the target. This ensures the squashed commit
+    # is literally in the target's history, so merge-base --is-ancestor
+    # can detect it — unlike git merge --squash which creates a new commit
+    # that shares no ancestry with the branch.
+
+    # Save the original branch tip so we can restore on failure
+    orig_branch_head = git.output("rev-parse", "HEAD", cwd=branch_wt)
+
+    # Find the merge base between target and branch
+    merge_base = git.output("merge-base", target, branch, cwd=branch_wt)
+    if not merge_base:
+        print(f"ta: cannot find merge base between '{target}' and '{branch}'",
+              file=sys.stderr)
         sys.exit(1)
 
-    # Build commit command
+    # Squash all branch commits into one: soft-reset to the merge base
+    # (stages all changes), then commit with the provided message.
+    git.run("reset", "--soft", merge_base, cwd=branch_wt)
+
     commit_cmd = ["git", "commit"]
     if msg_file:
         commit_cmd += ["--file", msg_file]
@@ -840,12 +852,27 @@ def cmd_merge(git: Git, branch: str, target: str = "main", message: str = "",
         commit_cmd += ["-m", f"Squashed '{branch}' into {target}"]
 
     commit_result = subprocess.run(
-        commit_cmd, cwd=main_wt,
+        commit_cmd, cwd=branch_wt,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False,
     )
     if commit_result.returncode != 0:
-        print("ta: commit failed", file=sys.stderr)
-        git.run("reset", "--hard", "HEAD", cwd=main_wt, check=False)
+        print("ta: squash commit failed", file=sys.stderr)
+        git.run("reset", "--hard", orig_branch_head, cwd=branch_wt, check=False)
+        sys.exit(1)
+
+    # Rebase the single squashed commit onto the target so it fast-forwards
+    result = git.run("rebase", target, cwd=branch_wt, check=False)
+    if result.returncode != 0:
+        print("ta: rebase conflicts detected, aborting", file=sys.stderr)
+        git.run("rebase", "--abort", cwd=branch_wt, check=False)
+        git.run("reset", "--hard", orig_branch_head, cwd=branch_wt, check=False)
+        sys.exit(1)
+
+    # Fast-forward merge into target
+    result = git.run("merge", "--ff-only", branch, cwd=main_wt, check=False)
+    if result.returncode != 0:
+        print("ta: fast-forward merge failed", file=sys.stderr)
+        git.run("reset", "--hard", orig_branch_head, cwd=branch_wt, check=False)
         sys.exit(1)
 
     commit_hash = git.output("rev-parse", "--short", "HEAD", cwd=main_wt)
@@ -899,7 +926,7 @@ Commands:
   create    Create a worktree tracking a remote branch
   remove    Remove a worktree by branch name
   prune     Remove worktrees merged into main
-  merge     Squash-merge a branch into main with cleanup
+  merge     Squash-rebase and fast-forward merge a branch into main
   status    Quick one-line status of each worktree
 """
 
@@ -941,7 +968,7 @@ def build_parser():
     sp.add_argument("--json", action="store_true", help="Output as JSON")
 
     # merge
-    mp = subparsers.add_parser("merge", help="Squash-merge a branch into main")
+    mp = subparsers.add_parser("merge", help="Squash-rebase and fast-forward merge a branch into main")
     mp.add_argument("branch", help="Branch to merge")
     mp.add_argument("--target", default="main", help="Target branch (default: main)")
     mp.add_argument("--message", default="", help="Commit message")
