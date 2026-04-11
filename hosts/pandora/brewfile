@@ -47,6 +47,7 @@ cask 'docker'
 cask 'claude'
 cask 'claude-code'
 brew 'gh'
+brew 'go'
 brew 'pi-coding-agent'
 brew 'starship'
 

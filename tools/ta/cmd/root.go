@@ -29,6 +29,11 @@ func NewRootCmd() *cobra.Command {
 	// before our RunE shell fallback can handle them.
 	root.Args = cobra.ArbitraryArgs
 
+	// Disable flag parsing on the root command so that flags like --target
+	// are passed through as raw args to RunE (and then to the shell fallback)
+	// rather than being rejected by cobra's flag parser.
+	root.DisableFlagParsing = true
+
 	// TraverseChildren makes cobra walk the arg list and run a matching child
 	// command if found; unmatched args fall through to the root RunE above.
 	root.TraverseChildren = true

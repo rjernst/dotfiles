@@ -11,7 +11,7 @@ import sys
 from dataclasses import dataclass
 from typing import List, Tuple
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tools", "libs"))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__))), "tools", "libs"))
 from dotlib.git import Git
 
 
