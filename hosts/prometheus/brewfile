@@ -67,4 +67,5 @@ brew 'kubectl'
 brew 'teleport'
 brew 'starship'
 brew 'gh'
+brew 'pi-coding-agent'
 
