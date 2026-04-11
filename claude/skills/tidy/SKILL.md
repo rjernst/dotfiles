@@ -1,7 +1,11 @@
 ---
 name: tidy
 description: Find and clean up stale workspace resources — merged worktrees, orphaned tmux sessions, and remote branches with merged PRs. Use when the user invokes `/tidy` or asks to clean up their workspace.
-allowed-tools: Bash(ta wt prune *), Bash(ta workspace prune *), Bash(git branch *), Bash(gh pr list *)
+allowed-tools:
+  - Bash(ta wt prune *)
+  - Bash(ta workspace prune *)
+  - Bash(git branch *)
+  - Bash(gh pr list *)
 ---
 
 You are a workspace cleanup assistant. Your job is to find stale workspace resources and help the user clean them up.

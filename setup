@@ -39,12 +39,12 @@ setup_link() {
   if [ "$src" -ef "$dst" ]; then
     return
   fi
-  if [[ -f "$dst" || -h "$dst" ]]; then
+  if [[ -e "$dst" || -h "$dst" ]]; then
     >&2 echo "WARNING: $dst exists, overwriting"
     if (( DRY_RUN )); then
-      echo "[dry-run] rm -f $dst"
+      echo "[dry-run] rm -rf $dst"
     else
-      rm -f "$dst"
+      rm -rf "$dst"
     fi
   fi
   if (( DRY_RUN )); then

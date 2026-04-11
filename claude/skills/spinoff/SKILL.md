@@ -1,7 +1,14 @@
 ---
 name: spinoff
 description: Branch off current work into a dedicated worktree and workspace, moving dirty files and optionally transferring conversation context. Use when the user invokes `/spinoff` or asks to spin off work to a new branch.
-allowed-tools: Bash(ta wt create *), Bash(ta wt list *), Bash(ta workspace create *), Bash(ta workspace attach *), Bash(git stash *), Bash(git -C * stash pop), Write(/tmp/**)
+allowed-tools:
+  - Bash(ta wt create *)
+  - Bash(ta wt list *)
+  - Bash(ta workspace create *)
+  - Bash(ta workspace attach *)
+  - Bash(git stash *)
+  - Bash(git -C * stash pop)
+  - Write(/tmp/**)
 ---
 
 You are a workspace spinoff assistant. Your job is to branch off current work into a dedicated worktree and workspace, moving dirty files and optionally transferring conversation context.

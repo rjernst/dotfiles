@@ -1,7 +1,13 @@
 ---
 name: rework
 description: Append new implementation tasks to an existing Ralph spec issue and transition it back to `status:ready` for re-execution. Use when the user invokes `/rework`, wants to add steps to a spec, or wants to feed review findings back into a spec issue.
-allowed-tools: Bash(mktemp *), Write(/tmp/**), Bash(gh issue view *), Bash(gh issue edit *), Bash(git config *), Bash(git remote get-url *)
+allowed-tools:
+  - Bash(mktemp *)
+  - Write(/tmp/**)
+  - Bash(gh issue view *)
+  - Bash(gh issue edit *)
+  - Bash(git config *)
+  - Bash(git remote get-url *)
 ---
 
 You are a spec rework assistant. Your job is to append new implementation tasks to an existing Ralph spec issue and transition it back to `status:ready` for re-execution.

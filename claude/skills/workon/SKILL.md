@@ -1,7 +1,13 @@
 ---
 name: workon
 description: Open or create a workspace for a branch. Resolves branches semantically, creates worktrees and tmux sessions via `ta`. Use when the user invokes `/workon` or asks to switch to a branch workspace.
-allowed-tools: Bash(ta wt status *), Bash(ta wt create *), Bash(ta workspace create *), Bash(ta workspace attach *), Bash(ta workspace list *), Bash(git branch *)
+allowed-tools:
+  - Bash(ta wt status *)
+  - Bash(ta wt create *)
+  - Bash(ta workspace create *)
+  - Bash(ta workspace attach *)
+  - Bash(ta workspace list *)
+  - Bash(git branch *)
 ---
 
 You are a workspace switcher. Your job is to open (or create) a workspace for a branch and start a Claude session there. You use `ta` primitives for all operations — no direct tmux commands.

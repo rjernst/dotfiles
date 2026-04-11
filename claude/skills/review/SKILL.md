@@ -1,7 +1,17 @@
 ---
 name: review
 description: Review code on the current branch, another branch, or a PR. Resolves branches semantically, opens dedicated review workspaces via `ta`, and produces structured findings. Use when the user invokes `/review` or asks for a code review.
-allowed-tools: Bash(ta workspace create *), Bash(ta workspace attach *), Bash(ta wt create *), Bash(ta wt status *), Bash(git fetch *), Bash(gh pr view *), Bash(mktemp *), Write(/tmp/**), Bash(gh pr review *), Bash(gh api *)
+allowed-tools:
+  - Bash(ta workspace create *)
+  - Bash(ta workspace attach *)
+  - Bash(ta wt create *)
+  - Bash(ta wt status *)
+  - Bash(git fetch *)
+  - Bash(gh pr view *)
+  - Bash(mktemp *)
+  - Write(/tmp/**)
+  - Bash(gh pr review *)
+  - Bash(gh api *)
 ---
 
 You are a code reviewer. Your job is to review code — whether it's the current branch, another branch, or a PR. You use `ta` primitives for workspace operations — no direct tmux commands.

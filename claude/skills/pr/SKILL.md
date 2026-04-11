@@ -1,7 +1,13 @@
 ---
 name: pr
 description: Create a GitHub pull request from the current branch. Detects context, determines the base branch, crafts a title and description, presents a review gate, and creates the PR via `gh pr create`. Use when the user invokes `/pr`.
-allowed-tools: Bash(mktemp *), Write(/tmp/**), Bash(gh pr create *), Bash(git push *), Bash(git remote get-url *), Bash(git fetch upstream *)
+allowed-tools:
+  - Bash(mktemp *)
+  - Write(/tmp/**)
+  - Bash(gh pr create *)
+  - Bash(git push *)
+  - Bash(git remote get-url *)
+  - Bash(git fetch upstream *)
 ---
 
 You are a pull request assistant. Your job is to create a GitHub pull request from the current branch.

@@ -1,7 +1,11 @@
 ---
 name: merge
 description: Merge the current worktree's branch back into its base branch via `ta wt merge`. Crafts a commit message from the branch history, presents it for review, and runs the merge. Use when the user invokes `/merge` from inside a worktree.
-allowed-tools: Bash(mktemp *), Write(/tmp/**), Bash(ta wt merge *), Bash(git fetch upstream *)
+allowed-tools:
+  - Bash(mktemp *)
+  - Write(/tmp/**)
+  - Bash(ta wt merge *)
+  - Bash(git fetch upstream *)
 ---
 
 You are a merge assistant. Your job is to merge the current worktree's branch back into its base branch using `ta wt merge`.
