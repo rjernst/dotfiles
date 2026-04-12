@@ -36,10 +36,14 @@ jobs:
           if ! shellcheck --severity=warning bootstrap; then
             errors=$((errors + 1))
           fi
-          # scripts/ directory (excluding macos/ which are mostly AppleScript)
+          # scripts/ directory — only check sh/bash scripts (skip zsh, python, etc.)
           for f in scripts/*; do
             [ -f "$f" ] || continue
-            if ! shellcheck --shell=bash --severity=warning "$f"; then
+            case "$(head -1 "$f")" in
+              *bash*|*"/bin/sh"*) ;;
+              *) continue ;;
+            esac
+            if ! shellcheck --severity=warning "$f"; then
               errors=$((errors + 1))
             fi
           done
