@@ -2,11 +2,10 @@
 
 bats_require_minimum_version 1.5.0
 
-# Tests for scripts/ta and scripts/ta-wt (list subcommand)
+# Tests for ta (Go binary) and scripts/ta-wt (list subcommand)
 # Uses temp git repos to simulate a project with worktrees.
 
 setup() {
-  TA="${BATS_TEST_FILENAME%/*}/../scripts/ta"
   TA_WT="${BATS_TEST_FILENAME%/*}/../scripts/ta-wt"
 
   export GIT_AUTHOR_NAME="Test"
@@ -35,22 +34,22 @@ setup() {
 # --- ta dispatcher tests ---
 
 @test "ta with no args shows usage" {
-  command -v zsh >/dev/null 2>&1 || skip "requires zsh"
-  run zsh "$TA"
-  [ "$status" -eq 2 ]
-  [[ "$output" == *"usage:"* ]]
+  command -v ta >/dev/null 2>&1 || skip "ta binary not installed"
+  run ta
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Terminal Agent tool"* ]]
 }
 
 @test "ta unknown command fails" {
-  command -v zsh >/dev/null 2>&1 || skip "requires zsh"
-  run zsh "$TA" bogus
-  [ "$status" -eq 2 ]
+  command -v ta >/dev/null 2>&1 || skip "ta binary not installed"
+  run ta bogus
+  [ "$status" -eq 1 ]
   [[ "$output" == *"unknown command"* ]]
 }
 
 @test "ta wt dispatches to ta-wt" {
-  command -v zsh >/dev/null 2>&1 || skip "requires zsh"
-  run zsh "$TA" wt
+  command -v ta >/dev/null 2>&1 || skip "ta binary not installed"
+  run ta wt
   [ "$status" -eq 2 ]
   [[ "$output" == *"usage: ta wt"* ]]
 }

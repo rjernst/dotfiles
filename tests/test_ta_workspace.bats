@@ -6,7 +6,6 @@ bats_require_minimum_version 1.5.0
 # Uses mock tmux and ta-wt scripts since tmux server may not be available.
 
 setup() {
-  TA="${BATS_TEST_FILENAME%/*}/../scripts/ta"
   TA_WORKSPACE="${BATS_TEST_FILENAME%/*}/../scripts/ta-workspace"
 
   # Create mock directory
@@ -289,9 +288,8 @@ SCRIPT
 # --- dispatcher tests ---
 
 @test "ta workspace dispatches to ta-workspace" {
-  # ta dispatcher uses zsh-specific ${0:A:h}, requires zsh
-  command -v zsh &>/dev/null || skip "zsh not available"
-  run zsh "$TA" workspace
+  command -v ta >/dev/null 2>&1 || skip "ta binary not installed"
+  run ta workspace
   [ "$status" -eq 2 ]
   [[ "$output" == *"usage: ta workspace"* ]]
 }

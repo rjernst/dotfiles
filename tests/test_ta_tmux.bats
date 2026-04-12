@@ -6,7 +6,6 @@ bats_require_minimum_version 1.5.0
 # Uses a mock tmux script since tmux server may not be available.
 
 setup() {
-  TA="${BATS_TEST_FILENAME%/*}/../scripts/ta"
   TA_TMUX="${BATS_TEST_FILENAME%/*}/../scripts/ta-tmux"
 
   # Create mock tmux directory
@@ -125,8 +124,9 @@ SCRIPT
 # --- ta dispatcher tests ---
 
 @test "ta tmux dispatches to ta-tmux" {
+  command -v ta >/dev/null 2>&1 || skip "ta binary not installed"
   create_mock_no_server
-  run zsh "$TA" tmux
+  run ta tmux
   [ "$status" -eq 2 ]
   [[ "$output" == *"usage: ta tmux"* ]]
 }

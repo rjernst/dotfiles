@@ -6,7 +6,6 @@ bats_require_minimum_version 1.5.0
 # Uses mock ta-wt, ta-workspace, and tmux scripts.
 
 setup() {
-  TA="${BATS_TEST_FILENAME%/*}/../scripts/ta"
   TA_REPORT="${BATS_TEST_FILENAME%/*}/../scripts/ta-report"
 
   # Create mock directory
@@ -133,9 +132,10 @@ SCRIPT
 # --- dispatcher test ---
 
 @test "ta report dispatches to ta-report" {
+  command -v ta >/dev/null 2>&1 || skip "ta binary not installed"
   create_mock_ta_wt_empty
   create_mock_tmux_no_server
-  run zsh "$TA" report --repo "$TEST_REPO"
+  run ta report --repo "$TEST_REPO"
   [ "$status" -eq 0 ]
   [[ "$output" == *"Workspace Report"* ]]
 }
