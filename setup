@@ -178,6 +178,8 @@ resolve_role() {
   _order+=("$role")
 }
 
+source "$DOTFILES/lib/install_go_tools.zsh"
+
 dry_mkdir $HOME/.gradle
 setup_link "gradle/properties"                  ".gradle/gradle.properties"
 
@@ -236,6 +238,8 @@ for SCRIPT in $DOTFILES/scripts/*; do
   NAME=$(basename $SCRIPT)
   setup_link "scripts/$NAME"                    "bin/$NAME"
 done
+
+install_go_tools || true
 
 # install pre-commit hook for the dotfiles repo itself
 if [ -d "$DOTFILES/.git/hooks" ]; then

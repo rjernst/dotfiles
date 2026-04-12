@@ -1,0 +1,93 @@
+name: Go Tools
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'tools/**/*.go'
+      - 'tools/go.mod'
+      - 'tools/go.sum'
+
+jobs:
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute hash
+        id: hash
+        run: |
+          hash=$(find tools -type f \( -name 'go.mod' -o \( -name '*.go' ! -name '*_test.go' \) \) \
+            ! -path '*/testdata/*' | sort | xargs shasum | shasum | cut -d' ' -f1)
+          hash=${hash:0:16}
+          echo "hash=$hash" >> "$GITHUB_OUTPUT"
+
+      - name: Check if release exists
+        id: check_release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "go-build-${{ steps.hash.outputs.hash }}" &>/dev/null; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Go
+        if: steps.check_release.outputs.exists == 'false'
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: tools/go.mod
+
+      - name: Cross-compile
+        if: steps.check_release.outputs.exists == 'false'
+        run: |
+          hash="${{ steps.hash.outputs.hash }}"
+          date=$(date +%Y-%m-%d)
+          binaries=$(make -C tools -s list)
+          if [ -z "$binaries" ]; then
+            echo "Error: 'make -C tools -s list' returned no binaries" >&2
+            exit 1
+          fi
+          mkdir -p tools/dist
+          # Intel Macs (darwin/amd64) intentionally excluded — no active machines, architecture is EOL
+          for platform in darwin/arm64 linux/amd64 linux/arm64; do
+            os="${platform%/*}"
+            arch="${platform#*/}"
+            for bin in $binaries; do
+              echo "Building $bin for $os/$arch..."
+              GOOS="$os" GOARCH="$arch" go build \
+                -C tools \
+                -ldflags "-X dotfiles/tools/${bin}/cmd.BuildHash=${hash} -X dotfiles/tools/${bin}/cmd.BuildDate=${date}" \
+                -o "dist/${bin}-${os}-${arch}" \
+                "./${bin}"
+            done
+          done
+
+      - name: Create release
+        if: steps.check_release.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          hash="${{ steps.hash.outputs.hash }}"
+          gh release create "go-build-${hash}" tools/dist/* \
+            --notes "Auto-built from source hash ${hash}"
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: tools/go.mod
+
+      - name: Run tests
+        run: cd tools && go test ./...
+
+      - name: Run vet
+        run: cd tools && go vet ./...

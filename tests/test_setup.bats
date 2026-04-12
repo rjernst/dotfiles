@@ -313,3 +313,99 @@ RESOLVE_HELPER="${BATS_TEST_FILENAME%/*}/helpers/resolve_roles.zsh"
   [[ "$output" == *"[dry-run] would run install for testrole"* ]]
   [[ "$output" == *"[dry-run] would run setup for testrole"* ]]
 }
+
+# --- install_go_tools tests ---
+
+# Set up stubs and source the real install_go_tools function.
+# Overrides are injected via MAKE_LIST_OUTPUT, CURL_RESULT, and MAKE_BUILD_RESULT variables.
+_define_install_go_tools() {
+  DRY_RUN=${DRY_RUN:-0}
+
+  # Stub make: for "list" returns MAKE_LIST_OUTPUT, for "all" uses MAKE_BUILD_RESULT
+  make() {
+    local dir="" silent=0 target=""
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        -C) dir="$2"; shift 2 ;;
+        -s) silent=1; shift ;;
+        *) target="$1"; shift ;;
+      esac
+    done
+    case "$target" in
+      list) echo "${MAKE_LIST_OUTPUT:-ta}" ;;
+      all)  return "${MAKE_BUILD_RESULT:-0}" ;;
+      *)    return 0 ;;
+    esac
+  }
+
+  # Stub curl: succeeds or fails based on CURL_RESULT (default: 1 = fail)
+  curl() {
+    return "${CURL_RESULT:-1}"
+  }
+
+  source "${BATS_TEST_FILENAME%/*}/../lib/install_go_tools.zsh"
+}
+
+@test "install_go_tools: up to date when hash matches sidecar" {
+  _define_install_go_tools
+
+  # Create a fake tools/go.mod so hash computation works
+  mkdir -p "$DOTFILES/tools"
+  echo "module dotfiles/tools" > "$DOTFILES/tools/go.mod"
+
+  # Compute what hash the function will compute, then store it
+  local expected_hash
+  expected_hash=$(cd "$DOTFILES" && find tools -type f \( -name 'go.mod' -o \( -name '*.go' ! -name '*_test.go' \) \) \
+      ! -path '*/testdata/*' | sort | xargs shasum | shasum | cut -d' ' -f1)
+  expected_hash=${expected_hash:0:16}
+
+  mkdir -p "$HOME/.cache/dotfiles"
+  echo "$expected_hash" > "$HOME/.cache/dotfiles/go-build-hash"
+
+  run install_go_tools
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Go tools up to date"* ]]
+}
+
+@test "install_go_tools: dry-run prints what it would do" {
+  DRY_RUN=1
+  _define_install_go_tools
+
+  mkdir -p "$DOTFILES/tools"
+  echo "module dotfiles/tools" > "$DOTFILES/tools/go.mod"
+
+  run install_go_tools
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Would install Go tools"* ]]
+  # No sidecar hash written
+  [ ! -f "$HOME/.cache/dotfiles/go-build-hash" ]
+}
+
+@test "install_go_tools: warns and returns 1 when no binaries and no go" {
+  _define_install_go_tools
+  export CURL_RESULT=1
+
+  mkdir -p "$DOTFILES/tools"
+  echo "module dotfiles/tools" > "$DOTFILES/tools/go.mod"
+  mkdir -p "$HOME/bin"
+
+  # Build a restricted PATH with tools needed by install_go_tools but excluding 'go'
+  local fakepath="$BATS_TEST_TMPDIR/fakepath"
+  mkdir -p "$fakepath"
+  for cmd in find sort xargs shasum cut tr uname mktemp mkdir cat rm chmod mv; do
+    local cmd_path
+    cmd_path=$(command -v "$cmd" 2>/dev/null) || continue
+    ln -sf "$cmd_path" "$fakepath/$cmd" 2>/dev/null || true
+  done
+  export PATH="$fakepath"
+
+  run install_go_tools
+
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"WARNING"* ]]
+  [[ "$output" == *"Go not installed"* ]]
+  # No sidecar hash written
+  [ ! -f "$HOME/.cache/dotfiles/go-build-hash" ]
+}

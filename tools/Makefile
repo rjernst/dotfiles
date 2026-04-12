@@ -1,7 +1,7 @@
 BINARIES  = ta
 BUILD_DIR ?= $(HOME)/bin
 
-HASH := $(shell find . -type f \( -name 'go.mod' -o \( -name '*.go' ! -name '*_test.go' \) \) ! -path '*/testdata/*' | sort | xargs shasum | shasum | cut -d' ' -f1 | cut -c1-16)
+HASH := $(shell cd $(CURDIR)/.. && find tools -type f \( -name 'go.mod' -o \( -name '*.go' ! -name '*_test.go' \) \) ! -path '*/testdata/*' | sort | xargs shasum | shasum | cut -d' ' -f1 | cut -c1-16)
 DATE := $(shell date +%Y-%m-%d)
 
 .PHONY: all clean list $(BINARIES)
