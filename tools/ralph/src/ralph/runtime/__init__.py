@@ -527,7 +527,7 @@ class Runtime:
                     " — run: ralph store-token")
 
         # 2. Proxy running
-        healthy, _ = proxy_health_check(proxy_port)
+        healthy, _, _ = proxy_health_check(proxy_port)
         if not healthy:
             failures.append(
                 f"proxy not reachable at http://localhost:{proxy_port}/health"

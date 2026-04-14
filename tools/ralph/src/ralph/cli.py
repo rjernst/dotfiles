@@ -36,12 +36,31 @@ Issue commands:
 
 Options:
   --agent <name>        Agent name (default: claude)
+  --auth <oauth|api-key> Auth mode (default: oauth for claude; ignored for cursor)
   --interval <duration> Poll interval (default: 30s, requires --poll)
   --timeout <duration>  Limit poll duration (e.g. 30m, 4h, 1d; requires --poll)
   --push                Git push after each iteration
   --rebuild             Force re-pull base image and rebuild sandbox
   --model <model>       Model name (default: per-agent, e.g. sonnet for claude)
   -h, --help            Show usage"""
+
+
+_VALID_AUTH_CLI = {"oauth", "api-key", "api_key"}
+
+
+def _parse_auth_mode(value):
+    """Validate and normalize an --auth value.
+
+    Accepts 'oauth', 'api-key', or 'api_key'.  Returns the internal form
+    ('oauth' or 'api_key').  Exits 2 on invalid input.
+    """
+    if value not in _VALID_AUTH_CLI:
+        print(
+            f"ralph: unknown auth mode: {value} (expected: oauth, api-key)",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+    return value.replace("-", "_")
 
 
 def usage(exit_code=0):
@@ -65,6 +84,7 @@ def main():
 
     if subcmd is not None:
         agent = "claude"
+        auth_mode = None
         rest = [a for a in args if a != subcmd]
         j = 0
         while j < len(rest):
@@ -74,6 +94,12 @@ def main():
                     sys.exit(2)
                 agent = rest[j + 1]
                 j += 2
+            elif rest[j] == "--auth":
+                if j + 1 >= len(rest):
+                    print("ralph: --auth requires an argument", file=sys.stderr)
+                    sys.exit(2)
+                auth_mode = _parse_auth_mode(rest[j + 1])
+                j += 2
             elif rest[j] in ("-h", "--help"):
                 usage(0)
             else:
@@ -81,11 +107,11 @@ def main():
                 sys.exit(2)
 
         if subcmd == "store-token":
-            store_token(agent)
+            store_token(agent, auth_mode)
         elif subcmd == "check-token":
-            check_token(agent)
+            check_token(agent, auth_mode)
         elif subcmd == "get-token":
-            get_token(agent)
+            get_token(agent, auth_mode)
         sys.exit(0)
 
     # Runtime subcommands
@@ -140,6 +166,7 @@ def main():
     # Selftest subcommand
     if args and args[0] == "selftest":
         agent = "claude"
+        auth_mode = None
         runtime_type = "docker-sandbox"
         rest = args[1:]
         j = 0
@@ -149,6 +176,12 @@ def main():
                     print("ralph: --agent requires an argument", file=sys.stderr)
                     sys.exit(2)
                 agent = rest[j + 1]
+                j += 2
+            elif rest[j] == "--auth":
+                if j + 1 >= len(rest):
+                    print("ralph: --auth requires an argument", file=sys.stderr)
+                    sys.exit(2)
+                auth_mode = _parse_auth_mode(rest[j + 1])
                 j += 2
             elif rest[j] == "--runtime":
                 if j + 1 >= len(rest):
@@ -169,7 +202,8 @@ def main():
                 sys.exit(2)
 
         check_dependencies_prereq()
-        sys.exit(selftest(agent, DOTFILES_DIR, runtime_type=runtime_type))
+        sys.exit(selftest(agent, DOTFILES_DIR, runtime_type=runtime_type,
+                          auth_mode=auth_mode))
 
     # Parse arguments manually to match zsh behavior exactly
     push = False
@@ -180,6 +214,7 @@ def main():
     poll = False
     interval = 30
     agent = "claude"
+    auth_mode = None
 
     i = 0
     while i < len(args):
@@ -231,6 +266,12 @@ def main():
                 sys.exit(2)
             agent = args[i + 1]
             i += 2
+        elif arg == "--auth":
+            if i + 1 >= len(args):
+                print("ralph: --auth requires an argument", file=sys.stderr)
+                sys.exit(2)
+            auth_mode = _parse_auth_mode(args[i + 1])
+            i += 2
         elif arg in ("-h", "--help"):
             usage(0)
         elif arg.startswith("-"):
@@ -266,13 +307,13 @@ def main():
 
     # Auth — ensure valid token exists before starting proxy
     # (auto-runs claude setup-token if missing/expired)
-    token = ensure_token(agent)
+    token = ensure_token(agent, auth_mode)
 
     # Start proxy for agents that need it (e.g. claude).
     # Non-proxy agents (e.g. cursor) inject credentials via secret file.
     if agent_config["uses_proxy"]:
         proxy_port = proxy_port_for_agent(agent)
-        ensure_proxy(agent, proxy_port, DOTFILES_DIR)
+        ensure_proxy(agent, proxy_port, DOTFILES_DIR, auth_mode)
         start_proxy_keepalive(proxy_port)
     else:
         proxy_port = None
@@ -287,12 +328,12 @@ def main():
     if issue_number:
         rc = process_issue(int(issue_number), git, DOTFILES_DIR, gh, agent,
                            push, model, git_user, git_email, proxy_port,
-                           token, rebuild=rebuild)
+                           token, rebuild=rebuild, auth_mode=auth_mode)
         sys.exit(rc)
 
     # Poll mode
     if poll:
         poll_loop(git, DOTFILES_DIR, gh, agent, push, model, git_user,
                   git_email, proxy_port, token, interval, timeout_val,
-                  rebuild=rebuild)
+                  rebuild=rebuild, auth_mode=auth_mode)
         sys.exit(0)

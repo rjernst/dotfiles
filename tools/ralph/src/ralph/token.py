@@ -8,24 +8,39 @@ import shutil
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
 
-from ralph.agents import get_agent
+from ralph.agents import get_agent, get_auth_mode
 
 MS_PER_DAY = 86400 * 1000
 DEFAULT_EXPIRY_DAYS = 365
 
 
-def keychain_service_name(agent):
-    """Return the Keychain service name for the given agent."""
+def _resolve_mode_string(agent, auth_mode):
+    """Return the resolved auth mode string, or None for single-mode agents."""
+    cfg = get_agent(agent)
+    if "auth_modes" not in cfg:
+        return None
+    if auth_mode is not None:
+        return auth_mode.replace("-", "_")
+    return cfg["default_auth_mode"]
+
+
+def keychain_service_name(agent, auth_mode=None):
+    """Return the Keychain service name for the given agent and auth mode."""
+    mode_config = get_auth_mode(agent, auth_mode)
+    if mode_config is not None:
+        return mode_config["keychain_service"]
     return f"{agent}-token"
 
 
-def read_token_from_keychain(agent):
+def read_token_from_keychain(agent, auth_mode=None):
     """Read and parse the token JSON from macOS Keychain.
 
     Returns the parsed dict, or None if not found.
     """
-    service = keychain_service_name(agent)
+    service = keychain_service_name(agent, auth_mode)
     try:
         result = subprocess.run(
             ["security", "find-generic-password", "-s", service, "-a", "agent-loop", "-w"],
@@ -38,9 +53,9 @@ def read_token_from_keychain(agent):
         return None
 
 
-def write_token_to_keychain(agent, json_str):
+def write_token_to_keychain(agent, json_str, auth_mode=None):
     """Write token JSON string to macOS Keychain."""
-    service = keychain_service_name(agent)
+    service = keychain_service_name(agent, auth_mode)
     subprocess.run(
         ["security", "add-generic-password",
          "-s", service, "-a", "agent-loop", "-w", json_str, "-U"],
@@ -150,10 +165,13 @@ def run_claude_setup_token():
 def prompt_for_api_key(agent):
     """Prompt the user for an API key interactively.
 
-    Used for agents that use simple API keys (e.g. cursor) rather than
-    OAuth token flows.
+    Used for agents that use simple API keys (e.g. cursor) or for
+    claude in api_key auth mode.
     """
-    print(f"Enter your {agent} API key:", file=sys.stderr)
+    if agent == "claude":
+        print("Enter your Anthropic API key:", file=sys.stderr)
+    else:
+        print(f"Enter your {agent} API key:", file=sys.stderr)
     try:
         raw = input().strip()
     except EOFError:
@@ -164,7 +182,45 @@ def prompt_for_api_key(agent):
     return raw
 
 
-def _parse_and_store_token(agent, raw):
+def _validate_api_key(key):
+    """Validate an Anthropic API key via a direct API call.
+
+    Sends a minimal request to api.anthropic.com. Exits on failure.
+    """
+    req = urllib.request.Request(
+        "https://api.anthropic.com/v1/messages",
+        method="POST",
+        headers={
+            "x-api-key": key,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json",
+        },
+        data=json.dumps({
+            "model": "claude-haiku-4-5",
+            "max_tokens": 4,
+            "messages": [{"role": "user", "content": "ok"}],
+        }).encode(),
+    )
+
+    print(f"ralph: validating API key ({len(key)} chars)...", file=sys.stderr)
+    try:
+        urllib.request.urlopen(req, timeout=10)
+        print("ralph: API key validated successfully", file=sys.stderr)
+    except urllib.error.HTTPError as exc:
+        if exc.code in (401, 403):
+            print(f"ralph: API key rejected by api.anthropic.com (HTTP {exc.code})",
+                  file=sys.stderr)
+        else:
+            print(f"ralph: API key validation failed: {exc.reason}",
+                  file=sys.stderr)
+        sys.exit(1)
+    except urllib.error.URLError as exc:
+        print(f"ralph: API key validation failed: {exc.reason}",
+              file=sys.stderr)
+        sys.exit(1)
+
+
+def _parse_and_store_token(agent, raw, auth_mode=None):
     """Parse raw token string, store in Keychain, return the data dict."""
     now_ms = int(time.time() * 1000)
     default_expiry = now_ms + DEFAULT_EXPIRY_DAYS * MS_PER_DAY
@@ -184,15 +240,22 @@ def _parse_and_store_token(agent, raw):
         # Bare token string
         data = {"accessToken": raw, "expiresAt": default_expiry}
 
-    # Validate the token before storing (claude only — cursor API keys are
-    # long-lived and can't be validated without a full agent run)
-    agent_config = get_agent(agent)
     token = data["accessToken"]
-    if agent_config["uses_proxy"]:
+    resolved_mode = _resolve_mode_string(agent, auth_mode)
+    mode_config = get_auth_mode(agent, auth_mode)
+
+    if resolved_mode == "api_key":
+        # API key mode: validate via direct API call, set far-future expiry
+        _validate_api_key(token)
+        data["expiresAt"] = now_ms + 10 * 365 * MS_PER_DAY
+    elif resolved_mode == "oauth":
+        # OAuth mode: validate via claude -p
+        agent_config = get_agent(agent)
+        env_var = mode_config["validation_env_var"]
         print(f"ralph: validating token ({len(token)} chars)...", file=sys.stderr)
         result = subprocess.run(
             [agent_config["cli_command"], "-p", "--model", "haiku", "ok"],
-            env={**os.environ, agent_config["env_var_name"]: token},
+            env={**os.environ, env_var: token},
             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
         )
         if result.returncode != 0:
@@ -201,60 +264,79 @@ def _parse_and_store_token(agent, raw):
                 print("ralph: the token was rejected by the API (401 Unauthorized)", file=sys.stderr)
             sys.exit(1)
         print("ralph: token validated successfully", file=sys.stderr)
+    # else: single-mode agent (e.g. cursor) — no validation
 
     json_str = json.dumps(data)
-    write_token_to_keychain(agent, json_str)
+    write_token_to_keychain(agent, json_str, auth_mode=auth_mode)
     expiry_date = format_expiry_date(data["expiresAt"])
     print(f"ralph: token stored for agent {agent} (expires {expiry_date})")
     return data
 
 
-def store_token(agent):
+def store_token(agent, auth_mode=None):
     """Store a token in Keychain.
 
-    For claude: runs `claude setup-token` interactively, or reads from stdin.
+    For claude oauth: runs `claude setup-token` interactively, or reads from stdin.
+    For claude api_key: prompts for API key interactively, or reads from stdin.
     For other agents: prompts for an API key interactively, or reads from stdin.
     """
-    agent_config = get_agent(agent)
+    resolved_mode = _resolve_mode_string(agent, auth_mode)
     if sys.stdin.isatty():
-        if agent_config["uses_proxy"]:
+        if resolved_mode == "oauth":
             raw = run_claude_setup_token()
-        else:
+        elif resolved_mode == "api_key":
             raw = prompt_for_api_key(agent)
+        else:
+            # Single-mode agent (e.g. cursor): use original behavior
+            agent_config = get_agent(agent)
+            if agent_config["uses_proxy"]:
+                raw = run_claude_setup_token()
+            else:
+                raw = prompt_for_api_key(agent)
     else:
         raw = sys.stdin.read().strip()
     if not raw:
         print("ralph: no token provided on stdin", file=sys.stderr)
         sys.exit(1)
-    _parse_and_store_token(agent, raw)
+    _parse_and_store_token(agent, raw, auth_mode=auth_mode)
 
 
-def check_token(agent):
+def check_token(agent, auth_mode=None):
     """Check token validity in Keychain. Exit 0 if valid, 1 if expired/missing."""
-    data = read_token_from_keychain(agent)
+    data = read_token_from_keychain(agent, auth_mode)
     if data is None:
-        print(f"ralph: no token found for agent {agent}"
-              " — run: ralph store-token", file=sys.stderr)
+        resolved_mode = _resolve_mode_string(agent, auth_mode)
+        if resolved_mode is not None:
+            cli_mode = resolved_mode.replace("_", "-")
+            hint = f" — run: ralph store-token --auth {cli_mode}"
+        else:
+            hint = " — run: ralph store-token"
+        print(f"ralph: no token found for agent {agent}{hint}", file=sys.stderr)
         sys.exit(1)
 
     now_ms = int(time.time() * 1000)
     expires_at = data.get("expiresAt", 0)
-    expiry_date = format_expiry_date(expires_at)
 
     if expires_at > now_ms:
-        remaining_days = int((expires_at - now_ms) / MS_PER_DAY)
-        print(f"ralph: token valid for agent {agent}"
-              f" (expires {expiry_date}, {remaining_days} days remaining)")
+        resolved_mode = _resolve_mode_string(agent, auth_mode)
+        if resolved_mode == "api_key":
+            print(f"ralph: API key stored for agent {agent}")
+        else:
+            expiry_date = format_expiry_date(expires_at)
+            remaining_days = int((expires_at - now_ms) / MS_PER_DAY)
+            print(f"ralph: token valid for agent {agent}"
+                  f" (expires {expiry_date}, {remaining_days} days remaining)")
         sys.exit(0)
     else:
+        expiry_date = format_expiry_date(expires_at)
         print(f"ralph: token expired for agent {agent}"
               f" (expired {expiry_date})", file=sys.stderr)
         sys.exit(1)
 
 
-def get_token(agent):
+def get_token(agent, auth_mode=None):
     """Print bare accessToken to stdout. Exit 1 if missing or expired."""
-    data = read_token_from_keychain(agent)
+    data = read_token_from_keychain(agent, auth_mode)
     if data is None:
         print(f"ralph: no token found for agent {agent}", file=sys.stderr)
         sys.exit(1)
@@ -269,13 +351,14 @@ def get_token(agent):
     print(data["accessToken"], end="")
 
 
-def ensure_token(agent):
+def ensure_token(agent, auth_mode=None):
     """Ensure a valid token exists.
 
-    For claude: runs `claude setup-token` if missing or expired.
+    For claude oauth: runs `claude setup-token` if missing or expired.
+    For claude api_key: prompts for API key if missing or expired.
     For other agents: prompts for an API key if missing or expired.
     """
-    data = read_token_from_keychain(agent)
+    data = read_token_from_keychain(agent, auth_mode)
     now_ms = int(time.time() * 1000)
 
     if data is not None:
@@ -283,7 +366,8 @@ def ensure_token(agent):
         if expires_at > now_ms:
             return data["accessToken"]
 
-    agent_config = get_agent(agent)
+    resolved_mode = _resolve_mode_string(agent, auth_mode)
+
     if data is not None:
         print(f"ralph: token expired for agent {agent}, requesting new token...",
               file=sys.stderr)
@@ -291,10 +375,17 @@ def ensure_token(agent):
         print(f"ralph: no token found for agent {agent}, requesting new token...",
               file=sys.stderr)
 
-    if agent_config["uses_proxy"]:
+    if resolved_mode == "oauth":
         raw = run_claude_setup_token()
-    else:
+    elif resolved_mode == "api_key":
         raw = prompt_for_api_key(agent)
+    else:
+        # Single-mode agent (e.g. cursor)
+        agent_config = get_agent(agent)
+        if agent_config["uses_proxy"]:
+            raw = run_claude_setup_token()
+        else:
+            raw = prompt_for_api_key(agent)
 
-    stored = _parse_and_store_token(agent, raw)
+    stored = _parse_and_store_token(agent, raw, auth_mode=auth_mode)
     return stored["accessToken"]

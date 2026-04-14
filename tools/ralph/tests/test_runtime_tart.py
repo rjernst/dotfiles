@@ -922,7 +922,7 @@ class TestTartPreflightCheck:
         return TartRuntime("/dotfiles", config={"base_image": "img:latest"})
 
     @patch("ralph.runtime.tart.subprocess.run")
-    @patch("ralph.runtime.proxy_health_check", return_value=(True, ""))
+    @patch("ralph.runtime.proxy_health_check", return_value=(True, "", "oauth"))
     @patch("ralph.runtime.read_token_from_keychain",
            return_value={"expiresAt": int(time.time() * 1000) + 600000})
     def test_all_pass(self, _token, _proxy, mock_run):
@@ -932,7 +932,7 @@ class TestTartPreflightCheck:
         assert failures == []
 
     @patch("ralph.runtime.tart.subprocess.run")
-    @patch("ralph.runtime.proxy_health_check", return_value=(True, ""))
+    @patch("ralph.runtime.proxy_health_check", return_value=(True, "", "oauth"))
     @patch("ralph.runtime.read_token_from_keychain", return_value=None)
     def test_token_missing(self, _token, _proxy, mock_run):
         mock_run.return_value = MagicMock(returncode=0, stdout="ok\n")
@@ -941,7 +941,7 @@ class TestTartPreflightCheck:
         assert any("no token found" in f for f in failures)
 
     @patch("ralph.runtime.tart.subprocess.run")
-    @patch("ralph.runtime.proxy_health_check", return_value=(True, ""))
+    @patch("ralph.runtime.proxy_health_check", return_value=(True, "", "oauth"))
     @patch("ralph.runtime.read_token_from_keychain",
            return_value={"expiresAt": 0})
     def test_token_expired(self, _token, _proxy, mock_run):
@@ -951,7 +951,7 @@ class TestTartPreflightCheck:
         assert any("token expired" in f for f in failures)
 
     @patch("ralph.runtime.tart.subprocess.run")
-    @patch("ralph.runtime.proxy_health_check", return_value=(False, ""))
+    @patch("ralph.runtime.proxy_health_check", return_value=(False, "", None))
     @patch("ralph.runtime.read_token_from_keychain",
            return_value={"expiresAt": int(time.time() * 1000) + 600000})
     def test_proxy_down(self, _token, _proxy, mock_run):
@@ -961,7 +961,7 @@ class TestTartPreflightCheck:
         assert any("proxy not reachable" in f for f in failures)
 
     @patch("ralph.runtime.tart.subprocess.run")
-    @patch("ralph.runtime.proxy_health_check", return_value=(True, ""))
+    @patch("ralph.runtime.proxy_health_check", return_value=(True, "", "oauth"))
     @patch("ralph.runtime.read_token_from_keychain",
            return_value={"expiresAt": int(time.time() * 1000) + 600000})
     def test_vm_unresponsive(self, _token, _proxy, mock_run):

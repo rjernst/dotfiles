@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
 """agent-loop-proxy — credential injection reverse proxy
 
-Reads a bearer token from stdin, then proxies HTTP requests to a
-configurable upstream target, replacing the Authorization header with
-the real token.  The real token never touches disk, logs, or env vars.
+Reads an auth mode and credential from stdin (two lines), then proxies
+HTTP requests to a configurable upstream target, injecting the real
+credential in the appropriate header.  The real credential never touches
+disk, logs, or env vars.
+
+Supported modes:
+  oauth   — replaces the Authorization header with Bearer <credential>
+  api_key — replaces the x-api-key header with <credential>
 
 Environment variables:
   LISTEN_PORT   — port to listen on (default: 18080)
@@ -25,6 +30,8 @@ import urllib.request
 # Headers that should not be copied from the client request to upstream.
 _STRIP_HEADERS = frozenset(["host", "content-length", "transfer-encoding"])
 
+_VALID_MODES = frozenset(["oauth", "api_key"])
+
 
 def compute_version_hash():
     """Hash this script's source and return a 12-char hex version string."""
@@ -33,15 +40,19 @@ def compute_version_hash():
         return hashlib.sha256(f.read()).hexdigest()[:12]
 
 
-def read_token():
-    """Read a single line from stdin and return the stripped value."""
-    token = sys.stdin.readline().strip()
-    if not token:
-        print("proxy: no token received on stdin", file=sys.stderr)
+def read_mode_and_credential():
+    """Read auth mode and credential from stdin (two lines).
+
+    Returns:
+        (mode, credential) tuple.
+    """
+    mode = sys.stdin.readline().strip()
+    credential = sys.stdin.readline().strip()
+    if not mode or mode not in _VALID_MODES or not credential:
+        print("proxy: expected mode and credential on stdin", file=sys.stderr)
         sys.exit(1)
-    # Close stdin so the fd is not left open.
     sys.stdin.close()
-    return token
+    return mode, credential
 
 
 class IdleShutdown:
@@ -77,13 +88,14 @@ class DualStackHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
 
 
 class ProxyHandler(http.server.BaseHTTPRequestHandler):
-    """Forwards requests to TARGET, injecting the real bearer token."""
+    """Forwards requests to TARGET, injecting the real credential."""
 
     # Assigned by the factory before the server starts.
-    real_token = None
+    real_credential = None
     target = None
     idle_shutdown = None
     version_hash = None
+    AUTH_MODE = None
 
     # Suppress default stderr request logging — we do our own.
     def log_message(self, fmt, *args):
@@ -95,7 +107,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         if self.idle_shutdown:
             self.idle_shutdown.reset()
         if self.path == "/health":
-            body = f"agent-loop-proxy ok v={self.version_hash}".encode()
+            body = f"agent-loop-proxy ok v={self.version_hash} mode={self.AUTH_MODE}".encode()
             self.send_response(200)
             self.send_header("Content-Type", "text/plain")
             self.send_header("Content-Length", str(len(body)))
@@ -129,15 +141,19 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         # Build upstream URL.
         url = self.target.rstrip("/") + self.path
 
-        # Build upstream headers — replace Authorization.
+        # Build upstream headers — inject the real credential for the active mode.
+        skip_header = "authorization" if self.AUTH_MODE == "oauth" else "x-api-key"
         headers = {}
         for key, value in self.headers.items():
             if key.lower() in _STRIP_HEADERS:
                 continue
-            if key.lower() == "authorization":
+            if key.lower() == skip_header:
                 continue
             headers[key] = value
-        headers["Authorization"] = f"Bearer {self.real_token}"
+        if self.AUTH_MODE == "oauth":
+            headers["Authorization"] = f"Bearer {self.real_credential}"
+        else:
+            headers["x-api-key"] = self.real_credential
 
         req = urllib.request.Request(url, data=body, headers=headers, method=self.command)
 
@@ -176,16 +192,17 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
 
 
 def main():
-    token = read_token()
+    mode, credential = read_mode_and_credential()
     port = int(os.environ.get("LISTEN_PORT", "18080"))
     target = os.environ.get("TARGET", "https://api.anthropic.com")
     idle_timeout = int(os.environ.get("IDLE_TIMEOUT", "300"))
     pid_file = os.environ.get("PID_FILE", "")
 
     version = compute_version_hash()
-    ProxyHandler.real_token = token
+    ProxyHandler.real_credential = credential
     ProxyHandler.target = target
     ProxyHandler.version_hash = version
+    ProxyHandler.AUTH_MODE = mode
 
     server = DualStackHTTPServer(("::", port), ProxyHandler)
 
@@ -206,10 +223,11 @@ def main():
         ProxyHandler.idle_shutdown = idle
         idle.reset()
         print(f"proxy: listening on :{port}, target={target}, "
-              f"idle_timeout={idle_timeout}s, v={version}",
+              f"idle_timeout={idle_timeout}s, v={version}, mode={mode}",
               file=sys.stderr)
     else:
-        print(f"proxy: listening on :{port}, target={target}, v={version}",
+        print(f"proxy: listening on :{port}, target={target}, "
+              f"v={version}, mode={mode}",
               file=sys.stderr)
 
     try:

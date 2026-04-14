@@ -1174,7 +1174,7 @@ class TestSandboxPreflightCheck:
         return fn
 
     @patch("ralph.runtime.docker_sandbox.subprocess.run")
-    @patch("ralph.runtime.proxy_health_check", return_value=(True, "abc123"))
+    @patch("ralph.runtime.proxy_health_check", return_value=(True, "abc123", "oauth"))
     @patch("ralph.runtime.read_token_from_keychain")
     @patch("ralph.runtime.time.time", return_value=1700000000.0)
     def test_all_checks_pass(self, mock_time, mock_read, mock_health, mock_run):
@@ -1186,7 +1186,7 @@ class TestSandboxPreflightCheck:
         assert failures == []
 
     @patch("ralph.runtime.docker_sandbox.subprocess.run")
-    @patch("ralph.runtime.proxy_health_check", return_value=(True, "abc123"))
+    @patch("ralph.runtime.proxy_health_check", return_value=(True, "abc123", "oauth"))
     @patch("ralph.runtime.read_token_from_keychain", return_value=None)
     @patch("ralph.runtime.time.time", return_value=1700000000.0)
     def test_token_missing_returns_error(self, mock_time, mock_read, mock_health, mock_run):
@@ -1198,7 +1198,7 @@ class TestSandboxPreflightCheck:
         assert "ralph store-token" in failures[0]
 
     @patch("ralph.runtime.docker_sandbox.subprocess.run")
-    @patch("ralph.runtime.proxy_health_check", return_value=(True, "abc123"))
+    @patch("ralph.runtime.proxy_health_check", return_value=(True, "abc123", "oauth"))
     @patch("ralph.runtime.read_token_from_keychain")
     @patch("ralph.runtime.time.time", return_value=1700000000.0)
     def test_token_expired_returns_error(self, mock_time, mock_read, mock_health, mock_run):
@@ -1212,7 +1212,7 @@ class TestSandboxPreflightCheck:
         assert "ralph store-token" in failures[0]
 
     @patch("ralph.runtime.docker_sandbox.subprocess.run")
-    @patch("ralph.runtime.proxy_health_check", return_value=(False, None))
+    @patch("ralph.runtime.proxy_health_check", return_value=(False, None, None))
     @patch("ralph.runtime.read_token_from_keychain")
     @patch("ralph.runtime.time.time", return_value=1700000000.0)
     def test_proxy_down_returns_error(self, mock_time, mock_read, mock_health, mock_run):
@@ -1226,7 +1226,7 @@ class TestSandboxPreflightCheck:
         assert "start the credential proxy" in failures[0]
 
     @patch("ralph.runtime.docker_sandbox.subprocess.run")
-    @patch("ralph.runtime.proxy_health_check", return_value=(True, "abc123"))
+    @patch("ralph.runtime.proxy_health_check", return_value=(True, "abc123", "oauth"))
     @patch("ralph.runtime.read_token_from_keychain")
     @patch("ralph.runtime.time.time", return_value=1700000000.0)
     def test_sandbox_unresponsive_returns_error(self, mock_time, mock_read, mock_health, mock_run):
@@ -1240,7 +1240,7 @@ class TestSandboxPreflightCheck:
         assert f"docker sandbox rm {self.SANDBOX_NAME}" in failures[0]
 
     @patch("ralph.runtime.docker_sandbox.subprocess.run")
-    @patch("ralph.runtime.proxy_health_check", return_value=(True, "abc123"))
+    @patch("ralph.runtime.proxy_health_check", return_value=(True, "abc123", "oauth"))
     @patch("ralph.runtime.read_token_from_keychain")
     @patch("ralph.runtime.time.time", return_value=1700000000.0)
     def test_sandbox_unresponsive_skips_network_check(self, mock_time, mock_read, mock_health, mock_run):
@@ -1258,7 +1258,7 @@ class TestSandboxPreflightCheck:
         assert len(curl_calls) == 0
 
     @patch("ralph.runtime.docker_sandbox.subprocess.run")
-    @patch("ralph.runtime.proxy_health_check", return_value=(True, "abc123"))
+    @patch("ralph.runtime.proxy_health_check", return_value=(True, "abc123", "oauth"))
     @patch("ralph.runtime.read_token_from_keychain")
     @patch("ralph.runtime.time.time", return_value=1700000000.0)
     def test_network_policy_not_applied_returns_error(self, mock_time, mock_read, mock_health, mock_run):
@@ -1273,7 +1273,7 @@ class TestSandboxPreflightCheck:
         assert "outbound requests should be blocked" in failures[0]
 
     @patch("ralph.runtime.docker_sandbox.subprocess.run")
-    @patch("ralph.runtime.proxy_health_check", return_value=(False, None))
+    @patch("ralph.runtime.proxy_health_check", return_value=(False, None, None))
     @patch("ralph.runtime.read_token_from_keychain", return_value=None)
     @patch("ralph.runtime.time.time", return_value=1700000000.0)
     def test_multiple_failures_collected(self, mock_time, mock_read, mock_health, mock_run):

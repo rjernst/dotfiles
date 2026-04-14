@@ -10,13 +10,16 @@ from ralph.orchestration import (
     resolve_repo, check_dependencies, unblock_ready_specs,
     ensure_worktree, try_fast_forward,
 )
-from ralph.proxy import MODEL_ALIASES, proxy_health_check, ensure_proxy
+from ralph.proxy import (
+    MODEL_ALIASES, build_proxy_env, proxy_health_check, ensure_proxy,
+)
 from ralph.runtime import load_runtime_config, create_runtime
 from ralph.util import parse_frontmatter, parse_issue_branch
 
 
 def process_issue(issue_number, git, dotfiles_dir, gh, agent, push, model,
-                  git_user, git_email, proxy_port, token, rebuild=False):
+                  git_user, git_email, proxy_port, token, rebuild=False,
+                  auth_mode=None):
     """Process a single GitHub Issue spec."""
     repo = resolve_repo(git)
     if not repo:
@@ -128,15 +131,12 @@ def process_issue(issue_number, git, dotfiles_dir, gh, agent, push, model,
     agent_config = get_agent(agent)
     if agent_config["uses_proxy"]:
         # Real token stays in proxy — sandbox only sees a phantom token
-        # and the proxy's base URL.  ANTHROPIC_CUSTOM_MODEL_OPTION bypasses
-        # client-side model validation which otherwise fails because the
-        # phantom token has no subscription tier metadata.
-        model_id = MODEL_ALIASES.get(model, model)
-        env_vars = {
-            "CLAUDE_CODE_OAUTH_TOKEN": "phantom",
-            "ANTHROPIC_BASE_URL": f"http://{runtime.proxy_host()}:{proxy_port}",
-            "ANTHROPIC_CUSTOM_MODEL_OPTION": model_id,
-        }
+        # and the proxy's base URL.  OAuth mode also sets
+        # ANTHROPIC_CUSTOM_MODEL_OPTION to bypass client-side model
+        # validation which otherwise fails because the phantom token has
+        # no subscription tier metadata.
+        env_vars = build_proxy_env(auth_mode, runtime.proxy_host(),
+                                   proxy_port, model)
         api_key = None
     else:
         # Non-proxy agents: API key is delivered via secret file in
@@ -159,10 +159,10 @@ def process_issue(issue_number, git, dotfiles_dir, gh, agent, push, model,
                 # For proxy-based agents, check if failure was caused by
                 # the proxy being down (e.g. idle timeout after sleep)
                 if agent_config["uses_proxy"]:
-                    healthy, _ = proxy_health_check(proxy_port)
+                    healthy, _, _ = proxy_health_check(proxy_port)
                     if not healthy:
                         print("ralph: proxy died during iteration, restarting and retrying...")
-                        ensure_proxy(agent, proxy_port, dotfiles_dir)
+                        ensure_proxy(agent, proxy_port, dotfiles_dir, auth_mode)
                         continue
                 print(f"ralph: iteration failed for issue #{issue_number}", file=sys.stderr)
                 gh.issue_edit(issue_number, repo,
@@ -221,7 +221,8 @@ def process_issue(issue_number, git, dotfiles_dir, gh, agent, push, model,
 
 
 def poll_loop(git, dotfiles_dir, gh, agent, push, model, git_user, git_email,
-              proxy_port, token, interval, timeout, rebuild=False):
+              proxy_port, token, interval, timeout, rebuild=False,
+              auth_mode=None):
     """Poll for ready issues and process them."""
     repo = resolve_repo(git)
     if not repo:
@@ -266,7 +267,8 @@ def poll_loop(git, dotfiles_dir, gh, agent, push, model, git_user, git_email,
                     try:
                         process_issue(num, git, dotfiles_dir, gh, agent, push, model,
                                       git_user, git_email, proxy_port,
-                                      token, rebuild=rebuild)
+                                      token, rebuild=rebuild,
+                                      auth_mode=auth_mode)
                     except Exception as exc:
                         print(f"ralph: unexpected error processing issue #{num}: {exc}",
                               file=sys.stderr)

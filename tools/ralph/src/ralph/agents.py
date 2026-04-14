@@ -36,6 +36,17 @@ AGENTS = {
         "default_model": "sonnet",
         "uses_proxy": True,
         "env_var_name": "CLAUDE_CODE_OAUTH_TOKEN",
+        "default_auth_mode": "oauth",
+        "auth_modes": {
+            "oauth": {
+                "keychain_service": "claude-token",
+                "validation_env_var": "CLAUDE_CODE_OAUTH_TOKEN",
+            },
+            "api_key": {
+                "keychain_service": "claude-api-key",
+                "validation_env_var": "ANTHROPIC_API_KEY",
+            },
+        },
     },
     "cursor": {
         "cli_command": "cursor-agent",
@@ -52,6 +63,7 @@ AGENTS = {
 }
 
 VALID_AGENTS = list(AGENTS.keys())
+VALID_AUTH_MODES = ["oauth", "api_key"]
 
 
 def get_agent(name):
@@ -67,3 +79,24 @@ def get_agent(name):
             f"ralph: unknown agent {name!r}"
             f" (expected one of: {', '.join(VALID_AGENTS)})")
     return AGENTS[name]
+
+
+def get_auth_mode(agent, mode=None):
+    """Return auth-mode config for an agent.
+
+    - If the agent has no ``auth_modes`` entry, returns None regardless of mode.
+    - If mode is None, uses the agent's ``default_auth_mode``.
+    - Normalizes CLI-style "api-key" to internal "api_key".
+    - Raises ValueError for unknown modes.
+    """
+    cfg = get_agent(agent)
+    if "auth_modes" not in cfg:
+        return None
+    if mode is not None:
+        mode = mode.replace("-", "_")
+    else:
+        mode = cfg["default_auth_mode"]
+    if mode not in cfg["auth_modes"]:
+        raise ValueError(
+            f"ralph: unknown auth mode {mode!r} for agent {agent!r}")
+    return cfg["auth_modes"][mode]

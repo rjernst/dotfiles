@@ -152,7 +152,7 @@ class TestProcessIssueSandbox:
         env_vars = call_args[1].get("env_vars") or call_args[0][3]
         assert env_vars["ANTHROPIC_BASE_URL"] == "http://192.168.64.1:18080"
 
-    @patch("ralph.loop.proxy_health_check", return_value=(True, "abc123"))
+    @patch("ralph.loop.proxy_health_check", return_value=(True, "abc123", "oauth"))
     @patch("ralph.loop.create_runtime")
     @patch("ralph.loop.load_runtime_config", return_value={"type": "docker-sandbox"})
     @patch("ralph.loop.ensure_worktree", return_value="/work/my-branch")
@@ -183,7 +183,7 @@ class TestProcessIssueSandbox:
             add_label="status:needs-attention")
 
     @patch("ralph.loop.ensure_proxy")
-    @patch("ralph.loop.proxy_health_check", return_value=(False, None))
+    @patch("ralph.loop.proxy_health_check", return_value=(False, None, None))
     @patch("ralph.loop.create_runtime")
     @patch("ralph.loop.load_runtime_config", return_value={"type": "docker-sandbox"})
     @patch("ralph.loop.unblock_ready_specs")
@@ -211,7 +211,7 @@ class TestProcessIssueSandbox:
             "user", "user@test.com", 18080, "sk-test")
         assert result == 0
 
-        mock_ensure.assert_called_once_with("claude", 18080, "/dotfiles")
+        mock_ensure.assert_called_once_with("claude", 18080, "/dotfiles", None)
         assert sandbox.run_iteration.call_count == 2
 
     @patch("ralph.loop.create_runtime")

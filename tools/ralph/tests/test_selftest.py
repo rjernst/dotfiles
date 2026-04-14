@@ -42,7 +42,7 @@ class TestSelftest:
     @patch("ralph.selftest.DockerSandboxRuntime._docker_sandbox_create")
     @patch("ralph.selftest.DockerSandboxRuntime._resolve_git_common_dir", return_value="/fake/.git")
     @patch("ralph.selftest.DockerSandboxRuntime.ensure_image", return_value="agent-loop-sandbox-claude:vabc")
-    @patch("ralph.selftest.proxy_health_check", side_effect=[(False, None), (True, "abc123")])
+    @patch("ralph.selftest.proxy_health_check", side_effect=[(False, None, None), (True, "abc123", "oauth")])
     @patch("ralph.selftest.ensure_proxy")
     @patch("ralph.selftest.read_token_from_keychain")
     @patch("ralph.selftest.time.time", return_value=1700000000.0)
@@ -81,7 +81,7 @@ class TestSelftest:
     @patch("ralph.selftest.DockerSandboxRuntime._docker_sandbox_create")
     @patch("ralph.selftest.DockerSandboxRuntime._resolve_git_common_dir", return_value="/fake/.git")
     @patch("ralph.selftest.DockerSandboxRuntime.ensure_image", return_value="agent-loop-sandbox-claude:vabc")
-    @patch("ralph.selftest.proxy_health_check", return_value=(True, "abc123"))
+    @patch("ralph.selftest.proxy_health_check", return_value=(True, "abc123", "oauth"))
     @patch("ralph.selftest.ensure_proxy")
     @patch("ralph.selftest.read_token_from_keychain")
     @patch("ralph.selftest.time.time", return_value=1700000000.0)
@@ -104,7 +104,7 @@ class TestSelftest:
         # Proxy existed before, so stop_proxy should NOT be called
         mock_stop.assert_not_called()
 
-    @patch("ralph.selftest.proxy_health_check", return_value=(False, None))
+    @patch("ralph.selftest.proxy_health_check", return_value=(False, None, None))
     @patch("ralph.selftest.read_token_from_keychain", return_value=None)
     @patch("ralph.selftest.time.time", return_value=1700000000.0)
     def test_missing_token_aborts_early(self, mock_time, mock_read,
@@ -115,7 +115,7 @@ class TestSelftest:
         assert "FAIL: check token" in captured.out
         assert "selftest aborted" in captured.out
 
-    @patch("ralph.selftest.proxy_health_check", return_value=(False, None))
+    @patch("ralph.selftest.proxy_health_check", return_value=(False, None, None))
     @patch("ralph.selftest.read_token_from_keychain")
     @patch("ralph.selftest.time.time", return_value=1700000000.0)
     def test_expired_token_aborts_early(self, mock_time, mock_read,
@@ -126,7 +126,7 @@ class TestSelftest:
         assert rc == 1
         captured = capsys.readouterr()
         assert "FAIL: check token" in captured.out
-        assert "token expired" in captured.out
+        assert "credentials expired" in captured.out
 
     @patch("ralph.selftest.DockerSandboxRuntime.remove_sandbox")
     @patch("ralph.selftest.stop_proxy")
@@ -135,7 +135,7 @@ class TestSelftest:
     @patch("ralph.selftest.DockerSandboxRuntime._docker_sandbox_create")
     @patch("ralph.selftest.DockerSandboxRuntime._resolve_git_common_dir", return_value="/fake/.git")
     @patch("ralph.selftest.DockerSandboxRuntime.ensure_image", return_value="agent-loop-sandbox-claude:vabc")
-    @patch("ralph.selftest.proxy_health_check", side_effect=[(False, None), (True, "abc123")])
+    @patch("ralph.selftest.proxy_health_check", side_effect=[(False, None, None), (True, "abc123", "oauth")])
     @patch("ralph.selftest.ensure_proxy")
     @patch("ralph.selftest.read_token_from_keychain")
     @patch("ralph.selftest.time.time", return_value=1700000000.0)
@@ -165,7 +165,7 @@ class TestSelftest:
     @patch("ralph.selftest.DockerSandboxRuntime._docker_sandbox_create")
     @patch("ralph.selftest.DockerSandboxRuntime._resolve_git_common_dir", return_value="/fake/.git")
     @patch("ralph.selftest.DockerSandboxRuntime.ensure_image", return_value="agent-loop-sandbox-claude:vabc")
-    @patch("ralph.selftest.proxy_health_check", side_effect=[(False, None), (True, "abc123")])
+    @patch("ralph.selftest.proxy_health_check", side_effect=[(False, None, None), (True, "abc123", "oauth")])
     @patch("ralph.selftest.ensure_proxy")
     @patch("ralph.selftest.read_token_from_keychain")
     @patch("ralph.selftest.time.time", return_value=1700000000.0)
@@ -193,7 +193,7 @@ class TestSelftest:
     @patch("ralph.selftest.DockerSandboxRuntime.remove_sandbox")
     @patch("ralph.selftest.stop_proxy")
     @patch("ralph.selftest.DockerSandboxRuntime.ensure_image", side_effect=RuntimeError("build failed"))
-    @patch("ralph.selftest.proxy_health_check", side_effect=[(False, None), (True, "abc123")])
+    @patch("ralph.selftest.proxy_health_check", side_effect=[(False, None, None), (True, "abc123", "oauth")])
     @patch("ralph.selftest.ensure_proxy")
     @patch("ralph.selftest.read_token_from_keychain")
     @patch("ralph.selftest.time.time", return_value=1700000000.0)
@@ -216,7 +216,7 @@ class TestSelftest:
            side_effect=subprocess.CalledProcessError(1, "docker"))
     @patch("ralph.selftest.DockerSandboxRuntime._resolve_git_common_dir", return_value="/fake/.git")
     @patch("ralph.selftest.DockerSandboxRuntime.ensure_image", return_value="agent-loop-sandbox-claude:vabc")
-    @patch("ralph.selftest.proxy_health_check", side_effect=[(False, None), (True, "abc123")])
+    @patch("ralph.selftest.proxy_health_check", side_effect=[(False, None, None), (True, "abc123", "oauth")])
     @patch("ralph.selftest.ensure_proxy")
     @patch("ralph.selftest.read_token_from_keychain")
     @patch("ralph.selftest.time.time", return_value=1700000000.0)
@@ -245,7 +245,7 @@ class TestSelftest:
     @patch("ralph.selftest.DockerSandboxRuntime.find_project_config",
            return_value=("dependencies", "/proj/.agent-loop/dependencies"))
     @patch("ralph.selftest.DockerSandboxRuntime.ensure_image", return_value="agent-loop-sandbox-claude:vabc")
-    @patch("ralph.selftest.proxy_health_check", side_effect=[(False, None), (True, "abc123")])
+    @patch("ralph.selftest.proxy_health_check", side_effect=[(False, None, None), (True, "abc123", "oauth")])
     @patch("ralph.selftest.ensure_proxy")
     @patch("ralph.selftest.read_token_from_keychain")
     @patch("ralph.selftest.time.time", return_value=1700000000.0)
@@ -280,7 +280,7 @@ class TestSelftest:
     @patch("ralph.selftest.DockerSandboxRuntime.find_project_config",
            return_value=("dockerfile", "/proj/.agent-loop/Dockerfile.sandbox"))
     @patch("ralph.selftest.DockerSandboxRuntime.ensure_image", return_value="agent-loop-sandbox-claude:vabc")
-    @patch("ralph.selftest.proxy_health_check", side_effect=[(False, None), (True, "abc123")])
+    @patch("ralph.selftest.proxy_health_check", side_effect=[(False, None, None), (True, "abc123", "oauth")])
     @patch("ralph.selftest.ensure_proxy")
     @patch("ralph.selftest.read_token_from_keychain")
     @patch("ralph.selftest.time.time", return_value=1700000000.0)
@@ -311,7 +311,7 @@ class TestSelftest:
     @patch("ralph.selftest.DockerSandboxRuntime._resolve_git_common_dir", return_value="/fake/.git")
     @patch("ralph.selftest.DockerSandboxRuntime.find_project_config", return_value=None)
     @patch("ralph.selftest.DockerSandboxRuntime.ensure_image", return_value="agent-loop-sandbox-claude:vabc")
-    @patch("ralph.selftest.proxy_health_check", side_effect=[(False, None), (True, "abc123")])
+    @patch("ralph.selftest.proxy_health_check", side_effect=[(False, None, None), (True, "abc123", "oauth")])
     @patch("ralph.selftest.ensure_proxy")
     @patch("ralph.selftest.read_token_from_keychain")
     @patch("ralph.selftest.time.time", return_value=1700000000.0)
@@ -344,7 +344,7 @@ class TestSelftest:
     @patch("ralph.selftest.DockerSandboxRuntime.find_project_config",
            return_value=("dependencies", "/proj/.agent-loop/dependencies"))
     @patch("ralph.selftest.DockerSandboxRuntime.ensure_image", return_value="agent-loop-sandbox-claude:vabc")
-    @patch("ralph.selftest.proxy_health_check", side_effect=[(False, None), (True, "abc123")])
+    @patch("ralph.selftest.proxy_health_check", side_effect=[(False, None, None), (True, "abc123", "oauth")])
     @patch("ralph.selftest.ensure_proxy")
     @patch("ralph.selftest.read_token_from_keychain")
     @patch("ralph.selftest.time.time", return_value=1700000000.0)
@@ -388,7 +388,7 @@ class TestSelftestTart:
            return_value="agent-loop-template-claude-abc123")
     @patch("ralph.selftest.TartRuntime.check_prerequisites", return_value=[])
     @patch("ralph.selftest.proxy_health_check",
-           side_effect=[(False, None), (True, "abc123")])
+           side_effect=[(False, None, None), (True, "abc123", "oauth")])
     @patch("ralph.selftest.ensure_proxy")
     @patch("ralph.selftest.read_token_from_keychain")
     @patch("ralph.selftest.time.time", return_value=1700000000.0)
@@ -430,7 +430,7 @@ class TestSelftestTart:
            side_effect=RuntimeError("clone failed"))
     @patch("ralph.selftest.TartRuntime.check_prerequisites", return_value=[])
     @patch("ralph.selftest.proxy_health_check",
-           side_effect=[(False, None), (True, "abc123")])
+           side_effect=[(False, None, None), (True, "abc123", "oauth")])
     @patch("ralph.selftest.ensure_proxy")
     @patch("ralph.selftest.read_token_from_keychain")
     @patch("ralph.selftest.time.time", return_value=1700000000.0)
@@ -450,7 +450,7 @@ class TestSelftestTart:
     @patch("ralph.selftest.stop_proxy")
     @patch("ralph.selftest.TartRuntime.check_prerequisites",
            return_value=["tart is not installed"])
-    @patch("ralph.selftest.proxy_health_check", return_value=(False, None))
+    @patch("ralph.selftest.proxy_health_check", return_value=(False, None, None))
     @patch("ralph.selftest.read_token_from_keychain")
     @patch("ralph.selftest.time.time", return_value=1700000000.0)
     def test_prerequisites_failure_aborts(self, mock_time, mock_read,
@@ -491,7 +491,7 @@ class TestSelftestDockerContainer:
            side_effect=[(False, None), (True, "abc123")])
     @patch("ralph.selftest.ensure_docker_proxy")
     @patch("ralph.selftest.proxy_health_check",
-           side_effect=[(False, None), (True, "abc123")])
+           side_effect=[(False, None, None), (True, "abc123", "oauth")])
     @patch("ralph.selftest.ensure_proxy")
     @patch("ralph.selftest.read_token_from_keychain")
     @patch("ralph.selftest.time.time", return_value=1700000000.0)
@@ -560,7 +560,7 @@ class TestSelftestDockerContainer:
            side_effect=[(False, None), (True, "abc123")])
     @patch("ralph.selftest.ensure_docker_proxy")
     @patch("ralph.selftest.proxy_health_check",
-           side_effect=[(False, None), (True, "abc123")])
+           side_effect=[(False, None, None), (True, "abc123", "oauth")])
     @patch("ralph.selftest.ensure_proxy")
     @patch("ralph.selftest.read_token_from_keychain")
     @patch("ralph.selftest.time.time", return_value=1700000000.0)
@@ -588,11 +588,11 @@ class TestSelftestDockerContainer:
     @patch("ralph.selftest.network_proxy_health_check",
            return_value=(False, None, None))
     @patch("ralph.selftest.docker_proxy_health_check",
-           side_effect=[(False, None), (False, None)])
+           return_value=(False, None))
     @patch("ralph.selftest.ensure_docker_proxy",
            side_effect=RuntimeError("socket not available"))
     @patch("ralph.selftest.proxy_health_check",
-           side_effect=[(False, None), (True, "abc123")])
+           side_effect=[(False, None, None), (True, "abc123", "oauth")])
     @patch("ralph.selftest.ensure_proxy")
     @patch("ralph.selftest.read_token_from_keychain")
     @patch("ralph.selftest.time.time", return_value=1700000000.0)
@@ -624,7 +624,7 @@ class TestSelftestDockerContainer:
            side_effect=[(False, None), (True, "abc123")])
     @patch("ralph.selftest.ensure_docker_proxy")
     @patch("ralph.selftest.proxy_health_check",
-           side_effect=[(False, None), (True, "abc123")])
+           side_effect=[(False, None, None), (True, "abc123", "oauth")])
     @patch("ralph.selftest.ensure_proxy")
     @patch("ralph.selftest.read_token_from_keychain")
     @patch("ralph.selftest.time.time", return_value=1700000000.0)

@@ -5,6 +5,7 @@ import json
 import re
 import subprocess
 import time
+import urllib.error
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -12,6 +13,8 @@ import pytest
 from ralph.token import (
     MS_PER_DAY,
     DEFAULT_EXPIRY_DAYS,
+    _resolve_mode_string,
+    _validate_api_key,
     keychain_service_name,
     read_token_from_keychain,
     write_token_to_keychain,
@@ -27,15 +30,49 @@ from ralph.token import (
 
 
 # ---------------------------------------------------------------------------
+# _resolve_mode_string
+# ---------------------------------------------------------------------------
+
+class TestResolveModeString:
+    def test_claude_default_is_oauth(self):
+        assert _resolve_mode_string("claude", None) == "oauth"
+
+    def test_claude_explicit_oauth(self):
+        assert _resolve_mode_string("claude", "oauth") == "oauth"
+
+    def test_claude_api_key(self):
+        assert _resolve_mode_string("claude", "api_key") == "api_key"
+
+    def test_claude_api_key_with_hyphen(self):
+        assert _resolve_mode_string("claude", "api-key") == "api_key"
+
+    def test_cursor_returns_none(self):
+        assert _resolve_mode_string("cursor", None) is None
+
+    def test_cursor_with_mode_returns_none(self):
+        """Cursor has no auth_modes, so any mode arg is ignored."""
+        assert _resolve_mode_string("cursor", "oauth") is None
+
+
+# ---------------------------------------------------------------------------
 # keychain_service_name
 # ---------------------------------------------------------------------------
 
 class TestKeychainServiceName:
-    def test_default_agent(self):
+    def test_claude_default_oauth(self):
         assert keychain_service_name("claude") == "claude-token"
 
-    def test_custom_agent(self):
-        assert keychain_service_name("codex") == "codex-token"
+    def test_claude_explicit_oauth(self):
+        assert keychain_service_name("claude", "oauth") == "claude-token"
+
+    def test_claude_api_key(self):
+        assert keychain_service_name("claude", "api_key") == "claude-api-key"
+
+    def test_claude_api_key_with_hyphen(self):
+        assert keychain_service_name("claude", "api-key") == "claude-api-key"
+
+    def test_cursor_returns_agent_token(self):
+        assert keychain_service_name("cursor") == "cursor-token"
 
 
 # ---------------------------------------------------------------------------
@@ -78,6 +115,19 @@ class TestReadTokenFromKeychain:
         result = read_token_from_keychain("claude")
         assert result is None
 
+    @patch("ralph.token.subprocess.run")
+    def test_api_key_mode_uses_correct_service(self, mock_run):
+        token_data = {"accessToken": "sk-ant-api03-test", "expiresAt": 9999999999999}
+        mock_run.return_value = MagicMock(
+            stdout=json.dumps(token_data) + "\n", returncode=0
+        )
+        result = read_token_from_keychain("claude", "api_key")
+        assert result == token_data
+        mock_run.assert_called_once_with(
+            ["security", "find-generic-password", "-s", "claude-api-key", "-a", "agent-loop", "-w"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True,
+        )
+
 
 # ---------------------------------------------------------------------------
 # write_token_to_keychain (mocked subprocess)
@@ -95,12 +145,19 @@ class TestWriteTokenToKeychain:
         )
 
     @patch("ralph.token.subprocess.run")
-    def test_uses_custom_agent_in_service_name(self, mock_run):
-        write_token_to_keychain("codex", '{}')
+    def test_uses_cursor_service_name(self, mock_run):
+        write_token_to_keychain("cursor", '{}')
         cmd = mock_run.call_args[0][0]
         assert "-s" in cmd
         s_idx = cmd.index("-s")
-        assert cmd[s_idx + 1] == "codex-token"
+        assert cmd[s_idx + 1] == "cursor-token"
+
+    @patch("ralph.token.subprocess.run")
+    def test_api_key_mode_uses_correct_service(self, mock_run):
+        write_token_to_keychain("claude", '{}', auth_mode="api_key")
+        cmd = mock_run.call_args[0][0]
+        s_idx = cmd.index("-s")
+        assert cmd[s_idx + 1] == "claude-api-key"
 
 
 # ---------------------------------------------------------------------------
@@ -158,6 +215,111 @@ class TestRunClaudeSetupToken:
     def test_exits_when_claude_not_found(self, mock_which):
         with pytest.raises(SystemExit) as exc_info:
             run_claude_setup_token()
+        assert exc_info.value.code == 1
+
+
+# ---------------------------------------------------------------------------
+# _validate_api_key (mocked urllib)
+# ---------------------------------------------------------------------------
+
+class TestValidateApiKey:
+    @patch("ralph.token.urllib.request.urlopen")
+    def test_valid_key_succeeds(self, mock_urlopen, capsys):
+        mock_urlopen.return_value = MagicMock()
+        _validate_api_key("sk-ant-api03-valid-key")
+        captured = capsys.readouterr()
+        assert "API key validated successfully" in captured.err
+
+    @patch("ralph.token.urllib.request.urlopen")
+    def test_401_prints_rejected_message(self, mock_urlopen, capsys):
+        mock_urlopen.side_effect = urllib.error.HTTPError(
+            "https://api.anthropic.com/v1/messages", 401,
+            "Unauthorized", {}, io.BytesIO(b""))
+        with pytest.raises(SystemExit) as exc_info:
+            _validate_api_key("sk-ant-api03-bad")
+        assert exc_info.value.code == 1
+        captured = capsys.readouterr()
+        assert "API key rejected by api.anthropic.com (HTTP 401)" in captured.err
+
+    @patch("ralph.token.urllib.request.urlopen")
+    def test_403_prints_rejected_message(self, mock_urlopen, capsys):
+        mock_urlopen.side_effect = urllib.error.HTTPError(
+            "https://api.anthropic.com/v1/messages", 403,
+            "Forbidden", {}, io.BytesIO(b""))
+        with pytest.raises(SystemExit) as exc_info:
+            _validate_api_key("sk-ant-api03-bad")
+        assert exc_info.value.code == 1
+        captured = capsys.readouterr()
+        assert "API key rejected by api.anthropic.com (HTTP 403)" in captured.err
+
+    @patch("ralph.token.urllib.request.urlopen")
+    def test_429_prints_validation_failed(self, mock_urlopen, capsys):
+        mock_urlopen.side_effect = urllib.error.HTTPError(
+            "https://api.anthropic.com/v1/messages", 429,
+            "Too Many Requests", {}, io.BytesIO(b""))
+        with pytest.raises(SystemExit) as exc_info:
+            _validate_api_key("sk-ant-api03-bad")
+        assert exc_info.value.code == 1
+        captured = capsys.readouterr()
+        assert "API key validation failed: Too Many Requests" in captured.err
+
+    @patch("ralph.token.urllib.request.urlopen")
+    def test_url_error_prints_validation_failed(self, mock_urlopen, capsys):
+        mock_urlopen.side_effect = urllib.error.URLError("Connection refused")
+        with pytest.raises(SystemExit) as exc_info:
+            _validate_api_key("sk-ant-api03-bad")
+        assert exc_info.value.code == 1
+        captured = capsys.readouterr()
+        assert "API key validation failed: Connection refused" in captured.err
+
+    @patch("ralph.token.urllib.request.urlopen")
+    def test_sends_correct_request(self, mock_urlopen):
+        mock_urlopen.return_value = MagicMock()
+        _validate_api_key("sk-ant-api03-test")
+        req = mock_urlopen.call_args[0][0]
+        assert req.full_url == "https://api.anthropic.com/v1/messages"
+        assert req.get_header("X-api-key") == "sk-ant-api03-test"
+        assert req.get_header("Anthropic-version") == "2023-06-01"
+        assert req.get_header("Content-type") == "application/json"
+        body = json.loads(req.data)
+        assert body["model"] == "claude-haiku-4-5"
+        assert body["max_tokens"] == 4
+
+
+# ---------------------------------------------------------------------------
+# prompt_for_api_key
+# ---------------------------------------------------------------------------
+
+class TestPromptForApiKey:
+    @patch("builtins.input", return_value="cur_abc123xyz")
+    def test_returns_api_key(self, mock_input, capsys):
+        result = prompt_for_api_key("cursor")
+        assert result == "cur_abc123xyz"
+        captured = capsys.readouterr()
+        assert "Enter your cursor API key" in captured.err
+
+    @patch("builtins.input", return_value="sk-ant-api03-test")
+    def test_claude_prompt_says_anthropic(self, mock_input, capsys):
+        result = prompt_for_api_key("claude")
+        assert result == "sk-ant-api03-test"
+        captured = capsys.readouterr()
+        assert "Enter your Anthropic API key:" in captured.err
+
+    @patch("builtins.input", return_value="  cur_abc123xyz  ")
+    def test_strips_whitespace(self, mock_input):
+        result = prompt_for_api_key("cursor")
+        assert result == "cur_abc123xyz"
+
+    @patch("builtins.input", return_value="")
+    def test_empty_input_exits(self, mock_input):
+        with pytest.raises(SystemExit) as exc_info:
+            prompt_for_api_key("cursor")
+        assert exc_info.value.code == 1
+
+    @patch("builtins.input", side_effect=EOFError)
+    def test_eof_exits(self, mock_input):
+        with pytest.raises(SystemExit) as exc_info:
+            prompt_for_api_key("cursor")
         assert exc_info.value.code == 1
 
 
@@ -273,6 +435,82 @@ class TestStoreToken:
 
 
 # ---------------------------------------------------------------------------
+# store_token — api_key mode
+# ---------------------------------------------------------------------------
+
+class TestStoreTokenApiKey:
+    @patch("ralph.token._validate_api_key")
+    @patch("ralph.token.write_token_to_keychain")
+    @patch("ralph.token.time.time", return_value=1700000000.0)
+    @patch("ralph.token.sys.stdin", new_callable=lambda: io.StringIO("sk-ant-api03-testkey"))
+    def test_stores_api_key_with_far_future_expiry(self, mock_stdin, mock_time,
+                                                    mock_write, mock_validate):
+        store_token("claude", auth_mode="api_key")
+        written_json = mock_write.call_args[0][1]
+        data = json.loads(written_json)
+        assert data["accessToken"] == "sk-ant-api03-testkey"
+        expected_expiry = 1700000000000 + 10 * 365 * MS_PER_DAY
+        assert data["expiresAt"] == expected_expiry
+
+    @patch("ralph.token._validate_api_key")
+    @patch("ralph.token.write_token_to_keychain")
+    @patch("ralph.token.time.time", return_value=1700000000.0)
+    @patch("ralph.token.sys.stdin", new_callable=lambda: io.StringIO("sk-ant-api03-testkey"))
+    def test_writes_to_api_key_service(self, mock_stdin, mock_time,
+                                        mock_write, mock_validate):
+        store_token("claude", auth_mode="api_key")
+        assert mock_write.call_args[1]["auth_mode"] == "api_key"
+
+    @patch("ralph.token._validate_api_key")
+    @patch("ralph.token.write_token_to_keychain")
+    @patch("ralph.token.time.time", return_value=1700000000.0)
+    @patch("ralph.token.sys.stdin", new_callable=lambda: io.StringIO("sk-ant-api03-testkey"))
+    def test_validates_via_api_not_claude_p(self, mock_stdin, mock_time,
+                                             mock_write, mock_validate):
+        with patch("ralph.token.subprocess.run") as mock_run:
+            store_token("claude", auth_mode="api_key")
+            # subprocess.run should NOT be called (no claude -p validation)
+            mock_run.assert_not_called()
+        # _validate_api_key should be called instead
+        mock_validate.assert_called_once_with("sk-ant-api03-testkey")
+
+    @patch("ralph.token._validate_api_key")
+    @patch("ralph.token.write_token_to_keychain")
+    @patch("ralph.token.time.time", return_value=1700000000.0)
+    @patch("ralph.token.prompt_for_api_key", return_value="sk-ant-api03-interactive")
+    @patch("ralph.token.sys.stdin")
+    def test_interactive_prompts_for_api_key(self, mock_stdin, mock_prompt,
+                                              mock_time, mock_write, mock_validate):
+        mock_stdin.isatty.return_value = True
+        store_token("claude", auth_mode="api_key")
+        mock_prompt.assert_called_once_with("claude")
+        written_json = mock_write.call_args[0][1]
+        data = json.loads(written_json)
+        assert data["accessToken"] == "sk-ant-api03-interactive"
+
+    @patch("ralph.token._validate_api_key")
+    @patch("ralph.token.write_token_to_keychain")
+    @patch("ralph.token.time.time", return_value=1700000000.0)
+    @patch("ralph.token.sys.stdin")
+    def test_interactive_does_not_run_claude_setup(self, mock_stdin, mock_time,
+                                                    mock_write, mock_validate):
+        mock_stdin.isatty.return_value = True
+        with patch("ralph.token.prompt_for_api_key", return_value="sk-key"):
+            with patch("ralph.token.run_claude_setup_token") as mock_setup:
+                store_token("claude", auth_mode="api_key")
+                mock_setup.assert_not_called()
+
+    @patch("ralph.token._validate_api_key",
+           side_effect=SystemExit(1))
+    @patch("ralph.token.time.time", return_value=1700000000.0)
+    @patch("ralph.token.sys.stdin", new_callable=lambda: io.StringIO("sk-ant-api03-INVALID"))
+    def test_invalid_api_key_exits_1(self, mock_stdin, mock_time, mock_validate):
+        with pytest.raises(SystemExit) as exc_info:
+            store_token("claude", auth_mode="api_key")
+        assert exc_info.value.code == 1
+
+
+# ---------------------------------------------------------------------------
 # check_token (mocked keychain + time)
 # ---------------------------------------------------------------------------
 
@@ -309,6 +547,52 @@ class TestCheckToken:
         assert "ralph store-token" in captured.err
 
 
+class TestCheckTokenApiKey:
+    @patch("ralph.token.read_token_from_keychain")
+    @patch("ralph.token.time.time", return_value=1700000000.0)
+    def test_valid_api_key_prints_stored_message(self, mock_time, mock_read, capsys):
+        far_future = 1700000000000 + 10 * 365 * MS_PER_DAY
+        mock_read.return_value = {"accessToken": "sk-ant-api03-test", "expiresAt": far_future}
+        with pytest.raises(SystemExit) as exc_info:
+            check_token("claude", auth_mode="api_key")
+        assert exc_info.value.code == 0
+        captured = capsys.readouterr()
+        assert "ralph: API key stored for agent claude" in captured.out
+
+    @patch("ralph.token.read_token_from_keychain")
+    @patch("ralph.token.time.time", return_value=1700000000.0)
+    def test_valid_api_key_does_not_print_days_remaining(self, mock_time, mock_read, capsys):
+        far_future = 1700000000000 + 10 * 365 * MS_PER_DAY
+        mock_read.return_value = {"accessToken": "sk-ant-api03-test", "expiresAt": far_future}
+        with pytest.raises(SystemExit):
+            check_token("claude", auth_mode="api_key")
+        captured = capsys.readouterr()
+        assert "days remaining" not in captured.out
+
+    @patch("ralph.token.read_token_from_keychain", return_value=None)
+    def test_missing_api_key_suggests_auth_flag(self, mock_read, capsys):
+        with pytest.raises(SystemExit):
+            check_token("claude", auth_mode="api_key")
+        captured = capsys.readouterr()
+        assert "ralph store-token --auth api-key" in captured.err
+
+    @patch("ralph.token.read_token_from_keychain", return_value=None)
+    def test_missing_oauth_suggests_auth_flag(self, mock_read, capsys):
+        with pytest.raises(SystemExit):
+            check_token("claude", auth_mode="oauth")
+        captured = capsys.readouterr()
+        assert "ralph store-token --auth oauth" in captured.err
+
+    @patch("ralph.token.read_token_from_keychain")
+    @patch("ralph.token.time.time", return_value=1700000000.0)
+    def test_reads_from_correct_keychain_service(self, mock_time, mock_read):
+        far_future = 1700000000000 + 10 * 365 * MS_PER_DAY
+        mock_read.return_value = {"accessToken": "sk-test", "expiresAt": far_future}
+        with pytest.raises(SystemExit):
+            check_token("claude", auth_mode="api_key")
+        mock_read.assert_called_once_with("claude", "api_key")
+
+
 # ---------------------------------------------------------------------------
 # get_token (mocked keychain + time)
 # ---------------------------------------------------------------------------
@@ -337,6 +621,25 @@ class TestGetToken:
         with pytest.raises(SystemExit) as exc_info:
             get_token("claude")
         assert exc_info.value.code == 1
+
+
+class TestGetTokenApiKey:
+    @patch("ralph.token.read_token_from_keychain")
+    @patch("ralph.token.time.time", return_value=1700000000.0)
+    def test_prints_api_key(self, mock_time, mock_read, capsys):
+        far_future = 1700000000000 + 10 * 365 * MS_PER_DAY
+        mock_read.return_value = {"accessToken": "sk-ant-api03-test", "expiresAt": far_future}
+        get_token("claude", auth_mode="api_key")
+        captured = capsys.readouterr()
+        assert captured.out == "sk-ant-api03-test"
+
+    @patch("ralph.token.read_token_from_keychain")
+    @patch("ralph.token.time.time", return_value=1700000000.0)
+    def test_reads_from_correct_service(self, mock_time, mock_read):
+        far_future = 1700000000000 + 10 * 365 * MS_PER_DAY
+        mock_read.return_value = {"accessToken": "sk-test", "expiresAt": far_future}
+        get_token("claude", auth_mode="api_key")
+        mock_read.assert_called_once_with("claude", "api_key")
 
 
 # ---------------------------------------------------------------------------
@@ -420,6 +723,60 @@ class TestEnsureToken:
             mock_setup.assert_not_called()
 
 
+class TestEnsureTokenApiKey:
+    @patch("ralph.token.read_token_from_keychain")
+    @patch("ralph.token.time.time", return_value=1700000000.0)
+    def test_returns_cached_valid_api_key(self, mock_time, mock_read):
+        far_future = 1700000000000 + 10 * 365 * MS_PER_DAY
+        mock_read.return_value = {"accessToken": "sk-ant-api03-cached", "expiresAt": far_future}
+        result = ensure_token("claude", auth_mode="api_key")
+        assert result == "sk-ant-api03-cached"
+
+    @patch("ralph.token._validate_api_key")
+    @patch("ralph.token.write_token_to_keychain")
+    @patch("ralph.token.prompt_for_api_key", return_value="sk-ant-api03-fresh")
+    @patch("ralph.token.read_token_from_keychain", return_value=None)
+    @patch("ralph.token.time.time", return_value=1700000000.0)
+    def test_prompts_when_missing(self, mock_time, mock_read, mock_prompt,
+                                   mock_write, mock_validate):
+        result = ensure_token("claude", auth_mode="api_key")
+        assert result == "sk-ant-api03-fresh"
+        mock_prompt.assert_called_once_with("claude")
+
+    @patch("ralph.token._validate_api_key")
+    @patch("ralph.token.write_token_to_keychain")
+    @patch("ralph.token.prompt_for_api_key", return_value="sk-ant-api03-fresh")
+    @patch("ralph.token.read_token_from_keychain", return_value=None)
+    @patch("ralph.token.time.time", return_value=1700000000.0)
+    def test_does_not_run_claude_setup(self, mock_time, mock_read, mock_prompt,
+                                        mock_write, mock_validate):
+        with patch("ralph.token.run_claude_setup_token") as mock_setup:
+            ensure_token("claude", auth_mode="api_key")
+            mock_setup.assert_not_called()
+
+    @patch("ralph.token._validate_api_key")
+    @patch("ralph.token.write_token_to_keychain")
+    @patch("ralph.token.prompt_for_api_key", return_value="sk-ant-api03-fresh")
+    @patch("ralph.token.read_token_from_keychain", return_value=None)
+    @patch("ralph.token.time.time", return_value=1700000000.0)
+    def test_stores_with_far_future_expiry(self, mock_time, mock_read, mock_prompt,
+                                            mock_write, mock_validate):
+        ensure_token("claude", auth_mode="api_key")
+        written_json = mock_write.call_args[0][1]
+        data = json.loads(written_json)
+        assert data["accessToken"] == "sk-ant-api03-fresh"
+        expected_expiry = 1700000000000 + 10 * 365 * MS_PER_DAY
+        assert data["expiresAt"] == expected_expiry
+
+    @patch("ralph.token.read_token_from_keychain")
+    @patch("ralph.token.time.time", return_value=1700000000.0)
+    def test_reads_from_correct_service(self, mock_time, mock_read):
+        far_future = 1700000000000 + 10 * 365 * MS_PER_DAY
+        mock_read.return_value = {"accessToken": "sk-cached", "expiresAt": far_future}
+        ensure_token("claude", auth_mode="api_key")
+        mock_read.assert_called_once_with("claude", "api_key")
+
+
 # ---------------------------------------------------------------------------
 # Token JSON round-trip
 # ---------------------------------------------------------------------------
@@ -437,36 +794,6 @@ class TestTokenRoundTrip:
         assert data["accessToken"] == "sk-round-trip-token"
         assert isinstance(data["expiresAt"], int)
         assert data["expiresAt"] > 1700000000000
-
-
-# ---------------------------------------------------------------------------
-# prompt_for_api_key (cursor-specific)
-# ---------------------------------------------------------------------------
-
-class TestPromptForApiKey:
-    @patch("builtins.input", return_value="cur_abc123xyz")
-    def test_returns_api_key(self, mock_input, capsys):
-        result = prompt_for_api_key("cursor")
-        assert result == "cur_abc123xyz"
-        captured = capsys.readouterr()
-        assert "Enter your cursor API key" in captured.err
-
-    @patch("builtins.input", return_value="  cur_abc123xyz  ")
-    def test_strips_whitespace(self, mock_input):
-        result = prompt_for_api_key("cursor")
-        assert result == "cur_abc123xyz"
-
-    @patch("builtins.input", return_value="")
-    def test_empty_input_exits(self, mock_input):
-        with pytest.raises(SystemExit) as exc_info:
-            prompt_for_api_key("cursor")
-        assert exc_info.value.code == 1
-
-    @patch("builtins.input", side_effect=EOFError)
-    def test_eof_exits(self, mock_input):
-        with pytest.raises(SystemExit) as exc_info:
-            prompt_for_api_key("cursor")
-        assert exc_info.value.code == 1
 
 
 # ---------------------------------------------------------------------------
@@ -546,6 +873,44 @@ class TestParseAndStoreTokenCursor:
         mock_run.assert_called_once()
         cmd = mock_run.call_args[0][0]
         assert cmd[0] == "claude"
+
+
+# ---------------------------------------------------------------------------
+# _parse_and_store_token — api_key mode
+# ---------------------------------------------------------------------------
+
+class TestParseAndStoreTokenApiKey:
+    @patch("ralph.token._validate_api_key")
+    @patch("ralph.token.write_token_to_keychain")
+    @patch("ralph.token.time.time", return_value=1700000000.0)
+    def test_validates_via_api_call(self, mock_time, mock_write, mock_validate):
+        _parse_and_store_token("claude", "sk-ant-api03-test", auth_mode="api_key")
+        mock_validate.assert_called_once_with("sk-ant-api03-test")
+
+    @patch("ralph.token._validate_api_key")
+    @patch("ralph.token.write_token_to_keychain")
+    @patch("ralph.token.time.time", return_value=1700000000.0)
+    def test_sets_far_future_expiry(self, mock_time, mock_write, mock_validate):
+        _parse_and_store_token("claude", "sk-ant-api03-test", auth_mode="api_key")
+        written_json = mock_write.call_args[0][1]
+        data = json.loads(written_json)
+        expected = 1700000000000 + 10 * 365 * MS_PER_DAY
+        assert data["expiresAt"] == expected
+
+    @patch("ralph.token._validate_api_key")
+    @patch("ralph.token.write_token_to_keychain")
+    @patch("ralph.token.time.time", return_value=1700000000.0)
+    def test_does_not_call_subprocess(self, mock_time, mock_write, mock_validate):
+        with patch("ralph.token.subprocess.run") as mock_run:
+            _parse_and_store_token("claude", "sk-ant-api03-test", auth_mode="api_key")
+            mock_run.assert_not_called()
+
+    @patch("ralph.token._validate_api_key")
+    @patch("ralph.token.write_token_to_keychain")
+    @patch("ralph.token.time.time", return_value=1700000000.0)
+    def test_writes_with_auth_mode(self, mock_time, mock_write, mock_validate):
+        _parse_and_store_token("claude", "sk-ant-api03-test", auth_mode="api_key")
+        assert mock_write.call_args[1]["auth_mode"] == "api_key"
 
 
 # ---------------------------------------------------------------------------

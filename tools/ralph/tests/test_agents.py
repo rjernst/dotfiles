@@ -2,7 +2,7 @@
 
 import pytest
 
-from ralph.agents import AGENTS, VALID_AGENTS, get_agent
+from ralph.agents import AGENTS, VALID_AGENTS, VALID_AUTH_MODES, get_agent, get_auth_mode
 
 
 class TestGetAgent:
@@ -73,3 +73,46 @@ class TestValidAgents:
 
     def test_matches_agents_keys(self):
         assert set(VALID_AGENTS) == set(AGENTS.keys())
+
+
+class TestValidAuthModes:
+    def test_contains_oauth(self):
+        assert "oauth" in VALID_AUTH_MODES
+
+    def test_contains_api_key(self):
+        assert "api_key" in VALID_AUTH_MODES
+
+
+class TestGetAuthMode:
+    def test_claude_default_returns_oauth(self):
+        result = get_auth_mode("claude")
+        assert result["keychain_service"] == "claude-token"
+        assert result["validation_env_var"] == "CLAUDE_CODE_OAUTH_TOKEN"
+
+    def test_claude_explicit_oauth(self):
+        result = get_auth_mode("claude", "oauth")
+        assert result["keychain_service"] == "claude-token"
+
+    def test_claude_api_key(self):
+        result = get_auth_mode("claude", "api_key")
+        assert result["keychain_service"] == "claude-api-key"
+        assert result["validation_env_var"] == "ANTHROPIC_API_KEY"
+
+    def test_claude_api_key_cli_form(self):
+        """CLI-style 'api-key' with hyphen is normalized to 'api_key'."""
+        result = get_auth_mode("claude", "api-key")
+        assert result["keychain_service"] == "claude-api-key"
+
+    def test_cursor_returns_none(self):
+        assert get_auth_mode("cursor") is None
+
+    def test_cursor_with_mode_returns_none(self):
+        assert get_auth_mode("cursor", "oauth") is None
+
+    def test_unknown_mode_raises(self):
+        with pytest.raises(ValueError, match="unknown auth mode 'bogus'"):
+            get_auth_mode("claude", "bogus")
+
+    def test_unknown_agent_raises(self):
+        with pytest.raises(ValueError, match="unknown agent"):
+            get_auth_mode("unknown")
