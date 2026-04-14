@@ -464,6 +464,29 @@ def _read_spec_issue_number(git: Git, branch: str, cwd: str):
     return value if value else None
 
 
+def _resolve_origin_repo(cwd: str):
+    """Resolve the GitHub owner/repo slug from the 'origin' remote URL.
+    Spec issues are created on the origin repo (typically a fork), not
+    upstream, so gh commands must target origin explicitly."""
+    import re
+    try:
+        result = subprocess.run(
+            ["git", "remote", "get-url", "origin"],
+            cwd=cwd,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False,
+        )
+        if result.returncode != 0:
+            return None
+        url = result.stdout.strip()
+        # Match SSH (git@github.com:owner/repo.git) or HTTPS (https://github.com/owner/repo.git)
+        m = re.search(r"github\.com[:/]([^/]+/[^/]+?)(?:\.git)?$", url)
+        if m:
+            return m.group(1)
+    except FileNotFoundError:
+        pass
+    return None
+
+
 def _verify_spec_issue_ready(issue_number: str, cwd: str):
     """Verify that a spec issue is ready to merge: requires both 'spec' and
     'status:done' labels. Raises SpecIssueError on any problem (gh missing,
@@ -474,11 +497,16 @@ def _verify_spec_issue_ready(issue_number: str, cwd: str):
             f"gh not found; cannot verify spec issue #{issue_number}"
         )
 
+    repo = _resolve_origin_repo(cwd)
+    gh_cmd = ["gh", "issue", "view", issue_number,
+             "--json", "labels",
+             "--jq", "[.labels[].name] | join(\",\")"]
+    if repo:
+        gh_cmd.extend(["-R", repo])
+
     try:
         result = subprocess.run(
-            ["gh", "issue", "view", issue_number,
-             "--json", "labels",
-             "--jq", "[.labels[].name] | join(\",\")"],
+            gh_cmd,
             cwd=cwd,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False,
         )
@@ -518,9 +546,14 @@ def _close_spec_issue(git: Git, branch: str, issue_number: str, cwd: str):
             f"gh not found; cannot close spec issue #{issue_number}"
         )
 
+    repo = _resolve_origin_repo(cwd)
+    gh_cmd = ["gh", "issue", "close", issue_number]
+    if repo:
+        gh_cmd.extend(["-R", repo])
+
     try:
         result = subprocess.run(
-            ["gh", "issue", "close", issue_number],
+            gh_cmd,
             cwd=cwd,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False,
         )
