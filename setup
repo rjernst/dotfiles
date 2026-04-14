@@ -279,7 +279,7 @@ if [[ $OSTYPE == darwin* ]]; then
   fi
 
   # symlink icloud drive to homedir
-  if [ ! -d $HOME/iCloud ]; then
+  if [ ! -e $HOME/iCloud ] && [ ! -L $HOME/iCloud ]; then
     if (( DRY_RUN )); then
       echo "[dry-run] ln -s ~/Library/Mobile Documents/com~apple~CloudDocs ~/iCloud"
     else
