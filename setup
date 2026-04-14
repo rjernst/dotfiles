@@ -228,6 +228,12 @@ dry_mkdir $HOME/.claude
 setup_link "claude/CLAUDE.md"                     ".claude/CLAUDE.md"
 setup_link "claude/skills"                        ".claude/skills"
 
+dry_mkdir $HOME/.pi
+dry_mkdir $HOME/.pi/agent
+dry_mkdir $HOME/.pi/agent/extensions
+setup_link "pi/agent/settings.json"               ".pi/agent/settings.json"
+setup_link "pi/agent/extensions/claude-memories.ts" ".pi/agent/extensions/claude-memories.ts"
+
 dry_mkdir $HOME/.git
 setup_link "git/config"                         ".gitconfig"
 setup_link "git/ignore"                         ".git/ignore"

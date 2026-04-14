@@ -249,6 +249,21 @@ RESOLVE_HELPER="${BATS_TEST_FILENAME%/*}/helpers/resolve_roles.zsh"
   [ -f "$HOME/.claude/skills/create-spec/SKILL.md" ]
 }
 
+@test "pi settings symlink points to tracked settings" {
+  mkdir -p "$DOTFILES/pi/agent" "$HOME/.pi/agent"
+  cat > "$DOTFILES/pi/agent/settings.json" <<'JSON'
+{
+  "skills": ["~/.claude/skills"]
+}
+JSON
+
+  setup_link "pi/agent/settings.json" ".pi/agent/settings.json"
+
+  [ -L "$HOME/.pi/agent/settings.json" ]
+  [ "$(readlink "$HOME/.pi/agent/settings.json")" = "$DOTFILES/pi/agent/settings.json" ]
+  grep -F '"~/.claude/skills"' "$HOME/.pi/agent/settings.json"
+}
+
 # --- Scripts → ~/bin symlink tests ---
 
 @test "setup links all scripts into bin, skipping directories" {

@@ -85,6 +85,9 @@ claude/
   CLAUDE.md            # Global Claude Code instructions (symlinked to ~/.claude/CLAUDE.md)
   skills/              # Claude Code skills (symlinked to ~/.claude/skills)
     create-spec/       # /create-spec — interactive Ralph spec generator (creates GitHub Issues)
+pi/
+  agent/
+    settings.json      # Global pi settings (symlinked to ~/.pi/agent/settings.json)
 scripts/                 # All files auto-symlinked to ~/bin by setup
   ralph                # GitHub Issues-driven AI coding loop (sandbox-based)
   ta                   # Terminal Agent tool (subcommand dispatcher)
@@ -115,6 +118,7 @@ docker/
 - **Git aliases**: Single-char shortcuts (`s`=status, `co`=checkout, `ci`=commit, `pr`=push -u origin HEAD, etc.) defined in `git/config`.
 - **Homebrew**: Per-host `brewfile` is symlinked to `~/.Brewfile`. Supports x86 Rosetta packages via `brewfile-x86`.
 - **Local overrides**: `~/.zshrc.local` is sourced at the end of zshrc for machine-specific config not in this repo.
+- **pi skills reuse Claude skills**: `~/.pi/agent/settings.json` points pi at `~/.claude/skills`, so the dotfiles-managed Claude skills are shared without copying.
 - **SSH**: Uses Ed25519 keys. Base config disables strict host key checking and enables connection multiplexing.
 
 ## Common User Commands
