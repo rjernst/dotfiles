@@ -945,7 +945,7 @@ class TestSandboxEnsureSandbox:
             "/work/fix-auth", "/repo/.git", sandbox_agent="shell")
         mock_policy.assert_called_once_with(
             "agent-loop-cursor-fix-auth",
-            ["api2.cursor.sh", "api5.cursor.sh", "sentry.io"])
+            ["*.cursor.sh", "sentry.io"])
 
 
 # ---------------------------------------------------------------------------
@@ -969,14 +969,13 @@ class TestSandboxApplyNetworkPolicy:
 
     @patch("ralph.runtime.docker_sandbox.subprocess.run")
     def test_cursor_hosts(self, mock_run):
-        allowed = ["api2.cursor.sh", "api5.cursor.sh", "sentry.io"]
+        allowed = ["*.cursor.sh", "sentry.io"]
         DockerSandboxRuntime("/dotfiles").apply_network_policy("agent-loop-cursor-fix-auth", allowed)
         mock_run.assert_called_once_with(
             ["docker", "sandbox", "network", "proxy", "agent-loop-cursor-fix-auth",
              "--policy", "deny",
              "--allow-host", "localhost",
-             "--allow-host", "api2.cursor.sh",
-             "--allow-host", "api5.cursor.sh",
+             "--allow-host", "*.cursor.sh",
              "--allow-host", "sentry.io"],
             check=True,
         )

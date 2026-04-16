@@ -24,8 +24,7 @@ class TestGetAgent:
         assert cfg["default_model"] == "auto"
         assert cfg["uses_proxy"] is False
         assert cfg["env_var_name"] == "CURSOR_API_KEY"
-        assert "api2.cursor.sh" in cfg["allowed_hosts"]
-        assert "api5.cursor.sh" in cfg["allowed_hosts"]
+        assert "*.cursor.sh" in cfg["allowed_hosts"]
         assert "sentry.io" in cfg["allowed_hosts"]
 
     def test_unknown_agent_raises(self):
