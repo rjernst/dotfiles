@@ -138,20 +138,24 @@ def start_proxy(agent, port, dotfiles_dir, auth_mode=None):
         sys.exit(1)
 
     token = token_data["accessToken"]
+    base_url = token_data.get("baseUrl")
     script = proxy_script_path(dotfiles_dir)
     pid_file = proxy_pid_file(agent)
     log_file = proxy_log_file(agent)
 
     print(f"ralph: starting proxy on port {port}...")
     log_fh = open(log_file, "a")
+    proxy_env = {**os.environ,
+                 "LISTEN_PORT": str(port),
+                 "PID_FILE": pid_file}
+    if base_url:
+        proxy_env["TARGET"] = base_url
     proc = subprocess.Popen(
         ["python3", script],
         stdin=subprocess.PIPE,
         stdout=subprocess.DEVNULL,
         stderr=log_fh,
-        env={**os.environ,
-             "LISTEN_PORT": str(port),
-             "PID_FILE": pid_file},
+        env=proxy_env,
     )
     proc.stdin.write(f"{resolved_mode}\n{token}\n".encode())
     proc.stdin.close()

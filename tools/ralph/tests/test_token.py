@@ -21,6 +21,7 @@ from ralph.token import (
     format_expiry_date,
     run_claude_setup_token,
     prompt_for_api_key,
+    prompt_for_base_url,
     _parse_and_store_token,
     store_token,
     check_token,
@@ -239,7 +240,7 @@ class TestValidateApiKey:
             _validate_api_key("sk-ant-api03-bad")
         assert exc_info.value.code == 1
         captured = capsys.readouterr()
-        assert "API key rejected by api.anthropic.com (HTTP 401)" in captured.err
+        assert "API key rejected by https://api.anthropic.com (HTTP 401)" in captured.err
 
     @patch("ralph.token.urllib.request.urlopen")
     def test_403_prints_rejected_message(self, mock_urlopen, capsys):
@@ -250,7 +251,7 @@ class TestValidateApiKey:
             _validate_api_key("sk-ant-api03-bad")
         assert exc_info.value.code == 1
         captured = capsys.readouterr()
-        assert "API key rejected by api.anthropic.com (HTTP 403)" in captured.err
+        assert "API key rejected by https://api.anthropic.com (HTTP 403)" in captured.err
 
     @patch("ralph.token.urllib.request.urlopen")
     def test_429_prints_validation_failed(self, mock_urlopen, capsys):
@@ -472,18 +473,21 @@ class TestStoreTokenApiKey:
             # subprocess.run should NOT be called (no claude -p validation)
             mock_run.assert_not_called()
         # _validate_api_key should be called instead
-        mock_validate.assert_called_once_with("sk-ant-api03-testkey")
+        mock_validate.assert_called_once_with("sk-ant-api03-testkey", base_url=None)
 
     @patch("ralph.token._validate_api_key")
     @patch("ralph.token.write_token_to_keychain")
     @patch("ralph.token.time.time", return_value=1700000000.0)
+    @patch("ralph.token.prompt_for_base_url", return_value=None)
     @patch("ralph.token.prompt_for_api_key", return_value="sk-ant-api03-interactive")
     @patch("ralph.token.sys.stdin")
     def test_interactive_prompts_for_api_key(self, mock_stdin, mock_prompt,
-                                              mock_time, mock_write, mock_validate):
+                                              mock_base_url, mock_time,
+                                              mock_write, mock_validate):
         mock_stdin.isatty.return_value = True
         store_token("claude", auth_mode="api_key")
         mock_prompt.assert_called_once_with("claude")
+        mock_base_url.assert_called_once()
         written_json = mock_write.call_args[0][1]
         data = json.loads(written_json)
         assert data["accessToken"] == "sk-ant-api03-interactive"
@@ -491,9 +495,11 @@ class TestStoreTokenApiKey:
     @patch("ralph.token._validate_api_key")
     @patch("ralph.token.write_token_to_keychain")
     @patch("ralph.token.time.time", return_value=1700000000.0)
+    @patch("ralph.token.prompt_for_base_url", return_value=None)
     @patch("ralph.token.sys.stdin")
-    def test_interactive_does_not_run_claude_setup(self, mock_stdin, mock_time,
-                                                    mock_write, mock_validate):
+    def test_interactive_does_not_run_claude_setup(self, mock_stdin, mock_base_url,
+                                                    mock_time, mock_write,
+                                                    mock_validate):
         mock_stdin.isatty.return_value = True
         with patch("ralph.token.prompt_for_api_key", return_value="sk-key"):
             with patch("ralph.token.run_claude_setup_token") as mock_setup:
@@ -734,33 +740,37 @@ class TestEnsureTokenApiKey:
 
     @patch("ralph.token._validate_api_key")
     @patch("ralph.token.write_token_to_keychain")
+    @patch("ralph.token.prompt_for_base_url", return_value=None)
     @patch("ralph.token.prompt_for_api_key", return_value="sk-ant-api03-fresh")
     @patch("ralph.token.read_token_from_keychain", return_value=None)
     @patch("ralph.token.time.time", return_value=1700000000.0)
     def test_prompts_when_missing(self, mock_time, mock_read, mock_prompt,
-                                   mock_write, mock_validate):
+                                   mock_base_url, mock_write, mock_validate):
         result = ensure_token("claude", auth_mode="api_key")
         assert result == "sk-ant-api03-fresh"
         mock_prompt.assert_called_once_with("claude")
+        mock_base_url.assert_called_once()
 
     @patch("ralph.token._validate_api_key")
     @patch("ralph.token.write_token_to_keychain")
+    @patch("ralph.token.prompt_for_base_url", return_value=None)
     @patch("ralph.token.prompt_for_api_key", return_value="sk-ant-api03-fresh")
     @patch("ralph.token.read_token_from_keychain", return_value=None)
     @patch("ralph.token.time.time", return_value=1700000000.0)
     def test_does_not_run_claude_setup(self, mock_time, mock_read, mock_prompt,
-                                        mock_write, mock_validate):
+                                        mock_base_url, mock_write, mock_validate):
         with patch("ralph.token.run_claude_setup_token") as mock_setup:
             ensure_token("claude", auth_mode="api_key")
             mock_setup.assert_not_called()
 
     @patch("ralph.token._validate_api_key")
     @patch("ralph.token.write_token_to_keychain")
+    @patch("ralph.token.prompt_for_base_url", return_value=None)
     @patch("ralph.token.prompt_for_api_key", return_value="sk-ant-api03-fresh")
     @patch("ralph.token.read_token_from_keychain", return_value=None)
     @patch("ralph.token.time.time", return_value=1700000000.0)
     def test_stores_with_far_future_expiry(self, mock_time, mock_read, mock_prompt,
-                                            mock_write, mock_validate):
+                                            mock_base_url, mock_write, mock_validate):
         ensure_token("claude", auth_mode="api_key")
         written_json = mock_write.call_args[0][1]
         data = json.loads(written_json)
@@ -885,7 +895,7 @@ class TestParseAndStoreTokenApiKey:
     @patch("ralph.token.time.time", return_value=1700000000.0)
     def test_validates_via_api_call(self, mock_time, mock_write, mock_validate):
         _parse_and_store_token("claude", "sk-ant-api03-test", auth_mode="api_key")
-        mock_validate.assert_called_once_with("sk-ant-api03-test")
+        mock_validate.assert_called_once_with("sk-ant-api03-test", base_url=None)
 
     @patch("ralph.token._validate_api_key")
     @patch("ralph.token.write_token_to_keychain")
@@ -911,6 +921,116 @@ class TestParseAndStoreTokenApiKey:
     def test_writes_with_auth_mode(self, mock_time, mock_write, mock_validate):
         _parse_and_store_token("claude", "sk-ant-api03-test", auth_mode="api_key")
         assert mock_write.call_args[1]["auth_mode"] == "api_key"
+
+    @patch("ralph.token._validate_api_key")
+    @patch("ralph.token.write_token_to_keychain")
+    @patch("ralph.token.time.time", return_value=1700000000.0)
+    def test_stores_base_url(self, mock_time, mock_write, mock_validate):
+        _parse_and_store_token("claude", "sk-ant-api03-test", auth_mode="api_key",
+                               base_url="https://custom.api.example.com")
+        written_json = mock_write.call_args[0][1]
+        data = json.loads(written_json)
+        assert data["baseUrl"] == "https://custom.api.example.com"
+        mock_validate.assert_called_once_with(
+            "sk-ant-api03-test", base_url="https://custom.api.example.com")
+
+    @patch("ralph.token._validate_api_key")
+    @patch("ralph.token.write_token_to_keychain")
+    @patch("ralph.token.time.time", return_value=1700000000.0)
+    def test_omits_base_url_when_none(self, mock_time, mock_write, mock_validate):
+        _parse_and_store_token("claude", "sk-ant-api03-test", auth_mode="api_key")
+        written_json = mock_write.call_args[0][1]
+        data = json.loads(written_json)
+        assert "baseUrl" not in data
+
+
+# ---------------------------------------------------------------------------
+# prompt_for_base_url
+# ---------------------------------------------------------------------------
+
+class TestPromptForBaseUrl:
+    @patch("builtins.input", return_value="https://custom.api.example.com")
+    def test_returns_url(self, mock_input, capsys):
+        result = prompt_for_base_url()
+        assert result == "https://custom.api.example.com"
+        captured = capsys.readouterr()
+        assert "API base URL" in captured.err
+
+    @patch("builtins.input", return_value="")
+    def test_empty_returns_none(self, mock_input):
+        result = prompt_for_base_url()
+        assert result is None
+
+    @patch("builtins.input", return_value="  ")
+    def test_whitespace_returns_none(self, mock_input):
+        result = prompt_for_base_url()
+        assert result is None
+
+    @patch("builtins.input", side_effect=EOFError)
+    def test_eof_returns_none(self, mock_input):
+        result = prompt_for_base_url()
+        assert result is None
+
+
+# ---------------------------------------------------------------------------
+# _validate_api_key with custom base_url
+# ---------------------------------------------------------------------------
+
+class TestValidateApiKeyCustomBaseUrl:
+    @patch("ralph.token.urllib.request.urlopen")
+    def test_uses_custom_base_url(self, mock_urlopen):
+        mock_urlopen.return_value = MagicMock()
+        _validate_api_key("sk-ant-api03-test", base_url="https://custom.example.com")
+        req = mock_urlopen.call_args[0][0]
+        assert req.full_url == "https://custom.example.com/v1/messages"
+
+    @patch("ralph.token.urllib.request.urlopen")
+    def test_strips_trailing_slash(self, mock_urlopen):
+        mock_urlopen.return_value = MagicMock()
+        _validate_api_key("sk-ant-api03-test", base_url="https://custom.example.com/")
+        req = mock_urlopen.call_args[0][0]
+        assert req.full_url == "https://custom.example.com/v1/messages"
+
+    @patch("ralph.token.urllib.request.urlopen")
+    def test_rejection_mentions_custom_base(self, mock_urlopen, capsys):
+        mock_urlopen.side_effect = urllib.error.HTTPError(
+            "https://custom.example.com/v1/messages", 401,
+            "Unauthorized", {}, io.BytesIO(b""))
+        with pytest.raises(SystemExit):
+            _validate_api_key("sk-ant-api03-bad", base_url="https://custom.example.com")
+        captured = capsys.readouterr()
+        assert "https://custom.example.com" in captured.err
+
+
+# ---------------------------------------------------------------------------
+# store_token — api_key mode with base_url
+# ---------------------------------------------------------------------------
+
+class TestStoreTokenApiKeyBaseUrl:
+    @patch("ralph.token._validate_api_key")
+    @patch("ralph.token.write_token_to_keychain")
+    @patch("ralph.token.time.time", return_value=1700000000.0)
+    @patch("ralph.token.prompt_for_base_url", return_value="https://custom.example.com")
+    @patch("ralph.token.prompt_for_api_key", return_value="sk-ant-api03-test")
+    @patch("ralph.token.sys.stdin")
+    def test_interactive_stores_base_url(self, mock_stdin, mock_prompt, mock_base_url,
+                                          mock_time, mock_write, mock_validate):
+        mock_stdin.isatty.return_value = True
+        store_token("claude", auth_mode="api_key")
+        written_json = mock_write.call_args[0][1]
+        data = json.loads(written_json)
+        assert data["baseUrl"] == "https://custom.example.com"
+
+    @patch("ralph.token._validate_api_key")
+    @patch("ralph.token.write_token_to_keychain")
+    @patch("ralph.token.time.time", return_value=1700000000.0)
+    @patch("ralph.token.sys.stdin", new_callable=lambda: io.StringIO("sk-ant-api03-test"))
+    def test_piped_does_not_store_base_url(self, mock_stdin, mock_time,
+                                            mock_write, mock_validate):
+        store_token("claude", auth_mode="api_key")
+        written_json = mock_write.call_args[0][1]
+        data = json.loads(written_json)
+        assert "baseUrl" not in data
 
 
 # ---------------------------------------------------------------------------

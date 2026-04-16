@@ -182,13 +182,28 @@ def prompt_for_api_key(agent):
     return raw
 
 
-def _validate_api_key(key):
+def prompt_for_base_url():
+    """Prompt for a custom API base URL (optional).
+
+    Returns the URL string, or None if left empty.
+    """
+    print("Enter API base URL (leave empty for default https://api.anthropic.com):",
+          file=sys.stderr)
+    try:
+        raw = input().strip()
+    except EOFError:
+        raw = ""
+    return raw or None
+
+
+def _validate_api_key(key, base_url=None):
     """Validate an Anthropic API key via a direct API call.
 
-    Sends a minimal request to api.anthropic.com. Exits on failure.
+    Sends a minimal request to the API base URL. Exits on failure.
     """
+    api_base = base_url.rstrip("/") if base_url else "https://api.anthropic.com"
     req = urllib.request.Request(
-        "https://api.anthropic.com/v1/messages",
+        f"{api_base}/v1/messages",
         method="POST",
         headers={
             "x-api-key": key,
@@ -202,13 +217,14 @@ def _validate_api_key(key):
         }).encode(),
     )
 
-    print(f"ralph: validating API key ({len(key)} chars)...", file=sys.stderr)
+    print(f"ralph: validating API key ({len(key)} chars) against {api_base}...",
+          file=sys.stderr)
     try:
         urllib.request.urlopen(req, timeout=10)
         print("ralph: API key validated successfully", file=sys.stderr)
     except urllib.error.HTTPError as exc:
         if exc.code in (401, 403):
-            print(f"ralph: API key rejected by api.anthropic.com (HTTP {exc.code})",
+            print(f"ralph: API key rejected by {api_base} (HTTP {exc.code})",
                   file=sys.stderr)
         else:
             print(f"ralph: API key validation failed: {exc.reason}",
@@ -220,7 +236,7 @@ def _validate_api_key(key):
         sys.exit(1)
 
 
-def _parse_and_store_token(agent, raw, auth_mode=None):
+def _parse_and_store_token(agent, raw, auth_mode=None, base_url=None):
     """Parse raw token string, store in Keychain, return the data dict."""
     now_ms = int(time.time() * 1000)
     default_expiry = now_ms + DEFAULT_EXPIRY_DAYS * MS_PER_DAY
@@ -246,8 +262,10 @@ def _parse_and_store_token(agent, raw, auth_mode=None):
 
     if resolved_mode == "api_key":
         # API key mode: validate via direct API call, set far-future expiry
-        _validate_api_key(token)
+        _validate_api_key(token, base_url=base_url)
         data["expiresAt"] = now_ms + 10 * 365 * MS_PER_DAY
+        if base_url:
+            data["baseUrl"] = base_url
     elif resolved_mode == "oauth":
         # OAuth mode: validate via claude -p
         agent_config = get_agent(agent)
@@ -281,11 +299,13 @@ def store_token(agent, auth_mode=None):
     For other agents: prompts for an API key interactively, or reads from stdin.
     """
     resolved_mode = _resolve_mode_string(agent, auth_mode)
+    base_url = None
     if sys.stdin.isatty():
         if resolved_mode == "oauth":
             raw = run_claude_setup_token()
         elif resolved_mode == "api_key":
             raw = prompt_for_api_key(agent)
+            base_url = prompt_for_base_url()
         else:
             # Single-mode agent (e.g. cursor): use original behavior
             agent_config = get_agent(agent)
@@ -298,7 +318,7 @@ def store_token(agent, auth_mode=None):
     if not raw:
         print("ralph: no token provided on stdin", file=sys.stderr)
         sys.exit(1)
-    _parse_and_store_token(agent, raw, auth_mode=auth_mode)
+    _parse_and_store_token(agent, raw, auth_mode=auth_mode, base_url=base_url)
 
 
 def check_token(agent, auth_mode=None):
@@ -375,10 +395,12 @@ def ensure_token(agent, auth_mode=None):
         print(f"ralph: no token found for agent {agent}, requesting new token...",
               file=sys.stderr)
 
+    base_url = None
     if resolved_mode == "oauth":
         raw = run_claude_setup_token()
     elif resolved_mode == "api_key":
         raw = prompt_for_api_key(agent)
+        base_url = prompt_for_base_url()
     else:
         # Single-mode agent (e.g. cursor)
         agent_config = get_agent(agent)
@@ -387,5 +409,6 @@ def ensure_token(agent, auth_mode=None):
         else:
             raw = prompt_for_api_key(agent)
 
-    stored = _parse_and_store_token(agent, raw, auth_mode=auth_mode)
+    stored = _parse_and_store_token(agent, raw, auth_mode=auth_mode,
+                                    base_url=base_url)
     return stored["accessToken"]

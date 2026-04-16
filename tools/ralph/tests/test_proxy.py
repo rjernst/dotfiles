@@ -194,6 +194,37 @@ class TestStartProxy:
         with pytest.raises(OSError):
             start_proxy("claude", 18080, "/fake/dotfiles")
 
+    @patch("builtins.open", MagicMock())
+    @patch("ralph.proxy.subprocess.Popen")
+    @patch("ralph.proxy.read_token_from_keychain")
+    @patch("ralph.proxy.time.time", return_value=1700000000.0)
+    def test_passes_base_url_as_target(self, mock_time, mock_read, mock_popen):
+        future_ms = 1700000000000 + 30 * 86400 * 1000
+        mock_read.return_value = {
+            "accessToken": "sk-ant-api03-key", "expiresAt": future_ms,
+            "baseUrl": "https://custom.example.com",
+        }
+        mock_proc = MagicMock()
+        mock_popen.return_value = mock_proc
+
+        start_proxy("claude", 18080, "/fake/dotfiles", auth_mode="api_key")
+        env = mock_popen.call_args[1]["env"]
+        assert env["TARGET"] == "https://custom.example.com"
+
+    @patch("builtins.open", MagicMock())
+    @patch("ralph.proxy.subprocess.Popen")
+    @patch("ralph.proxy.read_token_from_keychain")
+    @patch("ralph.proxy.time.time", return_value=1700000000.0)
+    def test_omits_target_when_no_base_url(self, mock_time, mock_read, mock_popen):
+        future_ms = 1700000000000 + 30 * 86400 * 1000
+        mock_read.return_value = {"accessToken": "sk-ant-api03-key", "expiresAt": future_ms}
+        mock_proc = MagicMock()
+        mock_popen.return_value = mock_proc
+
+        start_proxy("claude", 18080, "/fake/dotfiles", auth_mode="api_key")
+        env = mock_popen.call_args[1]["env"]
+        assert "TARGET" not in env
+
 
 # ---------------------------------------------------------------------------
 # stop_proxy
