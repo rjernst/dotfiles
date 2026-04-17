@@ -226,7 +226,11 @@ done
 
 dry_mkdir $HOME/.claude
 setup_link "claude/CLAUDE.md"                     ".claude/CLAUDE.md"
-setup_link "claude/skills"                        ".claude/skills"
+dry_mkdir $HOME/.claude/skills
+for SKILL_DIR in $DOTFILES/claude/skills/*/; do
+  NAME=$(basename "$SKILL_DIR")
+  setup_link "claude/skills/$NAME"                ".claude/skills/$NAME"
+done
 
 dry_mkdir $HOME/.pi
 dry_mkdir $HOME/.pi/agent
