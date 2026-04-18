@@ -11,6 +11,7 @@ from ralph.loop import process_issue, poll_loop
 # process_issue (sandbox-based, mocked)
 # ---------------------------------------------------------------------------
 
+@patch("ralph.loop.ensure_proxy")
 class TestProcessIssueSandbox:
     @patch("ralph.loop.create_runtime")
     @patch("ralph.loop.load_runtime_config", return_value={"type": "docker-sandbox"})
@@ -18,7 +19,8 @@ class TestProcessIssueSandbox:
     @patch("ralph.loop.ensure_worktree", return_value="/work/my-branch")
     @patch("ralph.loop.resolve_repo", return_value="owner/repo")
     def test_resets_sandbox_when_out_of_sync(self, mock_repo, mock_wt, mock_unblock,
-                                             mock_config, mock_create):
+                                             mock_config, mock_create,
+                                             mock_ensure_proxy):
         git = MagicMock()
         # All git.output calls return same value — HEAD doesn't change
         git.output.return_value = "/repo/root"
@@ -49,7 +51,8 @@ class TestProcessIssueSandbox:
     @patch("ralph.loop.ensure_worktree", return_value="/work/my-branch")
     @patch("ralph.loop.resolve_repo", return_value="owner/repo")
     def test_recreates_sandbox_when_reset_fails(self, mock_repo, mock_wt, mock_unblock,
-                                                 mock_config, mock_create):
+                                                 mock_config, mock_create,
+                                                 mock_ensure_proxy):
         git = MagicMock()
         git.output.return_value = "/repo/root"
 
@@ -84,7 +87,8 @@ class TestProcessIssueSandbox:
     @patch("ralph.loop.ensure_worktree", return_value="/work/my-branch")
     @patch("ralph.loop.resolve_repo", return_value="owner/repo")
     def test_uses_ensure_sandbox_and_run_iteration(self, mock_repo, mock_wt, mock_unblock,
-                                                    mock_config, mock_create):
+                                                    mock_config, mock_create,
+                                                    mock_ensure_proxy):
         git = MagicMock()
         git.output.return_value = "/repo/root"
 
@@ -127,7 +131,8 @@ class TestProcessIssueSandbox:
     @patch("ralph.loop.ensure_worktree", return_value="/work/my-branch")
     @patch("ralph.loop.resolve_repo", return_value="owner/repo")
     def test_proxy_host_used_in_env_vars(self, mock_repo, mock_wt, mock_unblock,
-                                          mock_config, mock_create):
+                                          mock_config, mock_create,
+                                          mock_ensure_proxy):
         """Verify sandbox.proxy_host() is called for constructing the proxy URL."""
         git = MagicMock()
         git.output.return_value = "/repo/root"
@@ -159,7 +164,8 @@ class TestProcessIssueSandbox:
     @patch("ralph.loop.resolve_repo", return_value="owner/repo")
     def test_iteration_failure_marks_needs_attention(self, mock_repo, mock_wt,
                                                       mock_config, mock_create,
-                                                      mock_health):
+                                                      mock_health,
+                                                      mock_ensure_proxy):
         git = MagicMock()
         git.output.return_value = "/repo/root"
 
@@ -182,7 +188,6 @@ class TestProcessIssueSandbox:
             remove_labels="status:in-progress",
             add_label="status:needs-attention")
 
-    @patch("ralph.loop.ensure_proxy")
     @patch("ralph.loop.proxy_health_check", return_value=(False, None, None))
     @patch("ralph.loop.create_runtime")
     @patch("ralph.loop.load_runtime_config", return_value={"type": "docker-sandbox"})
@@ -192,7 +197,7 @@ class TestProcessIssueSandbox:
     def test_iteration_failure_restarts_proxy_and_retries(self, mock_repo, mock_wt,
                                                            mock_unblock, mock_config,
                                                            mock_create, mock_health,
-                                                           mock_ensure):
+                                                           mock_ensure_proxy):
         git = MagicMock()
         git.output.return_value = "/repo/root"
 
@@ -211,7 +216,9 @@ class TestProcessIssueSandbox:
             "user", "user@test.com", 18080, "sk-test")
         assert result == 0
 
-        mock_ensure.assert_called_once_with("claude", 18080, "/dotfiles", None)
+        # Called twice: proactive check at entry + reactive restart on failure
+        assert mock_ensure_proxy.call_count == 2
+        mock_ensure_proxy.assert_any_call("claude", 18080, "/dotfiles", None)
         assert sandbox.run_iteration.call_count == 2
 
     @patch("ralph.loop.create_runtime")
@@ -220,7 +227,8 @@ class TestProcessIssueSandbox:
     @patch("ralph.loop.ensure_worktree", return_value="/work/my-branch")
     @patch("ralph.loop.resolve_repo", return_value="owner/repo")
     def test_sync_failure_marks_needs_attention(self, mock_repo, mock_wt, mock_ff,
-                                                 mock_config, mock_create):
+                                                 mock_config, mock_create,
+                                                 mock_ensure_proxy):
         heads = iter(["abc123", "def456"])
         def _git_output(*args, **kwargs):
             if args == ("rev-parse", "--show-toplevel"):
@@ -259,7 +267,8 @@ class TestProcessIssueSandbox:
     @patch("ralph.loop.resolve_repo", return_value="owner/repo")
     def test_pushes_after_iteration_when_flag_set(self, mock_repo, mock_wt,
                                                   mock_unblock, mock_ff,
-                                                  mock_config, mock_create):
+                                                  mock_config, mock_create,
+                                                  mock_ensure_proxy):
         # HEAD changes on first iteration (abc→def), stays same on second (def→def)
         heads = iter(["abc", "def", "def", "def"])
         def _git_output(*args, **kwargs):
@@ -293,7 +302,8 @@ class TestProcessIssueSandbox:
     @patch("ralph.loop.ensure_worktree", return_value="/work/my-branch")
     @patch("ralph.loop.resolve_repo", return_value="owner/repo")
     def test_agent_cursor_uses_correct_names(self, mock_repo, mock_wt,
-                                              mock_config, mock_create):
+                                              mock_config, mock_create,
+                                              mock_ensure_proxy):
         git = MagicMock()
         git.output.return_value = "/repo/root"
 
@@ -320,7 +330,8 @@ class TestProcessIssueSandbox:
     @patch("ralph.loop.ensure_worktree", return_value="/work/my-branch")
     @patch("ralph.loop.resolve_repo", return_value="owner/repo")
     def test_rebuild_flag_passed_to_ensure_sandbox(self, mock_repo, mock_wt, mock_unblock,
-                                                    mock_config, mock_create):
+                                                    mock_config, mock_create,
+                                                    mock_ensure_proxy):
         git = MagicMock()
         git.output.return_value = "/repo/root"
 
@@ -347,7 +358,8 @@ class TestProcessIssueSandbox:
     @patch("ralph.loop.ensure_worktree", return_value="/work/my-branch")
     @patch("ralph.loop.resolve_repo", return_value="owner/repo")
     def test_stores_issue_number_in_git_config(self, mock_repo, mock_wt, mock_unblock,
-                                                mock_config, mock_create):
+                                                mock_config, mock_create,
+                                                mock_ensure_proxy):
         git = MagicMock()
         git.output.return_value = "abc123"
 
@@ -374,7 +386,8 @@ class TestProcessIssueSandbox:
     @patch("ralph.loop.ensure_worktree", return_value="/work/feat/slash-branch")
     @patch("ralph.loop.resolve_repo", return_value="owner/repo")
     def test_stores_issue_number_with_slashes_in_branch(self, mock_repo, mock_wt, mock_unblock,
-                                                         mock_config, mock_create):
+                                                         mock_config, mock_create,
+                                                         mock_ensure_proxy):
         git = MagicMock()
         git.output.return_value = "abc123"
 
@@ -400,7 +413,8 @@ class TestProcessIssueSandbox:
     @patch("ralph.loop.ensure_worktree", return_value="/work/my-branch")
     @patch("ralph.loop.resolve_repo", return_value="owner/repo")
     def test_blocked_marker_marks_needs_attention(self, mock_repo, mock_wt,
-                                                   mock_config, mock_create):
+                                                   mock_config, mock_create,
+                                                   mock_ensure_proxy):
         git = MagicMock()
         # HEAD doesn't change = no commit made
         git.output.return_value = "abc123"
@@ -437,7 +451,8 @@ class TestProcessIssueSandbox:
     @patch("ralph.loop.ensure_worktree", return_value="/work/my-branch")
     @patch("ralph.loop.resolve_repo", return_value="owner/repo")
     def test_cursor_agent_passes_no_proxy_env_vars(self, mock_repo, mock_wt, mock_unblock,
-                                                    mock_config, mock_create):
+                                                    mock_config, mock_create,
+                                                    mock_ensure_proxy):
         """Cursor agent should pass empty env_vars and api_key to run_iteration."""
         git = MagicMock()
         git.output.return_value = "/repo/root"
@@ -471,7 +486,8 @@ class TestProcessIssueSandbox:
     @patch("ralph.loop.ensure_worktree", return_value="/work/my-branch")
     @patch("ralph.loop.resolve_repo", return_value="owner/repo")
     def test_cursor_agent_does_not_check_proxy_on_failure(self, mock_repo, mock_wt, mock_unblock,
-                                                           mock_config, mock_create):
+                                                           mock_config, mock_create,
+                                                           mock_ensure_proxy):
         """Cursor iteration failure should not check proxy health."""
         git = MagicMock()
         git.output.return_value = "/repo/root"
@@ -499,7 +515,8 @@ class TestProcessIssueSandbox:
     @patch("ralph.loop.ensure_worktree", return_value="/work/my-branch")
     @patch("ralph.loop.resolve_repo", return_value="owner/repo")
     def test_claude_agent_passes_proxy_env_vars(self, mock_repo, mock_wt, mock_unblock,
-                                                 mock_config, mock_create):
+                                                 mock_config, mock_create,
+                                                 mock_ensure_proxy):
         """Claude agent should pass proxy env vars and agent/api_key kwargs."""
         git = MagicMock()
         git.output.return_value = "/repo/root"
@@ -531,7 +548,8 @@ class TestProcessIssueSandbox:
     @patch("ralph.loop.ensure_worktree", return_value="/work/my-branch")
     @patch("ralph.loop.resolve_repo", return_value="owner/repo")
     def test_no_blocked_marker_marks_done_and_unblocks(self, mock_repo, mock_wt, mock_unblock,
-                                                        mock_config, mock_create):
+                                                        mock_config, mock_create,
+                                                        mock_ensure_proxy):
         git = MagicMock()
         # HEAD doesn't change = no commit made
         git.output.return_value = "abc123"

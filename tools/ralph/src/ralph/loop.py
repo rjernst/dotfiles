@@ -21,6 +21,13 @@ def process_issue(issue_number, git, dotfiles_dir, gh, agent, push, model,
                   git_user, git_email, proxy_port, token, rebuild=False,
                   auth_mode=None, token_data=None):
     """Process a single GitHub Issue spec."""
+    # Re-verify proxy health before each issue so a proxy that died during
+    # an idle gap (poll interval, rework cycle) gets restarted before we
+    # spin up a sandbox that depends on it.
+    agent_config = get_agent(agent)
+    if agent_config["uses_proxy"]:
+        ensure_proxy(agent, proxy_port, dotfiles_dir, auth_mode)
+
     repo = resolve_repo(git)
     if not repo:
         print("ralph: could not detect repo from origin remote", file=sys.stderr)
@@ -128,7 +135,6 @@ def process_issue(issue_number, git, dotfiles_dir, gh, agent, push, model,
     # Build env vars and API key based on agent type.
     # The token was already resolved by ensure_token() in cli.py and
     # passed through — no need to re-read from Keychain.
-    agent_config = get_agent(agent)
     if agent_config["uses_proxy"]:
         # Real token stays in proxy — sandbox only sees a phantom token
         # and the proxy's base URL.  OAuth mode also sets

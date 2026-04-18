@@ -240,14 +240,28 @@ def start_proxy_keepalive(port, interval=60):
     Returns an Event that can be set to stop the keepalive thread.
     """
     stop = threading.Event()
+    consecutive_failures = [0]
 
     def _keepalive():
         while not stop.wait(interval):
             try:
                 urllib.request.urlopen(
                     f"http://localhost:{port}/health", timeout=5)
-            except Exception:
-                pass
+                if consecutive_failures[0] > 0:
+                    print(f"ralph: proxy keepalive recovered after "
+                          f"{consecutive_failures[0]} failures",
+                          file=sys.stderr)
+                consecutive_failures[0] = 0
+            except Exception as exc:
+                consecutive_failures[0] += 1
+                if consecutive_failures[0] >= 3:
+                    print(f"ralph: proxy keepalive failed {consecutive_failures[0]} "
+                          f"times, proxy may be dead: {exc}",
+                          file=sys.stderr)
+                else:
+                    print(f"ralph: proxy keepalive failed "
+                          f"(attempt {consecutive_failures[0]}): {exc}",
+                          file=sys.stderr)
 
     t = threading.Thread(target=_keepalive, daemon=True)
     t.start()
