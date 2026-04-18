@@ -9,6 +9,9 @@ import pytest
 
 from ralph.proxy import (
     DEFAULT_PROXY_PORT,
+    GATEWAY_MODEL_ALIASES,
+    GATEWAY_TIER_MODELS,
+    build_proxy_env,
     proxy_port_for_agent,
     proxy_health_check,
     start_proxy,
@@ -433,3 +436,110 @@ class TestEnsureProxyStaleCleanup:
         assert result == 18080
         mock_stop.assert_called_once_with("claude", wait=True)
         mock_start.assert_called_once_with("claude", 18080, "/fake/dotfiles", None)
+
+
+# ---------------------------------------------------------------------------
+# build_proxy_env
+# ---------------------------------------------------------------------------
+
+class TestBuildProxyEnv:
+    def test_oauth_mode_returns_oauth_token_and_base_url(self):
+        env = build_proxy_env("oauth", "host.docker.internal", 18080)
+        assert env["CLAUDE_CODE_OAUTH_TOKEN"] == "phantom"
+        assert env["ANTHROPIC_BASE_URL"] == "http://host.docker.internal:18080"
+        assert "ANTHROPIC_API_KEY" not in env
+        assert "ANTHROPIC_AUTH_TOKEN" not in env
+
+    def test_oauth_mode_with_model_sets_custom_model_option(self):
+        env = build_proxy_env("oauth", "host.docker.internal", 18080, model="sonnet")
+        assert env["ANTHROPIC_CUSTOM_MODEL_OPTION"] == "claude-sonnet-4-6"
+
+    def test_oauth_mode_with_unknown_model_passes_through(self):
+        env = build_proxy_env("oauth", "host.docker.internal", 18080, model="my-custom")
+        assert env["ANTHROPIC_CUSTOM_MODEL_OPTION"] == "my-custom"
+
+    def test_oauth_mode_without_model_has_no_custom_option(self):
+        env = build_proxy_env("oauth", "host.docker.internal", 18080)
+        assert "ANTHROPIC_CUSTOM_MODEL_OPTION" not in env
+
+    def test_api_key_mode_returns_api_key_and_base_url(self):
+        env = build_proxy_env("api_key", "host.docker.internal", 18080)
+        assert env["ANTHROPIC_API_KEY"] == "phantom"
+        assert env["ANTHROPIC_BASE_URL"] == "http://host.docker.internal:18080"
+        assert "CLAUDE_CODE_OAUTH_TOKEN" not in env
+        assert "ANTHROPIC_AUTH_TOKEN" not in env
+        assert "ANTHROPIC_CUSTOM_MODEL_OPTION" not in env
+
+    def test_api_key_mode_ignores_token_data(self):
+        env = build_proxy_env("api_key", "host.docker.internal", 18080,
+                              token_data={"modelPrefix": "gw"})
+        assert "ANTHROPIC_AUTH_TOKEN" not in env
+        assert "ANTHROPIC_CUSTOM_MODEL_OPTION" not in env
+
+    def test_gateway_mode_sets_auth_token_and_base_url(self):
+        env = build_proxy_env("gateway", "host.docker.internal", 18080,
+                              token_data={"modelPrefix": "llm-gateway"})
+        assert env["ANTHROPIC_AUTH_TOKEN"] == "phantom"
+        assert env["ANTHROPIC_BASE_URL"] == "http://host.docker.internal:18080"
+        assert "CLAUDE_CODE_OAUTH_TOKEN" not in env
+        assert "ANTHROPIC_API_KEY" not in env
+
+    def test_gateway_mode_generates_all_tier_models_with_prefix(self):
+        env = build_proxy_env("gateway", "host.docker.internal", 18080,
+                              model="sonnet",
+                              token_data={"modelPrefix": "llm-gateway"})
+        assert env["ANTHROPIC_DEFAULT_OPUS_MODEL"] == "llm-gateway/claude-opus-4-6"
+        assert env["ANTHROPIC_DEFAULT_SONNET_MODEL"] == "llm-gateway/claude-sonnet-4-6"
+        assert env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] == "llm-gateway/claude-haiku-4-5"
+        assert env["CLAUDE_CODE_SUBAGENT_MODEL"] == "llm-gateway/claude-sonnet-4-6"
+        assert env["ANTHROPIC_CUSTOM_MODEL_OPTION"] == "llm-gateway/claude-sonnet-4-6"
+
+    def test_gateway_mode_opus_alias_resolves_correctly(self):
+        env = build_proxy_env("gateway", "host.docker.internal", 18080,
+                              model="opus",
+                              token_data={"modelPrefix": "gw"})
+        assert env["ANTHROPIC_CUSTOM_MODEL_OPTION"] == "gw/claude-opus-4-6"
+
+    def test_gateway_mode_haiku_alias_resolves_correctly(self):
+        env = build_proxy_env("gateway", "host.docker.internal", 18080,
+                              model="haiku",
+                              token_data={"modelPrefix": "gw"})
+        assert env["ANTHROPIC_CUSTOM_MODEL_OPTION"] == "gw/claude-haiku-4-5"
+
+    def test_gateway_mode_unknown_model_passes_through_with_prefix(self):
+        env = build_proxy_env("gateway", "host.docker.internal", 18080,
+                              model="my-custom-model",
+                              token_data={"modelPrefix": "gw"})
+        assert env["ANTHROPIC_CUSTOM_MODEL_OPTION"] == "gw/my-custom-model"
+
+    def test_gateway_mode_no_model_omits_custom_model_option(self):
+        env = build_proxy_env("gateway", "host.docker.internal", 18080,
+                              token_data={"modelPrefix": "llm-gateway"})
+        assert "ANTHROPIC_CUSTOM_MODEL_OPTION" not in env
+
+    def test_gateway_mode_empty_prefix_omits_prefix_separator(self):
+        env = build_proxy_env("gateway", "host.docker.internal", 18080,
+                              model="sonnet",
+                              token_data={"modelPrefix": ""})
+        assert env["ANTHROPIC_DEFAULT_SONNET_MODEL"] == "claude-sonnet-4-6"
+        assert env["ANTHROPIC_CUSTOM_MODEL_OPTION"] == "claude-sonnet-4-6"
+
+    def test_gateway_mode_none_token_data_uses_empty_prefix(self):
+        env = build_proxy_env("gateway", "host.docker.internal", 18080,
+                              model="sonnet",
+                              token_data=None)
+        assert env["ANTHROPIC_DEFAULT_SONNET_MODEL"] == "claude-sonnet-4-6"
+        assert env["ANTHROPIC_CUSTOM_MODEL_OPTION"] == "claude-sonnet-4-6"
+
+    def test_gateway_tier_models_contains_all_expected_keys(self):
+        expected = {
+            "ANTHROPIC_DEFAULT_OPUS_MODEL",
+            "ANTHROPIC_DEFAULT_SONNET_MODEL",
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+            "CLAUDE_CODE_SUBAGENT_MODEL",
+        }
+        assert set(GATEWAY_TIER_MODELS.keys()) == expected
+
+    def test_gateway_model_aliases_contains_all_expected_short_names(self):
+        expected = {"opus", "sonnet", "haiku"}
+        assert set(GATEWAY_MODEL_ALIASES.keys()) == expected

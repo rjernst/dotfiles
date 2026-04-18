@@ -182,6 +182,19 @@ def prompt_for_api_key(agent):
     return raw
 
 
+def prompt_for_gateway_token():
+    """Prompt the user for a gateway Bearer token."""
+    print("Enter your gateway Bearer token:", file=sys.stderr)
+    try:
+        raw = input().strip()
+    except EOFError:
+        raw = ""
+    if not raw:
+        print("ralph: no gateway token provided", file=sys.stderr)
+        sys.exit(1)
+    return raw
+
+
 def prompt_for_base_url():
     """Prompt for a custom API base URL (optional).
 
@@ -194,6 +207,77 @@ def prompt_for_base_url():
     except EOFError:
         raw = ""
     return raw or None
+
+
+def prompt_for_gateway_base_url():
+    """Prompt the user for a gateway base URL (e.g. https://gateway.example.com)."""
+    print("Enter the gateway base URL (e.g. https://gateway.example.com):",
+          file=sys.stderr)
+    try:
+        raw = input().strip()
+    except EOFError:
+        raw = ""
+    if not raw:
+        print("ralph: no base URL provided", file=sys.stderr)
+        sys.exit(1)
+    return raw
+
+
+def prompt_for_model_prefix():
+    """Prompt the user for a gateway model prefix (e.g. llm-gateway)."""
+    print("Enter the model prefix (e.g. llm-gateway):", file=sys.stderr)
+    try:
+        raw = input().strip()
+    except EOFError:
+        raw = ""
+    if not raw:
+        print("ralph: no model prefix provided", file=sys.stderr)
+        sys.exit(1)
+    return raw
+
+
+def _validate_gateway_token(token, base_url, model_prefix=""):
+    """Validate a gateway Bearer token via a direct API call.
+
+    Sends a minimal request to <base_url>/v1/messages with Bearer auth.
+    Uses model_prefix the same way --model resolution does in build_proxy_env.
+    Exits on failure.
+    """
+    url = base_url.rstrip("/") + "/v1/messages"
+    model = "claude-haiku-4-5"
+    if model_prefix:
+        model = f"{model_prefix}/{model}"
+    req = urllib.request.Request(
+        url,
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json",
+        },
+        data=json.dumps({
+            "model": model,
+            "max_tokens": 4,
+            "messages": [{"role": "user", "content": "ok"}],
+        }).encode(),
+    )
+
+    print(f"ralph: validating gateway token ({len(token)} chars)...", file=sys.stderr)
+    try:
+        urllib.request.urlopen(req, timeout=10)
+        print("ralph: gateway token validated successfully", file=sys.stderr)
+    except urllib.error.HTTPError as exc:
+        if exc.code in (401, 403):
+            print(f"ralph: gateway token rejected (HTTP {exc.code})",
+                  file=sys.stderr)
+        else:
+            print(f"ralph: gateway token validation failed: {exc.reason}",
+                  file=sys.stderr)
+        sys.exit(1)
+    except urllib.error.URLError as exc:
+        print(f"ralph: gateway token validation failed: {exc.reason}",
+              file=sys.stderr)
+        sys.exit(1)
 
 
 def _validate_api_key(key, base_url=None):
@@ -236,7 +320,8 @@ def _validate_api_key(key, base_url=None):
         sys.exit(1)
 
 
-def _parse_and_store_token(agent, raw, auth_mode=None, base_url=None):
+def _parse_and_store_token(agent, raw, auth_mode=None, base_url=None,
+                           model_prefix=None):
     """Parse raw token string, store in Keychain, return the data dict."""
     now_ms = int(time.time() * 1000)
     default_expiry = now_ms + DEFAULT_EXPIRY_DAYS * MS_PER_DAY
@@ -266,6 +351,18 @@ def _parse_and_store_token(agent, raw, auth_mode=None, base_url=None):
         data["expiresAt"] = now_ms + 10 * 365 * MS_PER_DAY
         if base_url:
             data["baseUrl"] = base_url
+    elif resolved_mode == "gateway":
+        # Gateway mode: validate via Bearer token request, set far-future expiry,
+        # store baseUrl and modelPrefix alongside the token
+        effective_base_url = base_url or data.get("baseUrl")
+        if not effective_base_url:
+            print("ralph: gateway mode requires a base URL", file=sys.stderr)
+            sys.exit(1)
+        effective_model_prefix = model_prefix or data.get("modelPrefix", "")
+        _validate_gateway_token(token, effective_base_url, effective_model_prefix)
+        data["expiresAt"] = now_ms + 10 * 365 * MS_PER_DAY
+        data["baseUrl"] = effective_base_url
+        data["modelPrefix"] = effective_model_prefix
     elif resolved_mode == "oauth":
         # OAuth mode: validate via claude -p
         agent_config = get_agent(agent)
@@ -296,16 +393,22 @@ def store_token(agent, auth_mode=None):
 
     For claude oauth: runs `claude setup-token` interactively, or reads from stdin.
     For claude api_key: prompts for API key interactively, or reads from stdin.
+    For claude gateway: prompts for token, base URL, and model prefix interactively,
+        or reads a JSON blob from stdin containing accessToken, baseUrl, modelPrefix.
     For other agents: prompts for an API key interactively, or reads from stdin.
     """
     resolved_mode = _resolve_mode_string(agent, auth_mode)
-    base_url = None
+    kw = {}
     if sys.stdin.isatty():
         if resolved_mode == "oauth":
             raw = run_claude_setup_token()
         elif resolved_mode == "api_key":
             raw = prompt_for_api_key(agent)
-            base_url = prompt_for_base_url()
+            kw["base_url"] = prompt_for_base_url()
+        elif resolved_mode == "gateway":
+            raw = prompt_for_gateway_token()
+            kw["base_url"] = prompt_for_gateway_base_url()
+            kw["model_prefix"] = prompt_for_model_prefix()
         else:
             # Single-mode agent (e.g. cursor): use original behavior
             agent_config = get_agent(agent)
@@ -318,7 +421,7 @@ def store_token(agent, auth_mode=None):
     if not raw:
         print("ralph: no token provided on stdin", file=sys.stderr)
         sys.exit(1)
-    _parse_and_store_token(agent, raw, auth_mode=auth_mode, base_url=base_url)
+    _parse_and_store_token(agent, raw, auth_mode=auth_mode, **kw)
 
 
 def check_token(agent, auth_mode=None):
@@ -341,6 +444,8 @@ def check_token(agent, auth_mode=None):
         resolved_mode = _resolve_mode_string(agent, auth_mode)
         if resolved_mode == "api_key":
             print(f"ralph: API key stored for agent {agent}")
+        elif resolved_mode == "gateway":
+            print(f"ralph: gateway token stored for agent {agent}")
         else:
             expiry_date = format_expiry_date(expires_at)
             remaining_days = int((expires_at - now_ms) / MS_PER_DAY)
@@ -376,7 +481,10 @@ def ensure_token(agent, auth_mode=None):
 
     For claude oauth: runs `claude setup-token` if missing or expired.
     For claude api_key: prompts for API key if missing or expired.
+    For claude gateway: prompts for token, base URL, and model prefix if missing or expired.
     For other agents: prompts for an API key if missing or expired.
+
+    Returns a (access_token, token_data) tuple.
     """
     data = read_token_from_keychain(agent, auth_mode)
     now_ms = int(time.time() * 1000)
@@ -384,7 +492,7 @@ def ensure_token(agent, auth_mode=None):
     if data is not None:
         expires_at = data.get("expiresAt", 0)
         if expires_at > now_ms:
-            return data["accessToken"]
+            return data["accessToken"], data
 
     resolved_mode = _resolve_mode_string(agent, auth_mode)
 
@@ -395,12 +503,21 @@ def ensure_token(agent, auth_mode=None):
         print(f"ralph: no token found for agent {agent}, requesting new token...",
               file=sys.stderr)
 
-    base_url = None
     if resolved_mode == "oauth":
         raw = run_claude_setup_token()
+        stored = _parse_and_store_token(agent, raw, auth_mode=auth_mode)
     elif resolved_mode == "api_key":
         raw = prompt_for_api_key(agent)
         base_url = prompt_for_base_url()
+        stored = _parse_and_store_token(agent, raw, auth_mode=auth_mode,
+                                        base_url=base_url)
+    elif resolved_mode == "gateway":
+        raw = prompt_for_gateway_token()
+        base_url = prompt_for_gateway_base_url()
+        model_prefix = prompt_for_model_prefix()
+        stored = _parse_and_store_token(agent, raw, auth_mode=auth_mode,
+                                        base_url=base_url,
+                                        model_prefix=model_prefix)
     else:
         # Single-mode agent (e.g. cursor)
         agent_config = get_agent(agent)
@@ -408,7 +525,6 @@ def ensure_token(agent, auth_mode=None):
             raw = run_claude_setup_token()
         else:
             raw = prompt_for_api_key(agent)
+        stored = _parse_and_store_token(agent, raw, auth_mode=auth_mode)
 
-    stored = _parse_and_store_token(agent, raw, auth_mode=auth_mode,
-                                    base_url=base_url)
-    return stored["accessToken"]
+    return stored["accessToken"], stored

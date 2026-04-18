@@ -21,17 +21,36 @@ DEFAULT_PROXY_PORT = 18080
 MODEL_ALIASES = {
     "opus": "claude-opus-4-6",
     "sonnet": "claude-sonnet-4-6",
-    "haiku": "claude-haiku-4-5-20251001",
+    "haiku": "claude-haiku-4-5",
+}
+
+# Gateway-specific tier model env vars and their base model IDs.
+GATEWAY_TIER_MODELS = {
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-4-6",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "claude-sonnet-4-6",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "claude-haiku-4-5",
+    "CLAUDE_CODE_SUBAGENT_MODEL": "claude-sonnet-4-6",
+}
+
+# Map short names to gateway model IDs (without date suffix).
+GATEWAY_MODEL_ALIASES = {
+    "opus": "claude-opus-4-6",
+    "sonnet": "claude-sonnet-4-6",
+    "haiku": "claude-haiku-4-5",
 }
 
 
-def build_proxy_env(auth_mode, proxy_host, proxy_port, model=None):
+def build_proxy_env(auth_mode, proxy_host, proxy_port, model=None, token_data=None):
     """Build sandbox env vars for credential injection proxy communication.
 
     Returns a dict of environment variables. For oauth mode, includes
     CLAUDE_CODE_OAUTH_TOKEN and ANTHROPIC_CUSTOM_MODEL_OPTION (if model is
     provided). For api_key mode, includes ANTHROPIC_API_KEY. Both include
     ANTHROPIC_BASE_URL.
+
+    For gateway mode, includes ANTHROPIC_AUTH_TOKEN=phantom, ANTHROPIC_BASE_URL,
+    tier model env vars (prefixed with modelPrefix from token_data), and
+    ANTHROPIC_CUSTOM_MODEL_OPTION.
 
     Note: api_key mode does not set ANTHROPIC_CUSTOM_MODEL_OPTION because
     API key auth uses standard Anthropic API validation, which doesn't
@@ -44,6 +63,20 @@ def build_proxy_env(auth_mode, proxy_host, proxy_port, model=None):
             "ANTHROPIC_API_KEY": "phantom",
             "ANTHROPIC_BASE_URL": base_url,
         }
+    if auth_mode == "gateway":
+        prefix = (token_data or {}).get("modelPrefix", "")
+        env = {
+            "ANTHROPIC_AUTH_TOKEN": "phantom",
+            "ANTHROPIC_BASE_URL": base_url,
+        }
+        for env_var, model_id in GATEWAY_TIER_MODELS.items():
+            env[env_var] = f"{prefix}/{model_id}" if prefix else model_id
+        if model:
+            resolved = GATEWAY_MODEL_ALIASES.get(model, model)
+            env["ANTHROPIC_CUSTOM_MODEL_OPTION"] = (
+                f"{prefix}/{resolved}" if prefix else resolved
+            )
+        return env
     # OAuth mode (default)
     env = {
         "CLAUDE_CODE_OAUTH_TOKEN": "phantom",

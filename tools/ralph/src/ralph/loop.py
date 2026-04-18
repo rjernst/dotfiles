@@ -19,7 +19,7 @@ from ralph.util import parse_frontmatter, parse_issue_branch
 
 def process_issue(issue_number, git, dotfiles_dir, gh, agent, push, model,
                   git_user, git_email, proxy_port, token, rebuild=False,
-                  auth_mode=None):
+                  auth_mode=None, token_data=None):
     """Process a single GitHub Issue spec."""
     repo = resolve_repo(git)
     if not repo:
@@ -136,7 +136,7 @@ def process_issue(issue_number, git, dotfiles_dir, gh, agent, push, model,
         # validation which otherwise fails because the phantom token has
         # no subscription tier metadata.
         env_vars = build_proxy_env(auth_mode, runtime.proxy_host(),
-                                   proxy_port, model)
+                                   proxy_port, model, token_data)
         api_key = None
     else:
         # Non-proxy agents: API key is delivered via secret file in
@@ -222,7 +222,7 @@ def process_issue(issue_number, git, dotfiles_dir, gh, agent, push, model,
 
 def poll_loop(git, dotfiles_dir, gh, agent, push, model, git_user, git_email,
               proxy_port, token, interval, timeout, rebuild=False,
-              auth_mode=None):
+              auth_mode=None, token_data=None):
     """Poll for ready issues and process them."""
     repo = resolve_repo(git)
     if not repo:
@@ -268,7 +268,8 @@ def poll_loop(git, dotfiles_dir, gh, agent, push, model, git_user, git_email,
                         process_issue(num, git, dotfiles_dir, gh, agent, push, model,
                                       git_user, git_email, proxy_port,
                                       token, rebuild=rebuild,
-                                      auth_mode=auth_mode)
+                                      auth_mode=auth_mode,
+                                      token_data=token_data)
                     except Exception as exc:
                         print(f"ralph: unexpected error processing issue #{num}: {exc}",
                               file=sys.stderr)

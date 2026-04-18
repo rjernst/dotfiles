@@ -81,6 +81,9 @@ class TestValidAuthModes:
     def test_contains_api_key(self):
         assert "api_key" in VALID_AUTH_MODES
 
+    def test_contains_gateway(self):
+        assert "gateway" in VALID_AUTH_MODES
+
 
 class TestGetAuthMode:
     def test_claude_default_returns_oauth(self):
@@ -101,6 +104,11 @@ class TestGetAuthMode:
         """CLI-style 'api-key' with hyphen is normalized to 'api_key'."""
         result = get_auth_mode("claude", "api-key")
         assert result["keychain_service"] == "claude-api-key"
+
+    def test_claude_gateway(self):
+        result = get_auth_mode("claude", "gateway")
+        assert result["keychain_service"] == "claude-gateway"
+        assert result["validation_env_var"] == "ANTHROPIC_AUTH_TOKEN"
 
     def test_cursor_returns_none(self):
         assert get_auth_mode("cursor") is None

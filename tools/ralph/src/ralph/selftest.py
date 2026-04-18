@@ -103,6 +103,8 @@ def selftest(agent, dotfiles_dir, runtime_type="docker-sandbox",
             return 1
         if auth_mode == "api_key":
             report("check token", True, "API key stored")
+        elif auth_mode == "gateway":
+            report("check token", True, "gateway token stored")
         else:
             remaining_days = int((expires_at - now_ms) / MS_PER_DAY)
             report("check token", True, f"expires in {remaining_days} days")
@@ -129,13 +131,14 @@ def selftest(agent, dotfiles_dir, runtime_type="docker-sandbox",
 
         if runtime_type == "tart":
             _selftest_tart(runtime, agent, sandbox_name, port, auth_mode,
-                           report)
+                           report, token_data)
         elif runtime_type == "docker-container":
             _selftest_docker_container(runtime, agent, sandbox_name, port,
-                                       auth_mode, dotfiles_dir, report)
+                                       auth_mode, dotfiles_dir, report,
+                                       token_data)
         else:
             _selftest_docker(runtime, agent, sandbox_name, port, auth_mode,
-                             report)
+                             report, token_data)
 
     except _SelftestAbort:
         pass  # already reported; fall through to cleanup + summary
@@ -160,7 +163,8 @@ def selftest(agent, dotfiles_dir, runtime_type="docker-sandbox",
         return 1
 
 
-def _selftest_docker(runtime, agent, sandbox_name, port, auth_mode, report):
+def _selftest_docker(runtime, agent, sandbox_name, port, auth_mode, report,
+                     token_data=None):
     """Docker-specific selftest checks."""
     # 3. Build/ensure image
     try:
@@ -223,7 +227,7 @@ def _selftest_docker(runtime, agent, sandbox_name, port, auth_mode, report):
 
     # 7. Verify Claude auth works through proxy
     env_vars = build_proxy_env(auth_mode, "host.docker.internal", port,
-                               "haiku")
+                               "haiku", token_data)
     env_args = []
     for k, v in env_vars.items():
         env_args.extend(["-e", f"{k}={v}"])
@@ -251,7 +255,8 @@ def _selftest_docker(runtime, agent, sandbox_name, port, auth_mode, report):
            else "outbound NOT blocked — network policy ineffective")
 
 
-def _selftest_tart(runtime, agent, sandbox_name, port, auth_mode, report):
+def _selftest_tart(runtime, agent, sandbox_name, port, auth_mode, report,
+                   token_data=None):
     """Tart-specific selftest checks."""
     # 3. Build template
     try:
@@ -304,7 +309,7 @@ def _selftest_tart(runtime, agent, sandbox_name, port, auth_mode, report):
            else f"curl exit code {result.returncode}")
 
     # 7. Verify Claude auth via proxy
-    env_vars = build_proxy_env(auth_mode, proxy_host, port, "haiku")
+    env_vars = build_proxy_env(auth_mode, proxy_host, port, "haiku", token_data)
     env_prefix = " ".join(f"{k}={v}" for k, v in env_vars.items())
     claude_cmd = f"{env_prefix} claude -p 'say ok' --model haiku"
     result = subprocess.run(
@@ -321,7 +326,8 @@ def _selftest_tart(runtime, agent, sandbox_name, port, auth_mode, report):
 
 
 def _selftest_docker_container(runtime, agent, sandbox_name, port,
-                                auth_mode, dotfiles_dir, report):
+                                auth_mode, dotfiles_dir, report,
+                                token_data=None):
     """Docker container runtime selftest checks.
 
     Tests the docker socket proxy, container creation, proxy reachability,
@@ -443,7 +449,7 @@ def _selftest_docker_container(runtime, agent, sandbox_name, port,
 
         # 7. Verify Claude auth works through proxy
         env_vars = build_proxy_env(auth_mode, "host.docker.internal", port,
-                                   "haiku")
+                                   "haiku", token_data)
         env_args = []
         for k, v in env_vars.items():
             env_args.extend(["-e", f"{k}={v}"])

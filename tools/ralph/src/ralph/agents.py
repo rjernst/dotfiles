@@ -46,6 +46,10 @@ AGENTS = {
                 "keychain_service": "claude-api-key",
                 "validation_env_var": "ANTHROPIC_API_KEY",
             },
+            "gateway": {
+                "keychain_service": "claude-gateway",
+                "validation_env_var": "ANTHROPIC_AUTH_TOKEN",
+            },
         },
     },
     "cursor": {
@@ -63,7 +67,7 @@ AGENTS = {
 }
 
 VALID_AGENTS = list(AGENTS.keys())
-VALID_AUTH_MODES = ["oauth", "api_key"]
+VALID_AUTH_MODES = ["oauth", "api_key", "gateway"]
 
 
 def get_agent(name):

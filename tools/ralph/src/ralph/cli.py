@@ -36,7 +36,7 @@ Issue commands:
 
 Options:
   --agent <name>        Agent name (default: claude)
-  --auth <oauth|api-key> Auth mode (default: oauth for claude; ignored for cursor)
+  --auth <oauth|api-key|gateway> Auth mode (default: oauth for claude; ignored for cursor)
   --interval <duration> Poll interval (default: 30s, requires --poll)
   --timeout <duration>  Limit poll duration (e.g. 30m, 4h, 1d; requires --poll)
   --push                Git push after each iteration
@@ -45,18 +45,18 @@ Options:
   -h, --help            Show usage"""
 
 
-_VALID_AUTH_CLI = {"oauth", "api-key", "api_key"}
+_VALID_AUTH_CLI = {"oauth", "api-key", "api_key", "gateway"}
 
 
 def _parse_auth_mode(value):
     """Validate and normalize an --auth value.
 
-    Accepts 'oauth', 'api-key', or 'api_key'.  Returns the internal form
-    ('oauth' or 'api_key').  Exits 2 on invalid input.
+    Accepts 'oauth', 'api-key', 'api_key', or 'gateway'.  Returns the
+    internal form ('oauth', 'api_key', or 'gateway').  Exits 2 on invalid input.
     """
     if value not in _VALID_AUTH_CLI:
         print(
-            f"ralph: unknown auth mode: {value} (expected: oauth, api-key)",
+            f"ralph: unknown auth mode: {value} (expected: oauth, api-key, gateway)",
             file=sys.stderr,
         )
         sys.exit(2)
@@ -307,7 +307,7 @@ def main():
 
     # Auth — ensure valid token exists before starting proxy
     # (auto-runs claude setup-token if missing/expired)
-    token = ensure_token(agent, auth_mode)
+    token, token_data = ensure_token(agent, auth_mode)
 
     # Start proxy for agents that need it (e.g. claude).
     # Non-proxy agents (e.g. cursor) inject credentials via secret file.
@@ -328,12 +328,13 @@ def main():
     if issue_number:
         rc = process_issue(int(issue_number), git, DOTFILES_DIR, gh, agent,
                            push, model, git_user, git_email, proxy_port,
-                           token, rebuild=rebuild, auth_mode=auth_mode)
+                           token, rebuild=rebuild, auth_mode=auth_mode,
+                           token_data=token_data)
         sys.exit(rc)
 
     # Poll mode
     if poll:
         poll_loop(git, DOTFILES_DIR, gh, agent, push, model, git_user,
                   git_email, proxy_port, token, interval, timeout_val,
-                  rebuild=rebuild, auth_mode=auth_mode)
+                  rebuild=rebuild, auth_mode=auth_mode, token_data=token_data)
         sys.exit(0)

@@ -15,13 +15,17 @@ from ralph.token import (
     DEFAULT_EXPIRY_DAYS,
     _resolve_mode_string,
     _validate_api_key,
+    _validate_gateway_token,
     keychain_service_name,
     read_token_from_keychain,
     write_token_to_keychain,
     format_expiry_date,
     run_claude_setup_token,
     prompt_for_api_key,
+    prompt_for_gateway_token,
     prompt_for_base_url,
+    prompt_for_gateway_base_url,
+    prompt_for_model_prefix,
     _parse_and_store_token,
     store_token,
     check_token,
@@ -47,6 +51,9 @@ class TestResolveModeString:
     def test_claude_api_key_with_hyphen(self):
         assert _resolve_mode_string("claude", "api-key") == "api_key"
 
+    def test_claude_gateway(self):
+        assert _resolve_mode_string("claude", "gateway") == "gateway"
+
     def test_cursor_returns_none(self):
         assert _resolve_mode_string("cursor", None) is None
 
@@ -71,6 +78,9 @@ class TestKeychainServiceName:
 
     def test_claude_api_key_with_hyphen(self):
         assert keychain_service_name("claude", "api-key") == "claude-api-key"
+
+    def test_claude_gateway(self):
+        assert keychain_service_name("claude", "gateway") == "claude-gateway"
 
     def test_cursor_returns_agent_token(self):
         assert keychain_service_name("cursor") == "cursor-token"
@@ -657,9 +667,11 @@ class TestEnsureToken:
     @patch("ralph.token.time.time", return_value=1700000000.0)
     def test_returns_cached_valid_token(self, mock_time, mock_read):
         future_ms = 1700000000000 + 30 * 86400 * 1000
-        mock_read.return_value = {"accessToken": "sk-cached", "expiresAt": future_ms}
-        result = ensure_token("claude")
-        assert result == "sk-cached"
+        token_data = {"accessToken": "sk-cached", "expiresAt": future_ms}
+        mock_read.return_value = token_data
+        token, data = ensure_token("claude")
+        assert token == "sk-cached"
+        assert data == token_data
 
     @_mock_validation_success()
     @patch("ralph.token.write_token_to_keychain")
@@ -667,8 +679,8 @@ class TestEnsureToken:
     @patch("ralph.token.read_token_from_keychain", return_value=None)
     @patch("ralph.token.time.time", return_value=1700000000.0)
     def test_runs_setup_when_missing(self, mock_time, mock_read, mock_setup, mock_write, mock_validate):
-        result = ensure_token("claude")
-        assert result == "sk-fresh"
+        token, data = ensure_token("claude")
+        assert token == "sk-fresh"
         mock_setup.assert_called_once()
 
     @_mock_validation_success()
@@ -679,8 +691,8 @@ class TestEnsureToken:
     def test_runs_setup_when_expired(self, mock_time, mock_read, mock_setup, mock_write, mock_validate):
         past_ms = 1700000000000 - 86400 * 1000
         mock_read.return_value = {"accessToken": "sk-old", "expiresAt": past_ms}
-        result = ensure_token("claude")
-        assert result == "sk-renewed"
+        token, data = ensure_token("claude")
+        assert token == "sk-renewed"
         mock_setup.assert_called_once()
 
     @_mock_validation_success()
@@ -728,6 +740,18 @@ class TestEnsureToken:
             ensure_token("claude")
             mock_setup.assert_not_called()
 
+    @_mock_validation_success()
+    @patch("ralph.token.write_token_to_keychain")
+    @patch("ralph.token.run_claude_setup_token", return_value="sk-fresh")
+    @patch("ralph.token.read_token_from_keychain", return_value=None)
+    @patch("ralph.token.time.time", return_value=1700000000.0)
+    def test_returns_tuple(self, mock_time, mock_read, mock_setup, mock_write, mock_validate):
+        result = ensure_token("claude")
+        assert isinstance(result, tuple)
+        assert len(result) == 2
+        assert result[0] == "sk-fresh"
+        assert isinstance(result[1], dict)
+
 
 class TestEnsureTokenApiKey:
     @patch("ralph.token.read_token_from_keychain")
@@ -735,8 +759,8 @@ class TestEnsureTokenApiKey:
     def test_returns_cached_valid_api_key(self, mock_time, mock_read):
         far_future = 1700000000000 + 10 * 365 * MS_PER_DAY
         mock_read.return_value = {"accessToken": "sk-ant-api03-cached", "expiresAt": far_future}
-        result = ensure_token("claude", auth_mode="api_key")
-        assert result == "sk-ant-api03-cached"
+        token, data = ensure_token("claude", auth_mode="api_key")
+        assert token == "sk-ant-api03-cached"
 
     @patch("ralph.token._validate_api_key")
     @patch("ralph.token.write_token_to_keychain")
@@ -746,8 +770,8 @@ class TestEnsureTokenApiKey:
     @patch("ralph.token.time.time", return_value=1700000000.0)
     def test_prompts_when_missing(self, mock_time, mock_read, mock_prompt,
                                    mock_base_url, mock_write, mock_validate):
-        result = ensure_token("claude", auth_mode="api_key")
-        assert result == "sk-ant-api03-fresh"
+        token, data = ensure_token("claude", auth_mode="api_key")
+        assert token == "sk-ant-api03-fresh"
         mock_prompt.assert_called_once_with("claude")
         mock_base_url.assert_called_once()
 
@@ -1043,16 +1067,16 @@ class TestEnsureTokenCursor:
     def test_returns_cached_valid_token(self, mock_time, mock_read):
         future_ms = 1700000000000 + 30 * 86400 * 1000
         mock_read.return_value = {"accessToken": "cur_cached", "expiresAt": future_ms}
-        result = ensure_token("cursor")
-        assert result == "cur_cached"
+        token, data = ensure_token("cursor")
+        assert token == "cur_cached"
 
     @patch("ralph.token.write_token_to_keychain")
     @patch("ralph.token.prompt_for_api_key", return_value="cur_fresh")
     @patch("ralph.token.read_token_from_keychain", return_value=None)
     @patch("ralph.token.time.time", return_value=1700000000.0)
     def test_prompts_when_missing(self, mock_time, mock_read, mock_prompt, mock_write):
-        result = ensure_token("cursor")
-        assert result == "cur_fresh"
+        token, data = ensure_token("cursor")
+        assert token == "cur_fresh"
         mock_prompt.assert_called_once_with("cursor")
 
     @patch("ralph.token.write_token_to_keychain")
@@ -1062,8 +1086,8 @@ class TestEnsureTokenCursor:
     def test_prompts_when_expired(self, mock_time, mock_read, mock_prompt, mock_write):
         past_ms = 1700000000000 - 86400 * 1000
         mock_read.return_value = {"accessToken": "cur_old", "expiresAt": past_ms}
-        result = ensure_token("cursor")
-        assert result == "cur_renewed"
+        token, data = ensure_token("cursor")
+        assert token == "cur_renewed"
         mock_prompt.assert_called_once_with("cursor")
 
     @patch("ralph.token.write_token_to_keychain")
@@ -1093,3 +1117,439 @@ class TestEnsureTokenCursor:
         with patch("ralph.token.prompt_for_api_key") as mock_prompt:
             ensure_token("cursor")
             mock_prompt.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# prompt_for_gateway_token / prompt_for_gateway_base_url
+# ---------------------------------------------------------------------------
+
+class TestPromptForGatewayToken:
+    @patch("builtins.input", return_value="gw-bearer-token-123")
+    def test_returns_token(self, mock_input, capsys):
+        result = prompt_for_gateway_token()
+        assert result == "gw-bearer-token-123"
+        captured = capsys.readouterr()
+        assert "gateway Bearer token" in captured.err
+
+    @patch("builtins.input", return_value="  tok123  ")
+    def test_strips_whitespace(self, mock_input):
+        result = prompt_for_gateway_token()
+        assert result == "tok123"
+
+    @patch("builtins.input", return_value="")
+    def test_empty_input_exits(self, mock_input):
+        with pytest.raises(SystemExit) as exc_info:
+            prompt_for_gateway_token()
+        assert exc_info.value.code == 1
+
+    @patch("builtins.input", side_effect=EOFError)
+    def test_eof_exits(self, mock_input):
+        with pytest.raises(SystemExit) as exc_info:
+            prompt_for_gateway_token()
+        assert exc_info.value.code == 1
+
+
+# ---------------------------------------------------------------------------
+
+class TestPromptForGatewayBaseUrl:
+    @patch("builtins.input", return_value="https://gateway.example.com")
+    def test_returns_base_url(self, mock_input, capsys):
+        result = prompt_for_gateway_base_url()
+        assert result == "https://gateway.example.com"
+        captured = capsys.readouterr()
+        assert "base URL" in captured.err
+
+    @patch("builtins.input", return_value="  https://gw.example.com  ")
+    def test_strips_whitespace(self, mock_input):
+        result = prompt_for_gateway_base_url()
+        assert result == "https://gw.example.com"
+
+    @patch("builtins.input", return_value="")
+    def test_empty_input_exits(self, mock_input):
+        with pytest.raises(SystemExit) as exc_info:
+            prompt_for_gateway_base_url()
+        assert exc_info.value.code == 1
+
+    @patch("builtins.input", side_effect=EOFError)
+    def test_eof_exits(self, mock_input):
+        with pytest.raises(SystemExit) as exc_info:
+            prompt_for_gateway_base_url()
+        assert exc_info.value.code == 1
+
+
+# ---------------------------------------------------------------------------
+# prompt_for_model_prefix
+# ---------------------------------------------------------------------------
+
+class TestPromptForModelPrefix:
+    @patch("builtins.input", return_value="llm-gateway")
+    def test_returns_model_prefix(self, mock_input, capsys):
+        result = prompt_for_model_prefix()
+        assert result == "llm-gateway"
+        captured = capsys.readouterr()
+        assert "model prefix" in captured.err
+
+    @patch("builtins.input", return_value="  gw  ")
+    def test_strips_whitespace(self, mock_input):
+        result = prompt_for_model_prefix()
+        assert result == "gw"
+
+    @patch("builtins.input", return_value="")
+    def test_empty_input_exits(self, mock_input):
+        with pytest.raises(SystemExit) as exc_info:
+            prompt_for_model_prefix()
+        assert exc_info.value.code == 1
+
+    @patch("builtins.input", side_effect=EOFError)
+    def test_eof_exits(self, mock_input):
+        with pytest.raises(SystemExit) as exc_info:
+            prompt_for_model_prefix()
+        assert exc_info.value.code == 1
+
+
+# ---------------------------------------------------------------------------
+# _validate_gateway_token
+# ---------------------------------------------------------------------------
+
+class TestValidateGatewayToken:
+    @patch("ralph.token.urllib.request.urlopen")
+    def test_valid_token_succeeds(self, mock_urlopen, capsys):
+        mock_urlopen.return_value = MagicMock()
+        _validate_gateway_token("gw-token-abc", "https://gateway.example.com")
+        captured = capsys.readouterr()
+        assert "gateway token validated successfully" in captured.err
+
+    @patch("ralph.token.urllib.request.urlopen")
+    def test_sends_bearer_auth_header(self, mock_urlopen):
+        mock_urlopen.return_value = MagicMock()
+        _validate_gateway_token("my-gw-token", "https://gateway.example.com")
+        req = mock_urlopen.call_args[0][0]
+        assert req.get_header("Authorization") == "Bearer my-gw-token"
+
+    @patch("ralph.token.urllib.request.urlopen")
+    def test_sends_request_to_correct_url(self, mock_urlopen):
+        mock_urlopen.return_value = MagicMock()
+        _validate_gateway_token("tok", "https://gateway.example.com")
+        req = mock_urlopen.call_args[0][0]
+        assert req.full_url == "https://gateway.example.com/v1/messages"
+
+    @patch("ralph.token.urllib.request.urlopen")
+    def test_strips_trailing_slash_from_base_url(self, mock_urlopen):
+        mock_urlopen.return_value = MagicMock()
+        _validate_gateway_token("tok", "https://gateway.example.com/")
+        req = mock_urlopen.call_args[0][0]
+        assert req.full_url == "https://gateway.example.com/v1/messages"
+
+    @patch("ralph.token.urllib.request.urlopen")
+    def test_401_exits_1(self, mock_urlopen, capsys):
+        mock_urlopen.side_effect = urllib.error.HTTPError(
+            "https://gateway.example.com/v1/messages", 401,
+            "Unauthorized", {}, io.BytesIO(b""))
+        with pytest.raises(SystemExit) as exc_info:
+            _validate_gateway_token("bad-tok", "https://gateway.example.com")
+        assert exc_info.value.code == 1
+        captured = capsys.readouterr()
+        assert "gateway token rejected (HTTP 401)" in captured.err
+
+    @patch("ralph.token.urllib.request.urlopen")
+    def test_403_exits_1(self, mock_urlopen, capsys):
+        mock_urlopen.side_effect = urllib.error.HTTPError(
+            "https://gateway.example.com/v1/messages", 403,
+            "Forbidden", {}, io.BytesIO(b""))
+        with pytest.raises(SystemExit) as exc_info:
+            _validate_gateway_token("bad-tok", "https://gateway.example.com")
+        assert exc_info.value.code == 1
+        captured = capsys.readouterr()
+        assert "gateway token rejected (HTTP 403)" in captured.err
+
+    @patch("ralph.token.urllib.request.urlopen")
+    def test_url_error_exits_1(self, mock_urlopen, capsys):
+        mock_urlopen.side_effect = urllib.error.URLError("Connection refused")
+        with pytest.raises(SystemExit) as exc_info:
+            _validate_gateway_token("tok", "https://gateway.example.com")
+        assert exc_info.value.code == 1
+        captured = capsys.readouterr()
+        assert "gateway token validation failed: Connection refused" in captured.err
+
+    @patch("ralph.token.urllib.request.urlopen")
+    def test_non_401_http_error_prints_reason(self, mock_urlopen, capsys):
+        mock_urlopen.side_effect = urllib.error.HTTPError(
+            "https://gateway.example.com/v1/messages", 429,
+            "Too Many Requests", {}, io.BytesIO(b""))
+        with pytest.raises(SystemExit) as exc_info:
+            _validate_gateway_token("tok", "https://gateway.example.com")
+        assert exc_info.value.code == 1
+        captured = capsys.readouterr()
+        assert "gateway token validation failed: Too Many Requests" in captured.err
+
+
+# ---------------------------------------------------------------------------
+# _parse_and_store_token — gateway mode
+# ---------------------------------------------------------------------------
+
+class TestParseAndStoreTokenGateway:
+    @patch("ralph.token._validate_gateway_token")
+    @patch("ralph.token.write_token_to_keychain")
+    @patch("ralph.token.time.time", return_value=1700000000.0)
+    def test_validates_via_gateway_call(self, mock_time, mock_write, mock_validate):
+        _parse_and_store_token("claude", "gw-token", auth_mode="gateway",
+                               base_url="https://gw.example.com",
+                               model_prefix="llm-gw")
+        mock_validate.assert_called_once_with("gw-token", "https://gw.example.com", "llm-gw")
+
+    @patch("ralph.token._validate_gateway_token")
+    @patch("ralph.token.write_token_to_keychain")
+    @patch("ralph.token.time.time", return_value=1700000000.0)
+    def test_sets_far_future_expiry(self, mock_time, mock_write, mock_validate):
+        _parse_and_store_token("claude", "gw-token", auth_mode="gateway",
+                               base_url="https://gw.example.com",
+                               model_prefix="llm-gw")
+        written_json = mock_write.call_args[0][1]
+        data = json.loads(written_json)
+        expected = 1700000000000 + 10 * 365 * MS_PER_DAY
+        assert data["expiresAt"] == expected
+
+    @patch("ralph.token._validate_gateway_token")
+    @patch("ralph.token.write_token_to_keychain")
+    @patch("ralph.token.time.time", return_value=1700000000.0)
+    def test_stores_base_url_and_model_prefix(self, mock_time, mock_write, mock_validate):
+        _parse_and_store_token("claude", "gw-token", auth_mode="gateway",
+                               base_url="https://gw.example.com",
+                               model_prefix="llm-gw")
+        written_json = mock_write.call_args[0][1]
+        data = json.loads(written_json)
+        assert data["baseUrl"] == "https://gw.example.com"
+        assert data["modelPrefix"] == "llm-gw"
+
+    @patch("ralph.token._validate_gateway_token")
+    @patch("ralph.token.write_token_to_keychain")
+    @patch("ralph.token.time.time", return_value=1700000000.0)
+    def test_extracts_base_url_from_json(self, mock_time, mock_write, mock_validate):
+        raw = json.dumps({
+            "accessToken": "gw-token",
+            "baseUrl": "https://gw.example.com",
+            "modelPrefix": "llm-gw",
+        })
+        _parse_and_store_token("claude", raw, auth_mode="gateway")
+        written_json = mock_write.call_args[0][1]
+        data = json.loads(written_json)
+        assert data["baseUrl"] == "https://gw.example.com"
+        assert data["modelPrefix"] == "llm-gw"
+
+    @patch("ralph.token._validate_gateway_token")
+    @patch("ralph.token.write_token_to_keychain")
+    @patch("ralph.token.time.time", return_value=1700000000.0)
+    def test_exits_if_no_base_url(self, mock_time, mock_write, mock_validate, capsys):
+        with pytest.raises(SystemExit) as exc_info:
+            _parse_and_store_token("claude", "gw-token", auth_mode="gateway")
+        assert exc_info.value.code == 1
+        captured = capsys.readouterr()
+        assert "requires a base URL" in captured.err
+
+    @patch("ralph.token._validate_gateway_token")
+    @patch("ralph.token.write_token_to_keychain")
+    @patch("ralph.token.time.time", return_value=1700000000.0)
+    def test_writes_to_gateway_service(self, mock_time, mock_write, mock_validate):
+        _parse_and_store_token("claude", "gw-token", auth_mode="gateway",
+                               base_url="https://gw.example.com",
+                               model_prefix="llm-gw")
+        assert mock_write.call_args[1]["auth_mode"] == "gateway"
+
+    @patch("ralph.token._validate_gateway_token")
+    @patch("ralph.token.write_token_to_keychain")
+    @patch("ralph.token.time.time", return_value=1700000000.0)
+    def test_does_not_call_subprocess(self, mock_time, mock_write, mock_validate):
+        with patch("ralph.token.subprocess.run") as mock_run:
+            _parse_and_store_token("claude", "gw-token", auth_mode="gateway",
+                                   base_url="https://gw.example.com",
+                                   model_prefix="llm-gw")
+            mock_run.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# store_token — gateway mode
+# ---------------------------------------------------------------------------
+
+class TestStoreTokenGateway:
+    @patch("ralph.token._validate_gateway_token")
+    @patch("ralph.token.write_token_to_keychain")
+    @patch("ralph.token.time.time", return_value=1700000000.0)
+    @patch("ralph.token.prompt_for_model_prefix", return_value="llm-gw")
+    @patch("ralph.token.prompt_for_gateway_base_url", return_value="https://gw.example.com")
+    @patch("ralph.token.prompt_for_gateway_token", return_value="gw-token-123")
+    @patch("ralph.token.sys.stdin")
+    def test_interactive_prompts_for_all_fields(self, mock_stdin, mock_gw_token,
+                                                 mock_base_url, mock_prefix,
+                                                 mock_time, mock_write, mock_validate):
+        mock_stdin.isatty.return_value = True
+        store_token("claude", auth_mode="gateway")
+        mock_gw_token.assert_called_once()
+        mock_base_url.assert_called_once()
+        mock_prefix.assert_called_once()
+
+    @patch("ralph.token._validate_gateway_token")
+    @patch("ralph.token.write_token_to_keychain")
+    @patch("ralph.token.time.time", return_value=1700000000.0)
+    @patch("ralph.token.prompt_for_model_prefix", return_value="llm-gw")
+    @patch("ralph.token.prompt_for_gateway_base_url", return_value="https://gw.example.com")
+    @patch("ralph.token.prompt_for_gateway_token", return_value="gw-token-123")
+    @patch("ralph.token.sys.stdin")
+    def test_interactive_stores_token_with_metadata(self, mock_stdin, mock_gw_token,
+                                                      mock_base_url, mock_prefix,
+                                                      mock_time, mock_write, mock_validate):
+        mock_stdin.isatty.return_value = True
+        store_token("claude", auth_mode="gateway")
+        written_json = mock_write.call_args[0][1]
+        data = json.loads(written_json)
+        assert data["accessToken"] == "gw-token-123"
+        assert data["baseUrl"] == "https://gw.example.com"
+        assert data["modelPrefix"] == "llm-gw"
+
+    @patch("ralph.token._validate_gateway_token")
+    @patch("ralph.token.write_token_to_keychain")
+    @patch("ralph.token.time.time", return_value=1700000000.0)
+    @patch("ralph.token.sys.stdin", new_callable=lambda: io.StringIO(json.dumps({
+        "accessToken": "gw-piped-token",
+        "baseUrl": "https://gw.example.com",
+        "modelPrefix": "llm-gw",
+    })))
+    def test_piped_json_stores_token(self, mock_stdin, mock_time, mock_write, mock_validate):
+        store_token("claude", auth_mode="gateway")
+        written_json = mock_write.call_args[0][1]
+        data = json.loads(written_json)
+        assert data["accessToken"] == "gw-piped-token"
+        assert data["baseUrl"] == "https://gw.example.com"
+
+    @patch("ralph.token._validate_gateway_token")
+    @patch("ralph.token.write_token_to_keychain")
+    @patch("ralph.token.time.time", return_value=1700000000.0)
+    @patch("ralph.token.sys.stdin")
+    def test_interactive_does_not_run_claude_setup(self, mock_stdin, mock_time,
+                                                    mock_write, mock_validate):
+        mock_stdin.isatty.return_value = True
+        with patch("ralph.token.prompt_for_gateway_token", return_value="gw-tok"):
+            with patch("ralph.token.prompt_for_gateway_base_url", return_value="https://gw.example.com"):
+                with patch("ralph.token.prompt_for_model_prefix", return_value="gw"):
+                    with patch("ralph.token.run_claude_setup_token") as mock_setup:
+                        store_token("claude", auth_mode="gateway")
+                        mock_setup.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# check_token — gateway mode
+# ---------------------------------------------------------------------------
+
+class TestCheckTokenGateway:
+    @patch("ralph.token.read_token_from_keychain")
+    @patch("ralph.token.time.time", return_value=1700000000.0)
+    def test_valid_gateway_token_prints_stored_message(self, mock_time, mock_read, capsys):
+        far_future = 1700000000000 + 10 * 365 * MS_PER_DAY
+        mock_read.return_value = {
+            "accessToken": "gw-token",
+            "expiresAt": far_future,
+            "baseUrl": "https://gw.example.com",
+            "modelPrefix": "llm-gw",
+        }
+        with pytest.raises(SystemExit) as exc_info:
+            check_token("claude", auth_mode="gateway")
+        assert exc_info.value.code == 0
+        captured = capsys.readouterr()
+        assert "gateway token stored for agent claude" in captured.out
+
+    @patch("ralph.token.read_token_from_keychain")
+    @patch("ralph.token.time.time", return_value=1700000000.0)
+    def test_valid_gateway_token_does_not_print_days_remaining(self, mock_time, mock_read, capsys):
+        far_future = 1700000000000 + 10 * 365 * MS_PER_DAY
+        mock_read.return_value = {"accessToken": "gw-token", "expiresAt": far_future}
+        with pytest.raises(SystemExit):
+            check_token("claude", auth_mode="gateway")
+        captured = capsys.readouterr()
+        assert "days remaining" not in captured.out
+
+    @patch("ralph.token.read_token_from_keychain", return_value=None)
+    def test_missing_gateway_token_suggests_auth_flag(self, mock_read, capsys):
+        with pytest.raises(SystemExit):
+            check_token("claude", auth_mode="gateway")
+        captured = capsys.readouterr()
+        assert "ralph store-token --auth gateway" in captured.err
+
+
+# ---------------------------------------------------------------------------
+# ensure_token — gateway mode
+# ---------------------------------------------------------------------------
+
+class TestEnsureTokenGateway:
+    @patch("ralph.token.read_token_from_keychain")
+    @patch("ralph.token.time.time", return_value=1700000000.0)
+    def test_returns_cached_valid_token(self, mock_time, mock_read):
+        far_future = 1700000000000 + 10 * 365 * MS_PER_DAY
+        token_data = {
+            "accessToken": "gw-cached",
+            "expiresAt": far_future,
+            "baseUrl": "https://gw.example.com",
+            "modelPrefix": "llm-gw",
+        }
+        mock_read.return_value = token_data
+        token, data = ensure_token("claude", auth_mode="gateway")
+        assert token == "gw-cached"
+        assert data["baseUrl"] == "https://gw.example.com"
+        assert data["modelPrefix"] == "llm-gw"
+
+    @patch("ralph.token._validate_gateway_token")
+    @patch("ralph.token.write_token_to_keychain")
+    @patch("ralph.token.prompt_for_model_prefix", return_value="llm-gw")
+    @patch("ralph.token.prompt_for_gateway_base_url", return_value="https://gw.example.com")
+    @patch("ralph.token.prompt_for_gateway_token", return_value="gw-fresh-token")
+    @patch("ralph.token.read_token_from_keychain", return_value=None)
+    @patch("ralph.token.time.time", return_value=1700000000.0)
+    def test_prompts_all_three_when_missing(self, mock_time, mock_read, mock_gw_token,
+                                             mock_base_url, mock_prefix,
+                                             mock_write, mock_validate):
+        token, data = ensure_token("claude", auth_mode="gateway")
+        assert token == "gw-fresh-token"
+        mock_gw_token.assert_called_once()
+        mock_base_url.assert_called_once()
+        mock_prefix.assert_called_once()
+
+    @patch("ralph.token._validate_gateway_token")
+    @patch("ralph.token.write_token_to_keychain")
+    @patch("ralph.token.prompt_for_model_prefix", return_value="llm-gw")
+    @patch("ralph.token.prompt_for_gateway_base_url", return_value="https://gw.example.com")
+    @patch("ralph.token.prompt_for_gateway_token", return_value="gw-fresh-token")
+    @patch("ralph.token.read_token_from_keychain", return_value=None)
+    @patch("ralph.token.time.time", return_value=1700000000.0)
+    def test_stores_base_url_and_prefix(self, mock_time, mock_read, mock_gw_token,
+                                         mock_base_url, mock_prefix,
+                                         mock_write, mock_validate):
+        ensure_token("claude", auth_mode="gateway")
+        written_json = mock_write.call_args[0][1]
+        data = json.loads(written_json)
+        assert data["accessToken"] == "gw-fresh-token"
+        assert data["baseUrl"] == "https://gw.example.com"
+        assert data["modelPrefix"] == "llm-gw"
+
+    @patch("ralph.token._validate_gateway_token")
+    @patch("ralph.token.write_token_to_keychain")
+    @patch("ralph.token.prompt_for_model_prefix", return_value="llm-gw")
+    @patch("ralph.token.prompt_for_gateway_base_url", return_value="https://gw.example.com")
+    @patch("ralph.token.prompt_for_gateway_token", return_value="gw-token")
+    @patch("ralph.token.read_token_from_keychain", return_value=None)
+    @patch("ralph.token.time.time", return_value=1700000000.0)
+    def test_does_not_run_claude_setup(self, mock_time, mock_read, mock_gw_token,
+                                        mock_base_url, mock_prefix,
+                                        mock_write, mock_validate):
+        with patch("ralph.token.run_claude_setup_token") as mock_setup:
+            ensure_token("claude", auth_mode="gateway")
+            mock_setup.assert_not_called()
+
+    @patch("ralph.token.read_token_from_keychain")
+    @patch("ralph.token.time.time", return_value=1700000000.0)
+    def test_reads_from_correct_service(self, mock_time, mock_read):
+        far_future = 1700000000000 + 10 * 365 * MS_PER_DAY
+        mock_read.return_value = {
+            "accessToken": "gw-cached",
+            "expiresAt": far_future,
+            "baseUrl": "https://gw.example.com",
+        }
+        ensure_token("claude", auth_mode="gateway")
+        mock_read.assert_called_once_with("claude", "gateway")

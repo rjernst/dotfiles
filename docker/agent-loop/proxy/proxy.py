@@ -9,6 +9,7 @@ disk, logs, or env vars.
 Supported modes:
   oauth   — replaces the Authorization header with Bearer <credential>
   api_key — replaces the x-api-key header with <credential>
+  gateway — replaces the Authorization header with Bearer <credential> (same as oauth)
 
 Environment variables:
   LISTEN_PORT   — port to listen on (default: 18080)
@@ -30,7 +31,7 @@ import urllib.request
 # Headers that should not be copied from the client request to upstream.
 _STRIP_HEADERS = frozenset(["host", "content-length", "transfer-encoding"])
 
-_VALID_MODES = frozenset(["oauth", "api_key"])
+_VALID_MODES = frozenset(["oauth", "api_key", "gateway"])
 
 
 def compute_version_hash():
@@ -142,7 +143,9 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         url = self.target.rstrip("/") + self.path
 
         # Build upstream headers — inject the real credential for the active mode.
-        skip_header = "authorization" if self.AUTH_MODE == "oauth" else "x-api-key"
+        # Both oauth and gateway use Bearer token injection.
+        bearer_mode = self.AUTH_MODE in ("oauth", "gateway")
+        skip_header = "authorization" if bearer_mode else "x-api-key"
         headers = {}
         for key, value in self.headers.items():
             if key.lower() in _STRIP_HEADERS:
@@ -150,7 +153,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             if key.lower() == skip_header:
                 continue
             headers[key] = value
-        if self.AUTH_MODE == "oauth":
+        if bearer_mode:
             headers["Authorization"] = f"Bearer {self.real_credential}"
         else:
             headers["x-api-key"] = self.real_credential

@@ -21,13 +21,16 @@ class TestParseAuthMode:
     def test_api_key_underscore_passthrough(self):
         assert _parse_auth_mode("api_key") == "api_key"
 
+    def test_gateway_passthrough(self):
+        assert _parse_auth_mode("gateway") == "gateway"
+
     def test_invalid_exits_2(self, capsys):
         with pytest.raises(SystemExit) as exc_info:
             _parse_auth_mode("bogus")
         assert exc_info.value.code == 2
         captured = capsys.readouterr()
         assert "unknown auth mode: bogus" in captured.err
-        assert "expected: oauth, api-key" in captured.err
+        assert "expected: oauth, api-key, gateway" in captured.err
 
 
 # ---------------------------------------------------------------------------
@@ -98,7 +101,7 @@ class TestMainTokenSubcommands:
 class TestMainSandboxFlags:
     @patch("ralph.cli.sys.argv", ["ralph", "--issue", "42", "--agent", "cursor"])
     @patch("ralph.cli.process_issue", return_value=0)
-    @patch("ralph.cli.ensure_token", return_value="sk-test")
+    @patch("ralph.cli.ensure_token", return_value=("sk-test", {}))
     @patch("ralph.cli.Git")
     @patch("ralph.cli.check_dependencies_prereq")
     def test_agent_flag_passed_through(self, mock_prereq,
@@ -123,7 +126,7 @@ class TestMainSandboxFlags:
 
     @patch("ralph.cli.sys.argv", ["ralph", "--issue", "42", "--rebuild"])
     @patch("ralph.cli.process_issue", return_value=0)
-    @patch("ralph.cli.ensure_token", return_value="sk-test")
+    @patch("ralph.cli.ensure_token", return_value=("sk-test", {}))
     @patch("ralph.cli.ensure_proxy", return_value=18080)
     @patch("ralph.cli.Git")
     @patch("ralph.cli.check_dependencies_prereq")
@@ -140,7 +143,7 @@ class TestMainSandboxFlags:
 
     @patch("ralph.cli.sys.argv", ["ralph", "--issue", "42"])
     @patch("ralph.cli.process_issue", return_value=0)
-    @patch("ralph.cli.ensure_token", return_value="sk-test")
+    @patch("ralph.cli.ensure_token", return_value=("sk-test", {}))
     @patch("ralph.cli.ensure_proxy", return_value=18080)
     @patch("ralph.cli.Git")
     @patch("ralph.cli.check_dependencies_prereq")
@@ -164,7 +167,7 @@ class TestMainSandboxFlags:
         call_order = []
         with patch("ralph.cli.ensure_token") as mock_token, \
              patch("ralph.cli.ensure_proxy", return_value=18080) as mock_proxy:
-            mock_token.side_effect = lambda a, m: call_order.append("token")
+            mock_token.side_effect = lambda a, m: (call_order.append("token"), ("sk-test", {}))[1]
             mock_proxy.side_effect = lambda a, p, d, m: (
                 call_order.append("proxy"), p)[-1]
             with pytest.raises(SystemExit):
@@ -179,7 +182,7 @@ class TestMainSandboxFlags:
 
     @patch("ralph.cli.sys.argv", ["ralph", "--issue", "42", "--agent", "cursor"])
     @patch("ralph.cli.process_issue", return_value=0)
-    @patch("ralph.cli.ensure_token", return_value="sk-test")
+    @patch("ralph.cli.ensure_token", return_value=("sk-test", {}))
     @patch("ralph.cli.ensure_proxy")
     @patch("ralph.cli.start_proxy_keepalive")
     @patch("ralph.cli.Git")
@@ -204,7 +207,7 @@ class TestMainSandboxFlags:
 
     @patch("ralph.cli.sys.argv", ["ralph", "--issue", "42", "--agent", "claude"])
     @patch("ralph.cli.process_issue", return_value=0)
-    @patch("ralph.cli.ensure_token", return_value="sk-test")
+    @patch("ralph.cli.ensure_token", return_value=("sk-test", {}))
     @patch("ralph.cli.ensure_proxy")
     @patch("ralph.cli.start_proxy_keepalive")
     @patch("ralph.cli.proxy_port_for_agent", return_value=18080)
@@ -237,7 +240,7 @@ class TestMainSandboxFlags:
 class TestMainDefaultModel:
     @patch("ralph.cli.sys.argv", ["ralph", "--issue", "42"])
     @patch("ralph.cli.process_issue", return_value=0)
-    @patch("ralph.cli.ensure_token", return_value="sk-test")
+    @patch("ralph.cli.ensure_token", return_value=("sk-test", {}))
     @patch("ralph.cli.ensure_proxy", return_value=18080)
     @patch("ralph.cli.Git")
     @patch("ralph.cli.check_dependencies_prereq")
@@ -253,7 +256,7 @@ class TestMainDefaultModel:
 
     @patch("ralph.cli.sys.argv", ["ralph", "--issue", "42", "--agent", "cursor"])
     @patch("ralph.cli.process_issue", return_value=0)
-    @patch("ralph.cli.ensure_token", return_value="sk-test")
+    @patch("ralph.cli.ensure_token", return_value=("sk-test", {}))
     @patch("ralph.cli.Git")
     @patch("ralph.cli.check_dependencies_prereq")
     def test_cursor_defaults_to_auto(self, mock_prereq, mock_git_cls,
@@ -268,7 +271,7 @@ class TestMainDefaultModel:
     @patch("ralph.cli.sys.argv",
            ["ralph", "--issue", "42", "--agent", "cursor", "--model", "gpt-5"])
     @patch("ralph.cli.process_issue", return_value=0)
-    @patch("ralph.cli.ensure_token", return_value="sk-test")
+    @patch("ralph.cli.ensure_token", return_value=("sk-test", {}))
     @patch("ralph.cli.Git")
     @patch("ralph.cli.check_dependencies_prereq")
     def test_explicit_model_overrides_agent_default(self, mock_prereq,
@@ -534,7 +537,7 @@ class TestMainAuthFlag:
         assert "unknown auth mode: foo" in captured.err
 
     @patch("ralph.cli.process_issue", return_value=0)
-    @patch("ralph.cli.ensure_token", return_value="sk-test")
+    @patch("ralph.cli.ensure_token", return_value=("sk-test", {}))
     @patch("ralph.cli.ensure_proxy", return_value=18080)
     @patch("ralph.cli.Git")
     @patch("ralph.cli.check_dependencies_prereq")
@@ -557,7 +560,7 @@ class TestMainAuthFlag:
         assert mock_process.call_args[1]["auth_mode"] == "api_key"
 
     @patch("ralph.cli.poll_loop")
-    @patch("ralph.cli.ensure_token", return_value="sk-test")
+    @patch("ralph.cli.ensure_token", return_value=("sk-test", {}))
     @patch("ralph.cli.ensure_proxy", return_value=18080)
     @patch("ralph.cli.Git")
     @patch("ralph.cli.check_dependencies_prereq")
@@ -584,3 +587,4 @@ class TestMainAuthFlag:
         captured = capsys.readouterr()
         assert "--auth" in captured.out
         assert "oauth|api-key" in captured.out
+        assert "gateway" in captured.out
