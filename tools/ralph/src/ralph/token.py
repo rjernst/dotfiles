@@ -168,12 +168,13 @@ def prompt_for_api_key(agent):
     Used for agents that use simple API keys (e.g. cursor) or for
     claude in api_key auth mode.
     """
+    import getpass
     if agent == "claude":
-        print("Enter your Anthropic API key:", file=sys.stderr)
+        prompt = "Enter your Anthropic API key: "
     else:
-        print(f"Enter your {agent} API key:", file=sys.stderr)
+        prompt = f"Enter your {agent} API key: "
     try:
-        raw = input().strip()
+        raw = getpass.getpass(prompt).strip()
     except EOFError:
         raw = ""
     if not raw:
@@ -184,9 +185,9 @@ def prompt_for_api_key(agent):
 
 def prompt_for_gateway_token():
     """Prompt the user for a gateway Bearer token."""
-    print("Enter your gateway Bearer token:", file=sys.stderr)
+    import getpass
     try:
-        raw = input().strip()
+        raw = getpass.getpass("Enter your gateway Bearer token: ").strip()
     except EOFError:
         raw = ""
     if not raw:
@@ -227,7 +228,7 @@ def prompt_for_model_prefix():
     """Prompt the user for a gateway model prefix (e.g. llm-gateway)."""
     print("Enter the model prefix (e.g. llm-gateway):", file=sys.stderr)
     try:
-        raw = input().strip()
+        raw = input().strip().strip("/")
     except EOFError:
         raw = ""
     if not raw:
@@ -263,16 +264,24 @@ def _validate_gateway_token(token, base_url, model_prefix=""):
     )
 
     print(f"ralph: validating gateway token ({len(token)} chars)...", file=sys.stderr)
+    print(f"ralph: POST {url}  model={model}", file=sys.stderr)
     try:
         urllib.request.urlopen(req, timeout=10)
         print("ralph: gateway token validated successfully", file=sys.stderr)
     except urllib.error.HTTPError as exc:
+        body = ""
+        try:
+            body = exc.read().decode("utf-8", errors="replace").strip()
+        except Exception:
+            pass
         if exc.code in (401, 403):
             print(f"ralph: gateway token rejected (HTTP {exc.code})",
                   file=sys.stderr)
         else:
-            print(f"ralph: gateway token validation failed: {exc.reason}",
-                  file=sys.stderr)
+            print(f"ralph: gateway token validation failed (HTTP {exc.code}): "
+                  f"{exc.reason}", file=sys.stderr)
+        if body:
+            print(f"ralph: response: {body}", file=sys.stderr)
         sys.exit(1)
     except urllib.error.URLError as exc:
         print(f"ralph: gateway token validation failed: {exc.reason}",

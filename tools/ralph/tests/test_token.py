@@ -302,33 +302,32 @@ class TestValidateApiKey:
 # ---------------------------------------------------------------------------
 
 class TestPromptForApiKey:
-    @patch("builtins.input", return_value="cur_abc123xyz")
-    def test_returns_api_key(self, mock_input, capsys):
+    @patch("getpass.getpass", return_value="cur_abc123xyz")
+    def test_returns_api_key(self, mock_getpass):
         result = prompt_for_api_key("cursor")
         assert result == "cur_abc123xyz"
-        captured = capsys.readouterr()
-        assert "Enter your cursor API key" in captured.err
+        mock_getpass.assert_called_once()
+        assert "cursor API key" in mock_getpass.call_args[0][0]
 
-    @patch("builtins.input", return_value="sk-ant-api03-test")
-    def test_claude_prompt_says_anthropic(self, mock_input, capsys):
+    @patch("getpass.getpass", return_value="sk-ant-api03-test")
+    def test_claude_prompt_says_anthropic(self, mock_getpass):
         result = prompt_for_api_key("claude")
         assert result == "sk-ant-api03-test"
-        captured = capsys.readouterr()
-        assert "Enter your Anthropic API key:" in captured.err
+        assert "Anthropic API key" in mock_getpass.call_args[0][0]
 
-    @patch("builtins.input", return_value="  cur_abc123xyz  ")
-    def test_strips_whitespace(self, mock_input):
+    @patch("getpass.getpass", return_value="  cur_abc123xyz  ")
+    def test_strips_whitespace(self, mock_getpass):
         result = prompt_for_api_key("cursor")
         assert result == "cur_abc123xyz"
 
-    @patch("builtins.input", return_value="")
-    def test_empty_input_exits(self, mock_input):
+    @patch("getpass.getpass", return_value="")
+    def test_empty_input_exits(self, mock_getpass):
         with pytest.raises(SystemExit) as exc_info:
             prompt_for_api_key("cursor")
         assert exc_info.value.code == 1
 
-    @patch("builtins.input", side_effect=EOFError)
-    def test_eof_exits(self, mock_input):
+    @patch("getpass.getpass", side_effect=EOFError)
+    def test_eof_exits(self, mock_getpass):
         with pytest.raises(SystemExit) as exc_info:
             prompt_for_api_key("cursor")
         assert exc_info.value.code == 1
@@ -1124,26 +1123,26 @@ class TestEnsureTokenCursor:
 # ---------------------------------------------------------------------------
 
 class TestPromptForGatewayToken:
-    @patch("builtins.input", return_value="gw-bearer-token-123")
-    def test_returns_token(self, mock_input, capsys):
+    @patch("getpass.getpass", return_value="gw-bearer-token-123")
+    def test_returns_token(self, mock_getpass):
         result = prompt_for_gateway_token()
         assert result == "gw-bearer-token-123"
-        captured = capsys.readouterr()
-        assert "gateway Bearer token" in captured.err
+        mock_getpass.assert_called_once()
+        assert "gateway Bearer token" in mock_getpass.call_args[0][0]
 
-    @patch("builtins.input", return_value="  tok123  ")
-    def test_strips_whitespace(self, mock_input):
+    @patch("getpass.getpass", return_value="  tok123  ")
+    def test_strips_whitespace(self, mock_getpass):
         result = prompt_for_gateway_token()
         assert result == "tok123"
 
-    @patch("builtins.input", return_value="")
-    def test_empty_input_exits(self, mock_input):
+    @patch("getpass.getpass", return_value="")
+    def test_empty_input_exits(self, mock_getpass):
         with pytest.raises(SystemExit) as exc_info:
             prompt_for_gateway_token()
         assert exc_info.value.code == 1
 
-    @patch("builtins.input", side_effect=EOFError)
-    def test_eof_exits(self, mock_input):
+    @patch("getpass.getpass", side_effect=EOFError)
+    def test_eof_exits(self, mock_getpass):
         with pytest.raises(SystemExit) as exc_info:
             prompt_for_gateway_token()
         assert exc_info.value.code == 1
@@ -1193,6 +1192,16 @@ class TestPromptForModelPrefix:
     def test_strips_whitespace(self, mock_input):
         result = prompt_for_model_prefix()
         assert result == "gw"
+
+    @patch("builtins.input", return_value="llm-gateway/")
+    def test_strips_trailing_slash(self, mock_input):
+        result = prompt_for_model_prefix()
+        assert result == "llm-gateway"
+
+    @patch("builtins.input", return_value="/llm-gateway/")
+    def test_strips_leading_and_trailing_slashes(self, mock_input):
+        result = prompt_for_model_prefix()
+        assert result == "llm-gateway"
 
     @patch("builtins.input", return_value="")
     def test_empty_input_exits(self, mock_input):
@@ -1280,7 +1289,25 @@ class TestValidateGatewayToken:
             _validate_gateway_token("tok", "https://gateway.example.com")
         assert exc_info.value.code == 1
         captured = capsys.readouterr()
-        assert "gateway token validation failed: Too Many Requests" in captured.err
+        assert "HTTP 429" in captured.err
+
+    @patch("ralph.token.urllib.request.urlopen")
+    def test_error_includes_response_body(self, mock_urlopen, capsys):
+        mock_urlopen.side_effect = urllib.error.HTTPError(
+            "https://gateway.example.com/v1/messages", 401,
+            "Unauthorized", {}, io.BytesIO(b'{"error": "invalid_token"}'))
+        with pytest.raises(SystemExit):
+            _validate_gateway_token("bad-tok", "https://gateway.example.com")
+        captured = capsys.readouterr()
+        assert '{"error": "invalid_token"}' in captured.err
+
+    @patch("ralph.token.urllib.request.urlopen")
+    def test_logs_request_url_and_model(self, mock_urlopen, capsys):
+        mock_urlopen.return_value = MagicMock()
+        _validate_gateway_token("tok", "https://gw.example.com", "llm-gw")
+        captured = capsys.readouterr()
+        assert "POST https://gw.example.com/v1/messages" in captured.err
+        assert "model=llm-gw/claude-haiku-4-5" in captured.err
 
 
 # ---------------------------------------------------------------------------
