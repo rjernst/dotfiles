@@ -1,0 +1,17 @@
+{
+  "filesystem": {
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/dir"]
+  },
+  "remote-sse": {
+    "type": "sse",
+    "url": "https://example.com/mcp/sse",
+    "headers": {
+      "Authorization": "Bearer YOUR_TOKEN"
+    }
+  },
+  "remote-http": {
+    "type": "http",
+    "url": "https://example.com/mcp/http"
+  }
+}

@@ -5,19 +5,39 @@
  * Claude subscription-backed usage instead of the normal Anthropic API
  * billing path.
  *
- * Use this provider when authenticated via OAuth (Claude subscription)
- * to avoid per-token API billing. OAuth tokens used with the regular
- * Anthropic API still incur API costs; the Agent SDK routes through
- * the subscription instead.
- *
- * Usage in pi:
- *   pi -e /path/to/pi/packages/claude-sdk-provider
- *   Then use /model to select claude-sdk/<model-id>
+ * Model definitions are loaded from models.json at the package root.
+ * To update available models, edit models.json — no recompile needed.
  */
 
+import { readFileSync } from "fs";
+import { dirname, join } from "path";
+import { fileURLToPath } from "url";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { registerClaudeSdkProvider } from "./src/provider.js";
+import {
+	registerClaudeSdkProvider,
+	buildModelDefs,
+	type ModelConfig,
+	type McpServersConfig,
+} from "./src/provider.js";
 
 export default function claudeSdkProviderExtension(pi: ExtensionAPI) {
-	registerClaudeSdkProvider(pi);
+	const pkgRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
+	const configs: ModelConfig[] = JSON.parse(
+		readFileSync(join(pkgRoot, "models.json"), "utf-8"),
+	);
+
+	// Load MCP server configs (optional — file may not exist)
+	let mcpServers: McpServersConfig | undefined;
+	try {
+		mcpServers = JSON.parse(
+			readFileSync(join(pkgRoot, "mcp-servers.json"), "utf-8"),
+		);
+	} catch (err: unknown) {
+		if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+			throw err; // Re-throw parse errors, permission errors, etc.
+		}
+		// No mcp-servers.json — no MCP servers configured
+	}
+
+	registerClaudeSdkProvider(pi, buildModelDefs(configs), mcpServers);
 }
