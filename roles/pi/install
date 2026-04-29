@@ -1,0 +1,4 @@
+#!/usr/bin/env zsh
+
+echo "Setting up pi"
+npm install --prefix "$DOTFILES/pi/packages/claude-sdk-provider"
