@@ -199,16 +199,16 @@ describe("getActiveClaudeTools", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Tests: SDK-side execution denial
+// Tests: MCP tool architecture
 // ---------------------------------------------------------------------------
 
-describe("SDK-side execution denial", () => {
-	test("maxTurns is set to 1, preventing SDK tool execution loops", async () => {
+describe("MCP tool architecture", () => {
+	test("maxTurns allows multi-turn tool execution", async () => {
 		const mock = createMockQueryFactory([[resultSuccess()]]);
 		const session = new SdkSession(
 			{
 				model: "claude-sonnet-4-6",
-				tools: ["Read", "Bash"],
+				tools: [],
 			},
 			mock.factory,
 		);
@@ -216,20 +216,20 @@ describe("SDK-side execution denial", () => {
 		const stream = createSdkStream(
 			makeModel(),
 			undefined,
-			session,
 			[makeUserMessage("test")],
+			async () => session,
 		);
 		await collectEvents(stream);
 
-		expect(mock.receivedOptions()?.maxTurns).toBe(1);
+		expect(mock.receivedOptions()?.maxTurns).toBe(50);
 	});
 
-	test("active tools are passed to SDK as Claude names", async () => {
+	test("built-in tools disabled (empty tools list)", async () => {
 		const mock = createMockQueryFactory([[resultSuccess()]]);
 		const session = new SdkSession(
 			{
 				model: "claude-sonnet-4-6",
-				tools: ["Read", "Edit", "Bash"],
+				tools: [],
 			},
 			mock.factory,
 		);
@@ -237,26 +237,8 @@ describe("SDK-side execution denial", () => {
 		const stream = createSdkStream(
 			makeModel(),
 			undefined,
-			session,
 			[makeUserMessage("test")],
-		);
-		await collectEvents(stream);
-
-		expect(mock.receivedOptions()?.tools).toEqual(["Read", "Edit", "Bash"]);
-	});
-
-	test("context without tools passes empty tool list to SDK", async () => {
-		const mock = createMockQueryFactory([[resultSuccess()]]);
-		const session = new SdkSession(
-			{ model: "claude-sonnet-4-6" },
-			mock.factory,
-		);
-
-		const stream = createSdkStream(
-			makeModel(),
-			undefined,
-			session,
-			[],
+			async () => session,
 		);
 		await collectEvents(stream);
 
@@ -269,13 +251,13 @@ describe("SDK-side execution denial", () => {
 // ---------------------------------------------------------------------------
 
 describe("tool call mapping in stream", () => {
-	test("Claude Edit tool call is translated to pi edit with mapped args", async () => {
+	test("MCP edit tool call uses pi parameter names directly", async () => {
 		const session = createTestSession([
 			messageStart(50),
-			toolUseBlockStart(0, "toolu_edit", "Edit"),
+			toolUseBlockStart(0, "toolu_edit", "mcp__pi_tools__edit"),
 			inputJsonDelta(
 				0,
-				'{"file_path": "/src/app.ts", "old_string": "foo", "new_string": "bar"}',
+				'{"path": "/src/app.ts", "edits": [{"oldText": "foo", "newText": "bar"}]}',
 			),
 			contentBlockStop(0),
 			messageDelta("tool_use", 15),
@@ -285,8 +267,8 @@ describe("tool call mapping in stream", () => {
 		const stream = createSdkStream(
 			makeModel(),
 			undefined,
-			session,
 			[makeUserMessage("test")],
+			async () => session,
 		);
 		const events = await collectEvents(stream);
 
@@ -297,18 +279,17 @@ describe("tool call mapping in stream", () => {
 		expect(toolEnd.toolCall.name).toBe("edit");
 		expect(toolEnd.toolCall.arguments).toEqual({
 			path: "/src/app.ts",
-			oldText: "foo",
-			newText: "bar",
+			edits: [{ oldText: "foo", newText: "bar" }],
 		});
 	});
 
-	test("Claude Read tool call maps file_path to path", async () => {
+	test("MCP read tool call maps name from mcp__pi_tools__read", async () => {
 		const session = createTestSession([
 			messageStart(50),
-			toolUseBlockStart(0, "toolu_read", "Read"),
+			toolUseBlockStart(0, "toolu_read", "mcp__pi_tools__read"),
 			inputJsonDelta(
 				0,
-				'{"file_path": "/tmp/test.txt", "offset": 0, "limit": 50}',
+				'{"path": "/tmp/test.txt", "offset": 0, "limit": 50}',
 			),
 			contentBlockStop(0),
 			messageDelta("tool_use", 10),
@@ -318,8 +299,8 @@ describe("tool call mapping in stream", () => {
 		const stream = createSdkStream(
 			makeModel(),
 			undefined,
-			session,
 			[makeUserMessage("test")],
+			async () => session,
 		);
 		const events = await collectEvents(stream);
 
@@ -335,13 +316,13 @@ describe("tool call mapping in stream", () => {
 		});
 	});
 
-	test("Claude Grep tool call maps head_limit to limit", async () => {
+	test("MCP grep tool call preserves pi parameter names", async () => {
 		const session = createTestSession([
 			messageStart(50),
-			toolUseBlockStart(0, "toolu_grep", "Grep"),
+			toolUseBlockStart(0, "toolu_grep", "mcp__pi_tools__grep"),
 			inputJsonDelta(
 				0,
-				'{"pattern": "TODO", "path": "/src", "head_limit": 100}',
+				'{"pattern": "TODO", "path": "/src", "limit": 100}',
 			),
 			contentBlockStop(0),
 			messageDelta("tool_use", 10),
@@ -351,8 +332,8 @@ describe("tool call mapping in stream", () => {
 		const stream = createSdkStream(
 			makeModel(),
 			undefined,
-			session,
 			[makeUserMessage("test")],
+			async () => session,
 		);
 		const events = await collectEvents(stream);
 
@@ -368,11 +349,11 @@ describe("tool call mapping in stream", () => {
 		});
 	});
 
-	test("Claude Glob tool call maps name to find", async () => {
+	test("non-MCP tool names pass through unchanged", async () => {
 		const session = createTestSession([
 			messageStart(50),
-			toolUseBlockStart(0, "toolu_glob", "Glob"),
-			inputJsonDelta(0, '{"pattern": "**/*.ts", "path": "/src"}'),
+			toolUseBlockStart(0, "toolu_custom", "custom_tool"),
+			inputJsonDelta(0, '{"arg": "value"}'),
 			contentBlockStop(0),
 			messageDelta("tool_use", 10),
 			resultSuccess(),
@@ -381,8 +362,8 @@ describe("tool call mapping in stream", () => {
 		const stream = createSdkStream(
 			makeModel(),
 			undefined,
-			session,
 			[makeUserMessage("test")],
+			async () => session,
 		);
 		const events = await collectEvents(stream);
 
@@ -390,11 +371,7 @@ describe("tool call mapping in stream", () => {
 			AssistantMessageEvent,
 			{ type: "toolcall_end" }
 		>;
-		expect(toolEnd.toolCall.name).toBe("find");
-		expect(toolEnd.toolCall.arguments).toEqual({
-			pattern: "**/*.ts",
-			path: "/src",
-		});
+		expect(toolEnd.toolCall.name).toBe("custom_tool");
 	});
 
 	test("tool results from pi are preserved in follow-up context", () => {

@@ -7,10 +7,13 @@
  * unavailable, it errors clearly and never silently falls back to
  * ANTHROPIC_API_KEY or any other metered API path.
  *
- * Manages a persistent SDK session: the subprocess starts on first use
- * and stays alive across turns to avoid per-turn process boot overhead.
+ * Architecture: the SDK subprocess runs the full agent loop. Pi's tools
+ * are registered as MCP tools so the SDK executes them in-process. Pi
+ * renders the streaming events and provides configuration (system prompt,
+ * tool definitions, etc.).
  */
 
+import { createCodingTools } from "@mariozechner/pi-coding-agent";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import {
 	type Api,
@@ -24,13 +27,16 @@ import {
 import { createSdkStream } from "./stream.js";
 import { SdkSession } from "./session.js";
 import { extractSystemPrompt } from "./context.js";
-import { getActiveClaudeTools } from "./tools.js";
+import { createPiMcpServer } from "./mcp-tools.js";
 
 /** Custom API identifier — not a real Anthropic API type. */
 export const CLAUDE_SDK_API = "claude-sdk-stream" as Api;
 
 /** Provider id registered with pi. */
 export const PROVIDER_ID = "claude-sdk";
+
+/** Sentinel apiKey — satisfies pi validation, never sent over the wire. */
+export const SENTINEL_API_KEY = "claude-sdk-subscription";
 
 /**
  * Error message surfaced when subscription auth is unavailable.
@@ -78,7 +84,6 @@ export function buildModelDefs(configs: ModelConfig[]) {
 // ---------------------------------------------------------------------------
 
 let activeSession: SdkSession | null = null;
-let messagesSent = 0;
 
 /**
  * Reset session state. Exported for testing only — production code should
@@ -89,7 +94,6 @@ export function _resetSession(): void {
 		activeSession.close();
 	}
 	activeSession = null;
-	messagesSent = 0;
 }
 
 /**
@@ -112,20 +116,17 @@ process.on("exit", () => {
 /**
  * Streaming adapter that routes through the Claude Agent SDK.
  *
- * Auth guard: rejects if an API key is provided (subscription-only).
- * Then delegates to createSdkStream via a persistent session.
+ * The SDK runs the full agent loop: Claude proposes tool calls, the SDK
+ * executes them via our MCP handlers (which use pi's tool implementations),
+ * and Claude responds with the final result. Pi renders all streaming events.
  */
 export function streamClaudeSdk(
 	model: Model<Api>,
 	context: Context,
 	options?: SimpleStreamOptions,
 ): AssistantMessageEventStream {
-	// Auth guard: reject if an API key was passed instead of SDK auth.
-	// The Claude SDK provider must never use ANTHROPIC_API_KEY or any
-	// per-token billing path. The apiKey field in SimpleStreamOptions is
-	// populated from the provider's apiKey config; for this provider we
-	// intentionally leave that unset and rely on the SDK's own auth.
-	if (options?.apiKey) {
+	// Auth guard: reject if a real API key was passed.
+	if (options?.apiKey && options.apiKey !== SENTINEL_API_KEY) {
 		const stream = createAssistantMessageEventStream();
 		(async () => {
 			const output: AssistantMessage = {
@@ -156,51 +157,69 @@ export function streamClaudeSdk(
 					AUTH_ERROR_MESSAGE,
 				timestamp: Date.now(),
 			};
-			stream.push({
-				type: "error",
-				reason: "error",
-				error: output,
-			});
+			stream.push({ type: "error", reason: "error", error: output });
 			stream.end();
 		})();
 		return stream;
 	}
 
-	// Detect new conversation (message count decreased) or model change
-	if (activeSession) {
-		if (
-			context.messages.length < messagesSent ||
-			activeSession.model !== model.id
-		) {
-			activeSession.close();
-			activeSession = null;
-			messagesSent = 0;
-		}
+	// Detect model change — need a fresh session
+	if (activeSession && activeSession.model !== model.id) {
+		activeSession.close();
+		activeSession = null;
 	}
 
-	// Create session on first use
-	if (!activeSession) {
-		activeSession = new SdkSession({
-			model: model.id,
-			systemPrompt: extractSystemPrompt(context),
-			tools: getActiveClaudeTools(context.tools),
-			mcpServers: mcpServersConfig,
-		});
-		messagesSent = 0;
-	}
+	// Always send full context — each turn starts a fresh subprocess
+	const newMessages = context.messages;
 
-	// Extract new messages (skip what SDK already has)
-	const newMessages = context.messages.slice(messagesSent);
-	messagesSent = context.messages.length;
+	// The stream handles async session setup (MCP server creation) internally.
+	return createSdkStream(model, options, newMessages, () =>
+		getOrCreateSession(model.id, context),
+	);
+}
 
-	return createSdkStream(model, options, activeSession, newMessages);
+/**
+ * Get or create the active SDK session.
+ *
+ * On first call, creates pi tool instances, wraps them in an MCP server,
+ * and starts the session with tools: [] (builtins disabled) plus the MCP
+ * server (pi tools enabled).
+ */
+async function getOrCreateSession(
+	modelId: string,
+	context: Context,
+): Promise<SdkSession> {
+	if (activeSession) return activeSession;
+
+	// Create pi tool instances for the current working directory
+	const cwd = process.cwd();
+	const piTools = createCodingTools(cwd);
+
+	// Wrap pi's tools in an MCP server
+	const { server } = await createPiMcpServer(piTools);
+
+	// Merge with any user-configured MCP servers
+	const mcpServers: Record<string, Record<string, unknown>> = {
+		...(mcpServersConfig ?? {}),
+		[server.name ?? "pi_tools"]: server as unknown as Record<
+			string,
+			unknown
+		>,
+	};
+
+	activeSession = new SdkSession({
+		model: modelId,
+		systemPrompt: extractSystemPrompt(context),
+		// Disable all Claude Code builtins — only MCP tools are available
+		tools: [],
+		mcpServers,
+	});
+
+	return activeSession;
 }
 
 /**
  * MCP server configuration passed through to the Claude Agent SDK.
- * Loaded from mcp-servers.json at the package root. When set, the SDK
- * subprocess connects to these MCP servers and their tools become
- * available to Claude alongside the built-in pi tools.
  */
 export type McpServersConfig = Record<string, Record<string, unknown>>;
 
@@ -209,13 +228,6 @@ let mcpServersConfig: McpServersConfig | undefined;
 
 /**
  * Registers the claude-sdk provider with pi.
- *
- * The provider is registered with:
- * - No apiKey (subscription auth only — never falls back to ANTHROPIC_API_KEY)
- * - A custom streamSimple that guards against API key usage and routes
- *   through the Claude Agent SDK
- * - Model definitions built from models.json with zero cost (subscription-billed)
- * - Optional MCP server configs forwarded to the SDK subprocess
  */
 export function registerClaudeSdkProvider(
 	pi: ExtensionAPI,
@@ -224,8 +236,8 @@ export function registerClaudeSdkProvider(
 ): void {
 	mcpServersConfig = mcpServers;
 	pi.registerProvider(PROVIDER_ID, {
-		// No baseUrl — SDK manages its own endpoint
-		// No apiKey — subscription auth only, enforced by streamSimple
+		baseUrl: "https://sdk.internal.unused",
+		apiKey: SENTINEL_API_KEY,
 		api: CLAUDE_SDK_API,
 		models,
 		streamSimple: streamClaudeSdk,

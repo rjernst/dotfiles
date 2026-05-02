@@ -2,7 +2,8 @@
  * Claude SDK streaming adapter.
  *
  * Executes queries through a persistent SdkSession and converts SDK stream
- * events into pi assistant message events.
+ * events into pi assistant message events. The SDK handles the full agent
+ * loop (tool calls + results across multiple turns). Pi renders everything.
  */
 
 import type {
@@ -19,7 +20,7 @@ import type {
 } from "@mariozechner/pi-ai";
 import { createAssistantMessageEventStream } from "@mariozechner/pi-ai";
 import { buildUserMessage } from "./context.js";
-import { mapClaudeArgsToPi, toPiName } from "./tools.js";
+import { fromMcpName } from "./mcp-tools.js";
 import type { SdkEvent, SdkSession } from "./session.js";
 
 // Re-export SdkEvent for consumers that need the type
@@ -55,8 +56,6 @@ interface BlockTracker {
 	sdkIndex: number;
 	piIndex: number;
 	partialJson?: string;
-	/** Original Claude tool name, used for argument mapping. */
-	claudeToolName?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -89,18 +88,22 @@ export function makeOutputTemplate(model: Model<Api>): AssistantMessage {
 // ---------------------------------------------------------------------------
 
 /**
- * Create a pi AssistantMessageEventStream backed by a persistent SdkSession.
+ * Create a pi AssistantMessageEventStream backed by the Claude Agent SDK.
  *
- * @param model       - pi model definition
- * @param options     - pi stream options (signal, maxTokens, reasoning, etc.)
- * @param session     - persistent SDK session (started on first use)
- * @param newMessages - messages not yet sent to the SDK subprocess
+ * The SDK handles the full agent loop: Claude proposes tools, the SDK
+ * executes them via MCP handlers, and Claude responds. All events are
+ * streamed through to pi for rendering.
+ *
+ * @param model          - pi model definition
+ * @param options        - pi stream options (signal, etc.)
+ * @param newMessages    - messages not yet sent to the SDK subprocess
+ * @param sessionFactory - async factory for the SDK session (lazy init)
  */
 export function createSdkStream(
 	model: Model<Api>,
 	options: SimpleStreamOptions | undefined,
-	session: SdkSession,
 	newMessages: Message[],
+	sessionFactory: () => Promise<SdkSession>,
 ): AssistantMessageEventStream {
 	const stream = createAssistantMessageEventStream();
 
@@ -108,11 +111,13 @@ export function createSdkStream(
 		const output = makeOutputTemplate(model);
 
 		try {
+			const session = await sessionFactory();
 			const userMessage = buildUserMessage(newMessages);
 
 			stream.push({ type: "start", partial: output });
 
-			const blocks: BlockTracker[] = [];
+			// Block tracker resets on each new assistant turn
+			let blocks: BlockTracker[] = [];
 
 			for await (const msg of session.send(userMessage)) {
 				if (options?.signal?.aborted) {
@@ -122,6 +127,13 @@ export function createSdkStream(
 				if (msg.type === "stream_event") {
 					const event = msg.event as Record<string, unknown>;
 					if (event) {
+						// Reset block tracking on new assistant turn
+						if (event.type === "message_start") {
+							blocks = [];
+							// Clear previous turn's content — only keep
+							// the final turn in the output for pi.
+							output.content = [];
+						}
 						processStreamEvent(event, output, stream, blocks);
 					}
 				} else if (msg.type === "result") {
@@ -234,8 +246,9 @@ function handleContentBlockStart(
 			partial: output,
 		});
 	} else if (contentBlock.type === "tool_use") {
-		const claudeName = contentBlock.name as string;
-		const piName = toPiName(claudeName) ?? claudeName;
+		// Map MCP-qualified name (mcp__pi_tools__read) to pi name (read)
+		const rawName = contentBlock.name as string;
+		const piName = fromMcpName(rawName) ?? rawName;
 		const toolCall: ToolCall = {
 			type: "toolCall",
 			id: contentBlock.id as string,
@@ -249,7 +262,6 @@ function handleContentBlockStart(
 			sdkIndex,
 			piIndex,
 			partialJson: "",
-			claudeToolName: claudeName,
 		});
 		stream.push({
 			type: "toolcall_start",
@@ -296,19 +308,13 @@ function handleContentBlockDelta(
 	) {
 		const partialJson = delta.partial_json as string;
 		tracker.partialJson = (tracker.partialJson || "") + partialJson;
-		// Tool arguments are JSON objects/arrays. Only attempt a parse when
-		// the accumulated string could be complete (ends with } or ]).
-		// This avoids throwing + catching on every intermediate delta.
 		const last = tracker.partialJson[tracker.partialJson.length - 1];
 		if (last === "}" || last === "]") {
 			try {
-				let args = JSON.parse(tracker.partialJson);
-				if (tracker.claudeToolName) {
-					args = mapClaudeArgsToPi(tracker.claudeToolName, args);
-				}
+				const args = JSON.parse(tracker.partialJson);
 				(output.content[piIndex] as ToolCall).arguments = args;
 			} catch {
-				// Looks complete but isn't (e.g. nested braces) — keep accumulating
+				// Keep accumulating
 			}
 		}
 		stream.push({
@@ -356,13 +362,10 @@ function handleContentBlockStop(
 			partial: output,
 		});
 	} else if (tracker.type === "toolCall") {
-		// Final JSON parse attempt with argument mapping
+		// Final JSON parse
 		if (tracker.partialJson) {
 			try {
-				let args = JSON.parse(tracker.partialJson);
-				if (tracker.claudeToolName) {
-					args = mapClaudeArgsToPi(tracker.claudeToolName, args);
-				}
+				const args = JSON.parse(tracker.partialJson);
 				(output.content[piIndex] as ToolCall).arguments = args;
 			} catch {
 				// Keep whatever was last successfully parsed

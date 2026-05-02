@@ -9,7 +9,7 @@
  * To update available models, edit models.json — no recompile needed.
  */
 
-import { readFileSync } from "fs";
+import { existsSync, readFileSync } from "fs";
 import { dirname, join } from "path";
 import { fileURLToPath } from "url";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
@@ -21,7 +21,12 @@ import {
 } from "./src/provider.js";
 
 export default function claudeSdkProviderExtension(pi: ExtensionAPI) {
-	const pkgRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
+	// When loaded from dist/index.js, dirname is .../dist — go up one level.
+	// When pi loads index.ts directly, dirname is already the package root.
+	const __dirname = dirname(fileURLToPath(import.meta.url));
+	const pkgRoot = existsSync(join(__dirname, "models.json"))
+		? __dirname
+		: join(__dirname, "..");
 	const configs: ModelConfig[] = JSON.parse(
 		readFileSync(join(pkgRoot, "models.json"), "utf-8"),
 	);

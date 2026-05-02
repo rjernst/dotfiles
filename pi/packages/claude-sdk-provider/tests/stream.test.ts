@@ -80,8 +80,8 @@ describe("text-only SDK stream", () => {
 		const stream = createSdkStream(
 			makeModel(),
 			undefined,
-			session,
 			[makeUserMessage("test")],
+			async () => session,
 		);
 		const events = await collectEvents(stream);
 
@@ -125,8 +125,8 @@ describe("text-only SDK stream", () => {
 		const stream = createSdkStream(
 			makeModel(),
 			undefined,
-			session,
 			[makeUserMessage("test")],
+			async () => session,
 		);
 		const events = await collectEvents(stream);
 
@@ -147,9 +147,9 @@ describe("tool-use SDK stream", () => {
 	test("produces pi toolcall events with toolUse stop reason", async () => {
 		const session = createTestSession([
 			messageStart(50, 0),
-			toolUseBlockStart(0, "toolu_01", "Read"),
-			inputJsonDelta(0, '{"file_pa'),
-			inputJsonDelta(0, 'th": "/tmp/test.txt"}'),
+			toolUseBlockStart(0, "toolu_01", "mcp__pi_tools__read"),
+			inputJsonDelta(0, '{"pat'),
+			inputJsonDelta(0, 'h": "/tmp/test.txt"}'),
 			contentBlockStop(0),
 			messageDelta("tool_use", 15),
 			resultSuccess(),
@@ -158,8 +158,8 @@ describe("tool-use SDK stream", () => {
 		const stream = createSdkStream(
 			makeModel(),
 			undefined,
-			session,
 			[makeUserMessage("test")],
+			async () => session,
 		);
 		const events = await collectEvents(stream);
 
@@ -195,8 +195,8 @@ describe("tool-use SDK stream", () => {
 			textBlockStart(0),
 			textDelta(0, "I'll read that file."),
 			contentBlockStop(0),
-			toolUseBlockStart(1, "toolu_02", "Read"),
-			inputJsonDelta(1, '{"file_path": "/tmp/a.txt"}'),
+			toolUseBlockStart(1, "toolu_02", "mcp__pi_tools__read"),
+			inputJsonDelta(1, '{"path": "/tmp/a.txt"}'),
 			contentBlockStop(1),
 			messageDelta("tool_use", 20),
 			resultSuccess(),
@@ -205,8 +205,8 @@ describe("tool-use SDK stream", () => {
 		const stream = createSdkStream(
 			makeModel(),
 			undefined,
-			session,
 			[makeUserMessage("test")],
+			async () => session,
 		);
 		const events = await collectEvents(stream);
 
@@ -255,8 +255,8 @@ describe("thinking SDK stream", () => {
 		const stream = createSdkStream(
 			makeModel(),
 			undefined,
-			session,
 			[makeUserMessage("test")],
+			async () => session,
 		);
 		const events = await collectEvents(stream);
 
@@ -300,8 +300,8 @@ describe("error handling", () => {
 		const stream = createSdkStream(
 			makeModel(),
 			undefined,
-			session,
 			[makeUserMessage("test")],
+			async () => session,
 		);
 		const events = await collectEvents(stream);
 
@@ -330,8 +330,8 @@ describe("error handling", () => {
 		const stream = createSdkStream(
 			makeModel(),
 			undefined,
-			session,
 			[makeUserMessage("test")],
+			async () => session,
 		);
 		const events = await collectEvents(stream);
 
@@ -359,8 +359,8 @@ describe("error handling", () => {
 		const stream = createSdkStream(
 			makeModel(),
 			{ signal: controller.signal },
-			session,
 			[makeUserMessage("test")],
+			async () => session,
 		);
 		const events = await collectEvents(stream);
 

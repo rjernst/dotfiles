@@ -110,11 +110,11 @@ describe("claude-sdk provider registration", () => {
 			}),
 		);
 
-		// Verify no apiKey is set — provider must never fall back to API key billing
+		// Verify sentinel values are set (required by pi validation, never used)
 		const config = (mockPi.registerProvider as jest.Mock).mock
 			.calls[0][1] as Record<string, unknown>;
-		expect(config["apiKey"]).toBeUndefined();
-		expect(config["baseUrl"]).toBeUndefined();
+		expect(config["apiKey"]).toBe("claude-sdk-subscription");
+		expect(config["baseUrl"]).toBe("https://sdk.internal.unused");
 	});
 });
 

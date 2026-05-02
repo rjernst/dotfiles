@@ -136,9 +136,17 @@ export class SdkSession {
 		// to avoid generator cleanup closing the underlying query.
 		while (true) {
 			const { value, done } = await this.query.next();
-			if (done) return;
+			if (done) {
+				// Process exited — null query so next send() starts fresh
+				this.query = null;
+				return;
+			}
 			yield value;
-			if (value.type === "result") return;
+			if (value.type === "result") {
+				// Turn complete — null query since subprocess may exit
+				this.query = null;
+				return;
+			}
 		}
 	}
 
@@ -189,10 +197,14 @@ export class SdkSession {
 	private buildSdkOptions(): SdkOptions {
 		const opts: SdkOptions = {
 			model: this._model,
-			maxTurns: this.options.maxTurns ?? 1,
+			// High maxTurns: the SDK handles the full tool execution loop.
+			// Each tool call + response is one turn.
+			maxTurns: this.options.maxTurns ?? 50,
 			includePartialMessages: this.options.includePartialMessages ?? true,
 			persistSession: this.options.persistSession ?? false,
 			tools: this.options.tools ?? [],
+			// Bypass permissions — pi controls tool access, not the SDK
+			permissionMode: 'bypassPermissions' as const,
 		};
 		if (this.options.systemPrompt) {
 			opts.systemPrompt = this.options.systemPrompt;
