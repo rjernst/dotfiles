@@ -132,9 +132,10 @@ class DockerImageMixin:
         Tag format: agent-loop-sandbox-{agent}-{project_name}:v{hash}
         Hash is SHA256(base_tag + ":" + dockerfile_content)[:8].
         """
+        sanitized = project_name.lstrip(".")
         combined = f"{base_tag}:{dockerfile_content}"
         chash = hashlib.sha256(combined.encode()).hexdigest()[:8]
-        return f"agent-loop-sandbox-{agent}-{project_name}:v{chash}"
+        return f"agent-loop-sandbox-{agent}-{sanitized}:v{chash}"
 
     def ensure_project_image(self, agent, base_tag, project_dir,
                              force_rebuild=False):
