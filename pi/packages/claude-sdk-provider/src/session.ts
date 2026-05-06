@@ -135,16 +135,28 @@ export class SdkSession {
 		// Read events until result. Uses manual .next() instead of for-await
 		// to avoid generator cleanup closing the underlying query.
 		while (true) {
-			const { value, done } = await this.query.next();
+			// Capture in a local so TypeScript can narrow from non-null.
+			// this.query is set null inside the loop for the result case;
+			// we always return immediately after, so the loop never
+			// continues with a null query.
+			const q = this.query;
+			if (!q) return;
+			const { value, done } = await q.next();
 			if (done) {
 				// Process exited — null query so next send() starts fresh
 				this.query = null;
 				return;
 			}
+			// Null the query BEFORE yielding the result event.
+			// If the caller breaks/returns after receiving the result (as
+			// stream.ts does), JS calls generator.return() which skips any
+			// code after the yield — so the null must happen before the yield
+			// to guarantee cleanup regardless of how the caller exits.
+			if (value.type === "result") {
+				this.query = null;
+			}
 			yield value;
 			if (value.type === "result") {
-				// Turn complete — null query since subprocess may exit
-				this.query = null;
 				return;
 			}
 		}

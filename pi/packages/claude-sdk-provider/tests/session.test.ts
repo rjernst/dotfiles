@@ -160,6 +160,49 @@ describe("SdkSession lifecycle", () => {
 		expect(mock.streamInputCallCount()).toBe(0);
 	});
 
+	test("query is nulled even when caller breaks on result (stream.ts pattern)", async () => {
+		// Regression test: stream.ts breaks from the for-await loop immediately
+		// on receiving a result event. JS then calls generator.return() which
+		// skips any code after the last yield — so this.query must be nulled
+		// BEFORE yielding the result, not after.
+		const mock = createMockQueryFactory([
+			[
+				messageStart(),
+				textBlockStart(0),
+				textDelta(0, "Hello"),
+				contentBlockStop(0),
+				messageDelta("end_turn"),
+				resultSuccess(),
+			],
+			[
+				messageStart(),
+				textBlockStart(0),
+				textDelta(0, "Second turn"),
+				contentBlockStop(0),
+				messageDelta("end_turn"),
+				resultSuccess(),
+			],
+		]);
+		const session = new SdkSession({ model: "claude-sonnet-4-6" }, mock.factory);
+
+		// Turn 1: break on result (like stream.ts does), don't consume all events
+		for await (const event of session.send(userMsg("Hi"))) {
+			if (event.type === "result") break; // triggers generator.return()
+		}
+
+		// Turn 2: must NOT call streamInput on a dead process.
+		// Before the fix this threw "ProcessTransport is not ready for writing"
+		// because this.query was still set after the break.
+		const turn2: SdkEvent[] = [];
+		for await (const event of session.send(userMsg("Follow-up"))) {
+			turn2.push(event);
+			if (event.type === "result") break;
+		}
+		// Second turn started a fresh subprocess (factory called again), not streamInput
+		expect(mock.streamInputCallCount()).toBe(0);
+		expect(mock.factoryCallCount()).toBe(2);
+	});
+
 	test("close is safe after query completes (query already nulled)", async () => {
 		const mock = createMockQueryFactory([
 			[
