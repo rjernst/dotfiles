@@ -265,28 +265,38 @@ def prompt_for_base_url():
     return raw or None
 
 
-def prompt_for_gateway_base_url():
+def prompt_for_gateway_base_url(default=None):
     """Prompt the user for a gateway base URL (e.g. https://gateway.example.com)."""
-    print("Enter the gateway base URL (e.g. https://gateway.example.com):",
-          file=sys.stderr)
+    if default:
+        print(f"Enter the gateway base URL [current: {default}]:", file=sys.stderr)
+    else:
+        print("Enter the gateway base URL (e.g. https://gateway.example.com):",
+              file=sys.stderr)
     try:
         raw = input().strip()
     except EOFError:
         raw = ""
     if not raw:
+        if default:
+            return default
         print("ralph: no base URL provided", file=sys.stderr)
         sys.exit(1)
     return raw
 
 
-def prompt_for_model_prefix():
+def prompt_for_model_prefix(default=None):
     """Prompt the user for a gateway model prefix (e.g. llm-gateway)."""
-    print("Enter the model prefix (e.g. llm-gateway):", file=sys.stderr)
+    if default:
+        print(f"Enter the model prefix [current: {default}]:", file=sys.stderr)
+    else:
+        print("Enter the model prefix (e.g. llm-gateway):", file=sys.stderr)
     try:
         raw = input().strip().strip("/")
     except EOFError:
         raw = ""
     if not raw:
+        if default:
+            return default
         print("ralph: no model prefix provided", file=sys.stderr)
         sys.exit(1)
     return raw
@@ -462,6 +472,7 @@ def store_token(agent, auth_mode=None):
     For other agents: prompts for an API key interactively, or reads from stdin.
     """
     resolved_mode = _resolve_mode_string(agent, auth_mode)
+    existing = read_token_from_keychain(agent, auth_mode)
     kw = {}
     if sys.stdin.isatty():
         if resolved_mode == "oauth":
@@ -471,8 +482,10 @@ def store_token(agent, auth_mode=None):
             kw["base_url"] = prompt_for_base_url()
         elif resolved_mode == "gateway":
             raw = prompt_for_gateway_token()
-            kw["base_url"] = prompt_for_gateway_base_url()
-            kw["model_prefix"] = prompt_for_model_prefix()
+            kw["base_url"] = prompt_for_gateway_base_url(
+                default=existing.get("baseUrl") if existing else None)
+            kw["model_prefix"] = prompt_for_model_prefix(
+                default=existing.get("modelPrefix") if existing else None)
         else:
             # Single-mode agent (e.g. cursor): use original behavior
             agent_config = get_agent(agent)
@@ -577,8 +590,10 @@ def ensure_token(agent, auth_mode=None):
                                         base_url=base_url)
     elif resolved_mode == "gateway":
         raw = prompt_for_gateway_token()
-        base_url = prompt_for_gateway_base_url()
-        model_prefix = prompt_for_model_prefix()
+        base_url = prompt_for_gateway_base_url(
+            default=data.get("baseUrl") if data else None)
+        model_prefix = prompt_for_model_prefix(
+            default=data.get("modelPrefix") if data else None)
         stored = _parse_and_store_token(agent, raw, auth_mode=auth_mode,
                                         base_url=base_url,
                                         model_prefix=model_prefix)
