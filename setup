@@ -184,6 +184,7 @@ dry_mkdir $HOME/.gradle
 setup_link "gradle/properties"                  ".gradle/gradle.properties"
 
 setup_link "zsh/zshrc"                          ".zshrc"
+setup_link "zsh/zprofile"                       ".zprofile"
 dry_mkdir $HOME/.zsh
 dry_mkdir $HOME/.zsh/var/
 dry_mkdir $HOME/.zsh/plugins/

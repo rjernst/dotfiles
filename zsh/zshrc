@@ -4,11 +4,6 @@ ZDOTDIR=$HOME/.zsh
 DOTFILES=$HOME/.dotfiles
 export EDITOR=/usr/bin/vim
 
-if [[ $OSTYPE == darwin* ]]; then
-  export PATH=/opt/homebrew/bin:$PATH
-fi
-export PATH=~/bin:$PATH
-
 #----------------------------------------------------------------------------
 #                                 zinit
 #----------------------------------------------------------------------------
@@ -458,3 +453,5 @@ fi
 if [ -f $HOME/.zshrc.local ]; then
   source $HOME/.zshrc.local
 fi
+
+if [[ "${ESSS_LOAD:-}" && -f "/Users/rjernst/code/elastic/elasticsearch-serverless-support/lib/post-shell.sh" ]]; then source "/Users/rjernst/code/elastic/elasticsearch-serverless-support/lib/post-shell.sh"; fi # elasticsearch-serverless-support
