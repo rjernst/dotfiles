@@ -7,7 +7,9 @@ allowed-tools:
   - Bash(ta wt create *)
   - Bash(ta wt status *)
   - Bash(git fetch *)
+  - Bash(git remote get-url *)
   - Bash(gh pr view *)
+  - Bash(gh issue view *)
   - Bash(mktemp *)
   - Write(/tmp/**)
   - Bash(gh pr review *)
@@ -24,6 +26,16 @@ You are a code reviewer. Your job is to review code — whether it's the current
 - **Branch matching uses your natural language understanding** — interpret the user's input semantically and match against branch lists. No shell-level fuzzy/substring matching.
 - Do not assume any particular working directory — this skill should work from anywhere.
 
+## Repo Resolution
+
+Determine the user's fork at the start of every invocation:
+
+1. **Origin:** Run `git remote get-url origin` and parse the output into `owner/repo` form. The URL will be either `git@github.com:owner/repo.git` or `https://github.com/owner/repo.git` — strip everything up to and including `github.com[:/]` and strip any trailing `.git`. Result is the user's fork (e.g., `rjernst/elasticsearch`).
+
+Do **not** pipe into `sed`, `awk`, or other filters — parse the raw URL yourself.
+
+---
+
 ## Step 1: Detect input type
 
 `$ARGUMENTS` contains the optional input. Detect the type:
@@ -31,6 +43,7 @@ You are a code reviewer. Your job is to review code — whether it's the current
 | Input | Detection | Action |
 |-------|-----------|--------|
 | (none) | No arguments | Go to Step 2 (no-input handling) |
+| Contains "spec issue" or "spec #" followed by a number | Spec issue reference (e.g., "impl for spec issue 123", "spec #45") | Extract the number, go to Step 4a (spec issue lookup) |
 | `1234` | Purely numeric | Go to Step 4 (PR lookup) with this number |
 | `https://github.com/.../pull/1234` | URL matching `github.com/.*/pull/[0-9]+` | Extract the PR number, go to Step 4 |
 | Anything else | Natural language or branch name | Go to Step 3 (semantic branch resolution) |
@@ -84,6 +97,29 @@ Now use your natural language understanding to match the user's input against th
   - `options`: dynamically generated from the matched branches — each option's `label` is the branch name, `description` includes status/ahead/behind/dirty summary where available
   - Once selected, go to Step 5 with the chosen branch.
 - **No plausible match** -> tell the user no matching branch was found. Stop.
+
+---
+
+## Step 4a: Spec issue lookup
+
+The user wants to review the implementation for a spec issue. Spec issues live in the user's fork and contain a `branch` field in their YAML frontmatter that names the implementation branch.
+
+1. **Fetch the spec issue** from the fork (origin repo):
+   ```
+   gh issue view <number> --repo <origin-repo> --json title,body,labels
+   ```
+   If this fails, report the error and stop.
+
+2. **Extract the branch name** from the issue body's YAML frontmatter. The body starts with:
+   ```
+   ---
+   branch: <branch-name>
+   ...
+   ---
+   ```
+   Parse the `branch:` value. If no frontmatter or no `branch` field is found, report the error and stop.
+
+3. **Go to Step 3** (semantic branch resolution) with the extracted branch name as the input. This is a local branch — not a PR, not a remote ref to fetch.
 
 ---
 

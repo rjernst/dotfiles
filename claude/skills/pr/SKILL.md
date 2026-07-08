@@ -8,12 +8,14 @@ allowed-tools:
   - Bash(git push *)
   - Bash(git remote get-url *)
   - Bash(git fetch upstream *)
+  - Bash(git reset *)
+  - Bash(git commit *)
 ---
 
 You are a pull request assistant. Your job is to create a GitHub pull request from the current branch.
 
 ## Rules
-- The review gate in Step 5 is mandatory — never skip the `AskUserQuestion` step, even though `gh pr create` is auto-approved via this skill's `allowed-tools` frontmatter.
+- The review gates in Steps 3 and 6 are mandatory — never skip the `AskUserQuestion` steps, even though `gh pr create` and `git` commands are auto-approved via this skill's `allowed-tools` frontmatter.
 - Always push commits before creating the PR.
 - Do NOT run code review — that's `/review`'s job. `/pr` assumes the code is ready.
 - Keep the workspace open after PR creation — this is not a cleanup step.
@@ -52,53 +54,106 @@ If the user provided an explicit base branch via `$ARGUMENTS`, verify it exists 
 
 ---
 
-### Step 3: Push check
+### Step 3: Squash to a single commit
 
-1. Check if the current branch has an upstream tracking branch:
-   `git rev-parse --abbrev-ref @{upstream} 2>/dev/null`
-2. **If no upstream** → push with: `git push -u origin HEAD`
-3. **If upstream exists**, check for unpushed commits:
-   `git rev-list @{upstream}..HEAD --count`
-4. If unpushed commits > 0 → push: `git push origin HEAD`
-5. Report push status to the user.
+The branch must be a single commit before creating the PR. The PR title and body will be taken directly from this commit.
+
+**Step 3a — Count commits ahead of base:**
+
+```
+git rev-list <base-branch>..HEAD --count
+```
+
+- If the count is **0**, stop — there are no changes to create a PR for.
+- If the count is **1**, the branch is already a single commit. Skip to Step 3d.
+- If the count is **> 1**, proceed to Step 3b.
+
+**Step 3b — Draft a squashed commit message:**
+
+Review the commit history and diff to understand the full scope of changes:
+
+```
+git log <base-branch>..HEAD --format="%h %s"
+git diff <base-branch>...HEAD --stat
+```
+
+Draft a commit message with:
+- **First line (subject):** short imperative summary under 70 chars
+- **Blank line**
+- **Body:** concise description of the changes (plain text or bullet points). Do not include `## Summary` / `## Test plan` markdown headers — this is a git commit message, not a PR template.
+
+**Step 3c — Squash commit review gate (required — do NOT skip):**
+
+Post this display template as a single chat message, verbatim:
+
+    **Squash commit — please review the commit message before I squash.**
+
+    **Commits being squashed:**
+    ```
+    <output of git log base..HEAD --format="%h %s">
+    ```
+
+    **Proposed commit message:**
+    ````
+    <proposed commit message verbatim>
+    ````
+
+Then immediately call `AskUserQuestion` with these exact parameters:
+
+- `question`: `Approve this commit message, or cancel? To request changes, select 'Other' and describe what to change.`
+- `header`: `Review squash`
+- `multiSelect`: `false`
+- `options` (exactly these two, in this order):
+  1. `label`: `Approve — squash commits`, `description`: `Squash all commits into one with this message.`
+  2. `label`: `Cancel — don't squash`, `description`: `Stop without squashing or creating a PR.`
+
+Handle the answer string:
+- Exactly `Approve — squash commits` → proceed to Step 3d.
+- Exactly `Cancel — don't squash` → stop immediately. Briefly confirm to the user that the operation was cancelled.
+- **Anything else** (the user selected "Other" and typed text) → treat the returned string as revision instructions. Update the commit message in memory, then re-post the full display template with the updated message and call `AskUserQuestion` again. Repeat until the user selects Approve or Cancel.
+
+**Step 3d — Perform the squash (skip if already 1 commit):**
+
+```
+git reset --soft <base-branch>
+git commit -m "<approved commit message>"
+```
+
+The branch is now a single commit.
 
 ---
 
-### Step 4: Craft PR title and description
+### Step 4: Push
 
-1. Get the commit history:
+1. Force-push is required after squashing (history was rewritten):
+   `git push -u --force-with-lease origin HEAD`
+2. Report push status to the user.
+
+---
+
+### Step 5: Craft PR title and description
+
+The PR title and body are taken directly from the single squashed commit — do not synthesize or rephrase.
+
+1. Extract the commit subject and body:
    ```
-   git log <base-branch>..HEAD --format="%h %s"
+   git log -1 --format="%s"
+   git log -1 --format="%b"
    ```
 
-2. Also review the diff to understand the full scope of changes:
-   ```
-   git diff <base-branch>...HEAD --stat
-   ```
+2. **PR title** = the commit subject line, verbatim.
 
-3. Craft a PR **title**:
-   - Short imperative summary under 70 chars
-   - Synthesize from commit messages — don't just use the first commit
-
-4. Craft a PR **body**:
-   ```
-   ## Summary
-   - <bullet points summarizing key changes>
-   - <synthesized from commits, not raw commit list>
-
-   ## Test plan
-   - [ ] <relevant test steps>
-   ```
+3. **PR body** = the commit body, verbatim. If the commit body is empty, use the subject line as a single-line body.
 
 Hold the title and body in memory — do not create the PR yet.
 
 ---
 
-### Step 5: Review gate (required — do NOT skip)
+### Step 6: Review gate (required — do NOT skip)
 
 This step is mandatory and its format is fixed. Use the exact template and `AskUserQuestion` call below every time — substitute only the `<...>` placeholders, and do not rephrase headers, reorder fields, change emphasis, or alter fence style. Consistency across invocations is the entire point of this step.
 
-**Step 5a — Post this display template as a single chat message, verbatim:**
+**Step 6a — Post this display template as a single chat message, verbatim:**
 
     **PR draft — please review before I create the pull request.**
 
@@ -113,7 +168,7 @@ Rules for the template:
 - **Outer fence must be four backticks**, not three. The PR body may contain triple-backtick code fences, and a three-backtick outer wrapper will close early and render broken. Do not substitute `~~~` or any other fence style — four backticks only.
 - **No other header fields.** Do not add commit count, file-change summaries, or branch name lines. The base/title pair and the body are the full information surface.
 
-**Step 5b — Immediately call `AskUserQuestion`** with these exact parameters:
+**Step 6b — Immediately call `AskUserQuestion`** with these exact parameters:
 
 - `question`: `Approve this PR, or cancel? To request changes, select 'Other' and describe what to change.`
 - `header`: `Review PR`
@@ -126,42 +181,42 @@ Do **not** add a third "Revise" option. `AskUserQuestion` automatically appends 
 
 Do **not** add `(Recommended)` to Approve. This is a neutral human checkpoint; the agent should not lobby the user to rubber-stamp its draft.
 
-**Step 5c — Handle the answer string:**
-- Exactly `Approve — create the PR` → proceed to Step 6.
+**Step 6c — Handle the answer string:**
+- Exactly `Approve — create the PR` → proceed to Step 7.
 - Exactly `Cancel — discard this draft` → stop immediately. Do not call `mktemp`, do not write any files, do not run `gh pr create`. Briefly confirm to the user that the draft was discarded.
-- **Anything else** (the user selected "Other" and typed text) → treat the returned string as revision instructions. Update the title and/or body in memory, then **re-post the full display template from Step 5a again** with the updated content — not a diff, not a "here's what I changed" summary, not a partial block. Then call `AskUserQuestion` again with the exact same parameters from Step 5b. Repeat until the user selects Approve or Cancel.
+- **Anything else** (the user selected "Other" and typed text) → treat the returned string as revision instructions. Update the title and/or body in memory, then **re-post the full display template from Step 6a again** with the updated content — not a diff, not a "here's what I changed" summary, not a partial block. Then call `AskUserQuestion` again with the exact same parameters from Step 6b. Repeat until the user selects Approve or Cancel.
 
 ---
 
-### Step 6: Create the PR
+### Step 7: Create the PR
 
-**Precondition:** Do not start this step until the user has explicitly approved the PR in Step 5. The `mktemp`, `Write(/tmp/**)`, and `gh pr create` commands are auto-approved by this skill's `allowed-tools` frontmatter, which is why the review gate is non-optional.
+**Precondition:** Do not start this step until the user has explicitly approved the PR in Step 6. The `mktemp`, `Write(/tmp/**)`, and `gh pr create` commands are auto-approved by this skill's `allowed-tools` frontmatter, which is why the review gate is non-optional.
 
 Follow this exact three-step procedure — do not improvise, and do not combine steps.
 
-**Step 6a — Generate a unique temp path (Bash tool):**
+**Step 7a — Generate a unique temp path (Bash tool):**
 
 ```zsh
 mktemp -u /tmp/pr-body.XXXXXXXX
 ```
 
-This prints a unique path (e.g. `/tmp/pr-body.aB3xZ9qP`) **without** creating the file on disk. Capture the exact path from stdout and use it verbatim in Steps 6b and 6c. Do not edit, rename, or add an extension to it.
+This prints a unique path (e.g. `/tmp/pr-body.aB3xZ9qP`) **without** creating the file on disk. Capture the exact path from stdout and use it verbatim in Steps 7b and 7c. Do not edit, rename, or add an extension to it.
 
-**Step 6b — Write the PR body (Write tool, not Bash):**
+**Step 7b — Write the PR body (Write tool, not Bash):**
 
 Use the Claude Code `Write` tool with:
-- `file_path`: the exact path printed by Step 6a
+- `file_path`: the exact path printed by Step 7a
 - `content`: the approved PR body verbatim (no shell escaping, no backslash escapes)
 
 Because `mktemp -u` does not create the file, `Write` can create it fresh without needing a prior `Read`. The Write tool passes `content` through the tool-call JSON channel, so backticks, `$`, `%`, code fences, and embedded `EOF` markers all pass through untouched.
 
-**Step 6c — Create the PR (Bash tool):**
+**Step 7c — Create the PR (Bash tool):**
 
 ```zsh
 gh pr create \
   --base "<base-branch>" \
   --title "<approved title>" \
-  --body-file "<path from Step 6a>"
+  --body-file "<path from Step 7a>"
 ```
 
 Report the PR URL to the user. The workspace stays open for follow-up work.
@@ -175,9 +230,9 @@ Every item below is a real failure mode that has been observed. None of them are
 - **Do not pass `--body "<inline string>"`**. Shell quoting of multi-line markdown is a guaranteed breakage on PR content.
 - **Do not use a fixed temp path** like `/tmp/pr-body.md`. Multiple concurrent `/pr` invocations will clobber each other.
 - **Do not put `X`s anywhere except the end of the `mktemp` basename** (e.g. never `mktemp /tmp/foo-XXXXXX.md`). On macOS (BSD `mktemp`), trailing characters after the `X`s break the placeholder — `mktemp` may fail or literally create a file named `foo-XXXXXX.md`, defeating uniqueness. `gh pr create --body-file` does not care about file extensions, so drop the `.md`.
-- **Do not omit `-u` from `mktemp`**. Without `-u`, `mktemp` creates an empty file, which then forces the `Write` tool to require a prior `Read` before overwriting. `-u` generates the name without creating the file, which is what Step 6b needs.
+- **Do not omit `-u` from `mktemp`**. Without `-u`, `mktemp` creates an empty file, which then forces the `Write` tool to require a prior `Read` before overwriting. `-u` generates the name without creating the file, which is what Step 7b needs.
 - **Do not write the temp file before the review gate passes.** The whole point of the gate is that Cancel is side-effect-free.
-- **Do not try to combine Steps 6a and 6b in a single Bash command** (e.g. `mktemp -u ... | xargs ...`). Keep them as two explicit tool calls so the path is captured cleanly.
+- **Do not try to combine Steps 7a and 7b in a single Bash command** (e.g. `mktemp -u ... | xargs ...`). Keep them as two explicit tool calls so the path is captured cleanly.
 - **Do not pipe `git remote get-url` into `sed` or `awk`** for repo resolution. Parse the raw URL yourself (see Repo Resolution above).
 
 ---
