@@ -158,9 +158,11 @@ def default_wt_path(git: Git, branch: str) -> str:
 
 
 def classify_status(git: Git, wt_dir: str, branch: str, current_wt: str,
-                    base: str = "main") -> str:
+                    base: str = "main", network: bool = True) -> str:
     """Multi-stage classification. First match wins:
     current → merged → wip → conflict → almost → ready
+
+    Set network=False to skip the gh pr list fallback (avoids API round-trips).
     """
     import shutil
 
@@ -189,8 +191,8 @@ def classify_status(git: Git, wt_dir: str, branch: str, current_wt: str,
     except Exception:
         pass
 
-    # 2c. Squash-merge fallback via gh pr list
-    if shutil.which("gh"):
+    # 2c. Squash-merge fallback via gh pr list (skipped when network=False)
+    if network and shutil.which("gh"):
         try:
             pr_result = subprocess.run(
                 ["gh", "pr", "list", "--head", branch, "--state", "merged",
@@ -771,7 +773,7 @@ def cmd_status(git: Git, as_json: bool = False):
         for wt in worktrees:
             if wt.branch == "main":
                 continue
-            classification = classify_status(git, wt.path, wt.branch, current_wt)
+            classification = classify_status(git, wt.path, wt.branch, current_wt, network=False)
             ahead_val, behind_val = ahead_behind(git, wt.branch)
             ds = dirty_status(git, wt.path)
             items.append({
@@ -788,7 +790,7 @@ def cmd_status(git: Git, as_json: bool = False):
     for wt in worktrees:
         if wt.branch == "main":
             continue
-        classification = classify_status(git, wt.path, wt.branch, current_wt)
+        classification = classify_status(git, wt.path, wt.branch, current_wt, network=False)
         ahead_val, _ = ahead_behind(git, wt.branch)
         ds = dirty_status(git, wt.path)
         print(f"{wt.branch:<24} {classification:<10} {ahead_val} ahead, {ds}")
