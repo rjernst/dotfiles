@@ -1,5 +1,6 @@
 """Issue processing loop and poll mode."""
 
+import os
 import signal
 import sys
 import time
@@ -107,6 +108,23 @@ def process_issue(issue_number, git, dotfiles_dir, gh, agent, push, model,
     ff_ref = try_fast_forward(git, work_dir, base)
     if ff_ref:
         print(f"ralph: fast-forwarded {branch} to {ff_ref}")
+
+    # Resolve project root for project-level sandbox dependencies.
+    # Use --git-common-dir so that worktrees resolve to the main repo root
+    # (where .agent-loop/config.json lives) rather than the worktree path.
+    git_common_raw = git.output("rev-parse", "--git-common-dir", cwd=work_dir)
+    if git_common_raw:
+        repo_root = os.path.dirname(
+            os.path.realpath(os.path.join(work_dir, git_common_raw)))
+    else:
+        repo_root = git.output("rev-parse", "--show-toplevel", cwd=work_dir)
+
+    # Create runtime backend based on project config
+    config = load_runtime_config(repo_root)
+    config["project_dir"] = repo_root
+    runtime_type = config.pop("type")
+    runtime = create_runtime(runtime_type, dotfiles_dir, **config)
+
 
     # Auto-prune stale sandboxes before creating/reusing ours
     try:
