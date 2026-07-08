@@ -1,4 +1,7 @@
-"""Docker sandbox runtime backend for ralph agent-loop isolation."""
+"""Docker sandbox runtime backend for ralph agent-loop isolation.
+
+Uses ``sbx`` (Docker Sandboxes CLI) for microVM isolation.
+"""
 
 import hashlib
 import json
@@ -7,6 +10,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 
 from ralph.agents import get_agent
@@ -31,47 +35,45 @@ class DockerSandboxRuntime(DockerImageMixin, Runtime):
 
     @classmethod
     def _max_sandbox_name_length(cls):
-        """Max sandbox name length that keeps the VM's Unix domain socket
-        path within the macOS ``sockaddr_un.sun_path`` limit (104 bytes
-        including the null terminator, so 103 usable).
+        """Upper bound on sandbox names.
 
-        Docker Desktop provisions each sandbox with a socket at
-        ``~/.docker/sandboxes/vm/<name>/docker-public.sock``.  If the full
-        path exceeds 103 bytes, ``bind(2)`` fails with EINVAL and sandbox
-        creation aborts with "invalid argument".
+        sbx uses a single daemon socket (not per-sandbox sockets), so there
+        is no sandbox-name-driven path length constraint.
         """
-        socket_dir = os.path.expanduser("~/.docker/sandboxes/vm/")
-        socket_file = "/docker-public.sock"
-        return 103 - len(socket_dir) - len(socket_file)
+        return None
 
     def check_prerequisites(self):
-        """Check that Docker is available. Returns list of error messages."""
+        """Check that Docker and sbx are available. Returns list of error messages."""
         errors = []
         if not shutil.which("docker"):
             errors.append("docker is not installed")
+        if not shutil.which("sbx"):
+            errors.append(
+                "sbx is not installed — install with: "
+                "brew trust docker/tap && brew install docker/tap/sbx")
         return errors
 
     # -- Sandbox lifecycle --------------------------------------------------
 
     @staticmethod
     def _docker_sandbox_ls():
-        """List sandboxes via 'docker sandbox ls --json'. Returns parsed JSON."""
+        """List sandboxes via 'sbx ls --json'. Returns parsed JSON."""
         result = subprocess.run(
-            ["docker", "sandbox", "ls", "--json"],
+            ["sbx", "ls", "--json"],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
             check=False,
         )
         if result.returncode != 0:
-            return {"vms": []}
+            return {"sandboxes": []}
         try:
             return json.loads(result.stdout)
         except (json.JSONDecodeError, ValueError):
-            return {"vms": []}
+            return {"sandboxes": []}
 
     def sandbox_exists(self, name):
         """Check if a sandbox with the given name exists."""
         data = self._docker_sandbox_ls()
-        for vm in data.get("vms", []):
+        for vm in data.get("sandboxes", []):
             if vm.get("name") == name:
                 return True
         return False
@@ -79,21 +81,20 @@ class DockerSandboxRuntime(DockerImageMixin, Runtime):
     @staticmethod
     def _docker_sandbox_create(name, tag, worktree_path, git_common_dir=None,
                                sandbox_agent="claude"):
-        """Create a new Docker sandbox.
+        """Create a new Docker sandbox via sbx.
 
         Passes worktree_path as the primary workspace.  When git_common_dir is
         provided (the repo's shared .git directory), it is added as a second
         workspace so that the worktree's .git pointer resolves inside the
         sandbox.
 
-        sandbox_agent is the docker sandbox subcommand (e.g. "claude" or
-        "shell") — looked up from the agent config's sandbox_agent field.
+        sandbox_agent is the sbx agent subcommand (e.g. "claude" or "shell").
         """
         workspaces = [worktree_path]
         if git_common_dir:
             workspaces.append(git_common_dir)
         subprocess.run(
-            ["docker", "sandbox", "create",
+            ["sbx", "create",
              "--name", name, "-t", tag, sandbox_agent] + workspaces,
             check=True,
         )
@@ -101,7 +102,7 @@ class DockerSandboxRuntime(DockerImageMixin, Runtime):
     @staticmethod
     def exec_output(sandbox_name, *cmd, workdir=None):
         """Run a command inside the sandbox and return its stdout (stripped)."""
-        base = ["docker", "sandbox", "exec"]
+        base = ["sbx", "exec"]
         if workdir:
             base.extend(["-w", workdir])
         base.append(sandbox_name)
@@ -112,29 +113,19 @@ class DockerSandboxRuntime(DockerImageMixin, Runtime):
         return result.stdout.strip() if result.returncode == 0 else ""
 
     def check_in_sync(self, sandbox_name, work_dir, git):
-        """Check if sandbox can access the host worktree's git state.
-
-        With a shared .git directory the sandbox and host see the same
-        commits, so we just verify that git resolves HEAD at the worktree
-        path inside the sandbox and it matches the host.
-        """
+        """Check if sandbox can access the host worktree's git state."""
         host_head = git.output("rev-parse", "HEAD", cwd=work_dir)
         sandbox_head = self.exec_output(
             sandbox_name, "git", "rev-parse", "HEAD", workdir=work_dir)
         return bool(host_head and sandbox_head and host_head == sandbox_head)
 
     def reset_to_host(self, sandbox_name, work_dir, git):
-        """Reset sandbox worktree to match host HEAD.
-
-        With a shared .git the sandbox already sees the same commits as
-        the host.  A reset is only needed when a prior iteration left
-        uncommitted changes or a detached HEAD.
-        """
+        """Reset sandbox worktree to match host HEAD."""
         host_head = git.output("rev-parse", "HEAD", cwd=work_dir)
         if not host_head:
             return False
 
-        base = ["docker", "sandbox", "exec", "-w", work_dir, sandbox_name]
+        base = ["sbx", "exec", "-w", work_dir, sandbox_name]
         rc = subprocess.run(
             base + ["git", "reset", "--hard", host_head],
             check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
@@ -152,7 +143,6 @@ class DockerSandboxRuntime(DockerImageMixin, Runtime):
 
         With a shared .git directory, commits made inside the sandbox are
         already present in the host repo — no patch extraction needed.
-        This method just confirms the host can resolve head_after.
         """
         result = subprocess.run(
             ["git", "rev-parse", "--verify", head_after],
@@ -166,27 +156,89 @@ class DockerSandboxRuntime(DockerImageMixin, Runtime):
         print(f"ralph: synced commits to {work_dir}")
         return True
 
+    @staticmethod
+    def _ensure_global_policy():
+        """Initialize the global sbx network policy to deny-all if not set.
+
+        Idempotent: silently ignores the 'already initialized' error.
+        """
+        subprocess.run(
+            ["sbx", "policy", "init", "deny-all"],
+            check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+
+    @staticmethod
+    def _sbx_template_ls():
+        """List sbx templates. Returns list of (repository, tag) tuples."""
+        result = subprocess.run(
+            ["sbx", "template", "ls"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            check=False,
+        )
+        templates = []
+        if result.returncode != 0:
+            return templates
+        lines = result.stdout.strip().splitlines()
+        for line in lines[1:]:  # skip header
+            parts = line.split()
+            if len(parts) >= 2:
+                templates.append((parts[0], parts[1]))
+        return templates
+
+    def _sbx_template_loaded(self, tag):
+        """Check if a Docker image tag is already loaded in the sbx template store."""
+        if ":" in tag:
+            name, version = tag.rsplit(":", 1)
+        else:
+            name, version = tag, "latest"
+        for repo, tmpl_tag in self._sbx_template_ls():
+            # sbx prefixes with docker.io/library/ for unqualified image names
+            if name in repo and tmpl_tag == version:
+                return True
+        return False
+
+    def _ensure_template_loaded(self, tag):
+        """Ensure a locally-built Docker image is loaded into the sbx template store.
+
+        sbx uses microVMs and cannot access Docker's local image store directly.
+        This exports the image to a tar and loads it into sbx's template store.
+        Skips if the tag is already present.
+        """
+        if self._sbx_template_loaded(tag):
+            return
+        print(f"ralph: loading template {tag} into sbx...")
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tar_path = os.path.join(tmp_dir, "image.tar")
+            subprocess.run(
+                ["docker", "save", tag, "-o", tar_path],
+                check=True, stdout=subprocess.DEVNULL,
+            )
+            subprocess.run(["sbx", "template", "load", tar_path], check=True)
+
     def apply_network_policy(self, name, allowed_hosts):
-        """Apply deny-by-default network policy with allowed hosts.
+        """Apply network policy: deny-all globally, then allow specific hosts per sandbox.
 
         allowed_hosts is the list of hosts from the agent config's
         allowed_hosts field.  Project-level hosts from the constructor
-        are appended.  "localhost" is always included.
+        are appended.  host.docker.internal and localhost are always
+        included so the credential proxy remains reachable.
+
+        Both are required: host.docker.internal for direct connections,
+        and localhost because the sbx gateway resolves host.docker.internal
+        to 127.0.0.1 (the host) when checking proxy-forwarded requests.
         """
-        cmd = ["docker", "sandbox", "network", "proxy", name,
-               "--policy", "deny",
-               "--allow-host", "localhost"]
-        for host in list(allowed_hosts) + list(self.allowed_hosts):
-            cmd.extend(["--allow-host", host])
-        subprocess.run(cmd, check=True)
+        all_hosts = (["host.docker.internal", "localhost"]
+                     + list(allowed_hosts)
+                     + list(self.allowed_hosts))
+        hosts_str = ",".join(all_hosts)
+        subprocess.run(
+            ["sbx", "policy", "allow", "network", "--sandbox", name, hosts_str],
+            check=True,
+        )
 
     @staticmethod
     def _config_fingerprint(tag, allowed_hosts, worktree_path, git_common_dir):
-        """Compute a fingerprint of the sandbox configuration.
-
-        Captures everything that goes into sandbox creation so that config
-        changes (image, network policy, workspace paths) trigger a recreate.
-        """
+        """Compute a fingerprint of the sandbox configuration."""
         config = json.dumps({
             "tag": tag,
             "allowed_hosts": sorted(set(allowed_hosts)),
@@ -202,7 +254,7 @@ class DockerSandboxRuntime(DockerImageMixin, Runtime):
     def _write_sandbox_fingerprint(self, name, fingerprint):
         """Write the config fingerprint inside the sandbox."""
         subprocess.run(
-            ["docker", "sandbox", "exec", "-i", name,
+            ["sbx", "exec", "-i", name,
              "tee", "/tmp/.sandbox-config"],
             input=fingerprint, text=True, check=False,
             stdout=subprocess.DEVNULL,
@@ -214,9 +266,6 @@ class DockerSandboxRuntime(DockerImageMixin, Runtime):
 
         Reuses an existing sandbox if its config fingerprint matches.
         Otherwise removes the stale sandbox and creates a fresh one.
-        If project_dir is provided, builds a project-level image layer.
-        The host repo's shared .git directory is mounted as a second
-        workspace so the worktree's .git pointer resolves inside the sandbox.
         Returns the sandbox name.
         """
         agent_config = get_agent(agent)
@@ -244,6 +293,9 @@ class DockerSandboxRuntime(DockerImageMixin, Runtime):
             print(f"ralph: config changed, recreating sandbox {name}")
             self.remove_sandbox(name)
 
+        self._ensure_global_policy()
+        self._ensure_template_loaded(tag)
+
         print(f"ralph: creating sandbox {name}...")
         self._docker_sandbox_create(name, tag, worktree_path, git_common_dir,
                                     sandbox_agent=agent_config["sandbox_agent"])
@@ -254,11 +306,7 @@ class DockerSandboxRuntime(DockerImageMixin, Runtime):
 
     @staticmethod
     def _resolve_git_common_dir(worktree_path):
-        """Resolve the shared .git directory for a worktree (or regular repo).
-
-        Returns the absolute path to the repo's .git directory, or None
-        if git rev-parse fails (e.g. not a git repo).
-        """
+        """Resolve the shared .git directory for a worktree (or regular repo)."""
         result = subprocess.run(
             ["git", "rev-parse", "--git-common-dir"],
             cwd=worktree_path, capture_output=True, text=True, check=False,
@@ -273,7 +321,7 @@ class DockerSandboxRuntime(DockerImageMixin, Runtime):
         name = self.sandbox_name(agent, branch)
         print(f"ralph: removing sandbox {name}")
         subprocess.run(
-            ["docker", "sandbox", "rm", name],
+            ["sbx", "rm", "--force", name],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             check=False,
         )
@@ -284,7 +332,7 @@ class DockerSandboxRuntime(DockerImageMixin, Runtime):
 
         A sandbox is pruned if its workspace path no longer exists OR if it
         has not been used within max_age_days.  Sandboxes with no recorded
-        timestamp are treated as stale (they predate timestamp tracking).
+        timestamp are treated as stale.
 
         Returns list of pruned sandbox names.
         """
@@ -295,22 +343,21 @@ class DockerSandboxRuntime(DockerImageMixin, Runtime):
         now = time.time()
         cutoff = now - max_age_days * 86400
         pruned = []
-        for vm in data.get("vms", []):
+        for vm in data.get("sandboxes", []):
             name = vm.get("name", "")
             if not name.startswith(prefix):
                 continue
-            # Workspace gone — always prune
-            workspace = vm.get("workspace", "")
+            workspaces = vm.get("workspaces", [])
+            workspace = workspaces[0] if workspaces else ""
             if not workspace or not os.path.exists(workspace):
                 print(f"ralph: pruning orphan sandbox {name}")
             else:
-                # Workspace exists — prune only if stale
                 last_used = self._sandbox_last_used(name)
                 if last_used is not None and last_used >= cutoff:
                     continue
                 print(f"ralph: pruning stale sandbox {name}")
             subprocess.run(
-                ["docker", "sandbox", "rm", name],
+                ["sbx", "rm", "--force", name],
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                 check=False,
             )
@@ -323,17 +370,17 @@ class DockerSandboxRuntime(DockerImageMixin, Runtime):
     def setup_git_config(self, sandbox_name, user, email):
         """Configure git user and safe directory settings inside the sandbox."""
         subprocess.run(
-            ["docker", "sandbox", "exec", sandbox_name,
+            ["sbx", "exec", sandbox_name,
              "git", "config", "--global", "user.name", user],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False,
         )
         subprocess.run(
-            ["docker", "sandbox", "exec", sandbox_name,
+            ["sbx", "exec", sandbox_name,
              "git", "config", "--global", "user.email", email],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False,
         )
         subprocess.run(
-            ["docker", "sandbox", "exec", sandbox_name,
+            ["sbx", "exec", sandbox_name,
              "git", "config", "--global", "--add", "safe.directory", "*"],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False,
         )
@@ -346,9 +393,6 @@ class DockerSandboxRuntime(DockerImageMixin, Runtime):
         agent CLI with the iteration prompt, then reads back the (possibly
         updated) spec.
 
-        For cursor agent, the API key is delivered via a secret file that
-        is read into an env var and deleted before the agent process starts.
-
         Returns (exit_code, updated_spec_content).
         """
         agent_config = get_agent(agent)
@@ -356,7 +400,7 @@ class DockerSandboxRuntime(DockerImageMixin, Runtime):
 
         # Write spec into sandbox (-i keeps stdin open for piping)
         write_proc = subprocess.run(
-            ["docker", "sandbox", "exec", "-i", sandbox_name,
+            ["sbx", "exec", "-i", sandbox_name,
              "tee", spec_path],
             input=spec_content, text=True, check=False,
             stdout=subprocess.DEVNULL,
@@ -368,7 +412,7 @@ class DockerSandboxRuntime(DockerImageMixin, Runtime):
         secret_path = "/tmp/.agent-api-key"
         if not agent_config["uses_proxy"] and api_key:
             key_proc = subprocess.run(
-                ["docker", "sandbox", "exec", "-i", sandbox_name,
+                ["sbx", "exec", "-i", sandbox_name,
                  "tee", secret_path],
                 input=api_key, text=True, check=False,
                 stdout=subprocess.DEVNULL,
@@ -381,8 +425,7 @@ class DockerSandboxRuntime(DockerImageMixin, Runtime):
         cli_flags = agent_config["cli_flags"](model)
 
         if agent_config["uses_proxy"]:
-            # Direct exec: docker sandbox exec ... <cli_command> -p <prompt> --model <model> <flags>
-            cmd = ["docker", "sandbox", "exec",
+            cmd = ["sbx", "exec",
                    "-w", self._worktree_path]
             if env_vars:
                 for k, v in env_vars.items():
@@ -392,11 +435,8 @@ class DockerSandboxRuntime(DockerImageMixin, Runtime):
                 "-p", self.iteration_prompt(spec_path),
                 "--model", model,
             ] + cli_flags)
-            rc = subprocess.run(cmd, check=False).returncode
+            rc = subprocess.run(cmd, stdin=subprocess.DEVNULL, check=False).returncode
         else:
-            # Secret file lifecycle: read key into env var, delete file,
-            # then exec the agent (exec replaces the shell, so the key
-            # exists only in the agent process's environment).
             env_var_name = agent_config["env_var_name"]
             inner_cmd = (
                 f'export {env_var_name}="$(cat {secret_path})" && '
@@ -407,14 +447,14 @@ class DockerSandboxRuntime(DockerImageMixin, Runtime):
             )
             for flag in cli_flags:
                 inner_cmd += f" {shlex.quote(flag)}"
-            cmd = ["docker", "sandbox", "exec",
+            cmd = ["sbx", "exec",
                    "-w", self._worktree_path,
                    sandbox_name, "sh", "-c", inner_cmd]
-            rc = subprocess.run(cmd, check=False).returncode
+            rc = subprocess.run(cmd, stdin=subprocess.DEVNULL, check=False).returncode
 
         # Read back (possibly updated) spec
         read_proc = subprocess.run(
-            ["docker", "sandbox", "exec", sandbox_name, "cat", spec_path],
+            ["sbx", "exec", sandbox_name, "cat", spec_path],
             stdout=subprocess.PIPE, text=True, check=False,
         )
         updated = read_proc.stdout if read_proc.returncode == 0 else spec_content
@@ -426,7 +466,7 @@ class DockerSandboxRuntime(DockerImageMixin, Runtime):
     def remove_sandbox(self, name):
         """Remove a sandbox by name (best-effort)."""
         subprocess.run(
-            ["docker", "sandbox", "rm", name],
+            ["sbx", "rm", "--force", name],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             check=False,
         )
@@ -435,26 +475,28 @@ class DockerSandboxRuntime(DockerImageMixin, Runtime):
     # -- Pre-flight validation ------------------------------------------------
 
     def _preflight_backend_checks(self, sandbox_name):
-        """Docker-specific pre-flight checks: sandbox responsiveness and network policy."""
+        """Docker sandbox-specific pre-flight checks: sandbox responsiveness and network policy."""
         failures = []
         sandbox_ok = False
         result = subprocess.run(
-            ["docker", "sandbox", "exec", sandbox_name, "echo", "ok"],
+            ["sbx", "exec", sandbox_name, "echo", "ok"],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
             check=False,
         )
         if result.returncode != 0:
             failures.append(
                 f"sandbox {sandbox_name} is not responding"
-                f" — try: docker sandbox rm {sandbox_name}")
+                f" — try: sbx rm --force {sandbox_name}")
         else:
             sandbox_ok = True
 
-        # Network policy applied (only if sandbox is responsive)
+        # Network policy applied (only if sandbox is responsive).
+        # Use -sf so curl exits non-zero on HTTP 4xx (sbx gateway blocks via
+        # MITM 403, not TCP-level refusal, so -f is required to detect blocking).
         if sandbox_ok:
             result = subprocess.run(
-                ["docker", "sandbox", "exec", sandbox_name,
-                 "curl", "-s", "--max-time", "3", "https://google.com"],
+                ["sbx", "exec", sandbox_name,
+                 "curl", "-sf", "--max-time", "3", "https://google.com"],
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                 check=False,
             )

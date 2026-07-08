@@ -966,7 +966,7 @@ class TestSandboxName:
 
 
 # ---------------------------------------------------------------------------
-# Runtime.sandbox_name length capping (addresses macOS sun_path limit)
+# Runtime.sandbox_name length (no limit for sbx backend)
 # ---------------------------------------------------------------------------
 
 class TestSandboxNameTruncation:
@@ -976,17 +976,14 @@ class TestSandboxNameTruncation:
         name = Runtime.sandbox_name("claude", "x" * 200)
         assert name == "agent-loop-claude-" + "x" * 200
 
-    def test_docker_sandbox_limit_matches_socket_budget(self):
-        """DockerSandboxRuntime limit = 103 - len(socket_dir) - len(socket_file)."""
-        limit = DockerSandboxRuntime._max_sandbox_name_length()
-        socket_dir = os.path.expanduser("~/.docker/sandboxes/vm/")
-        expected = 103 - len(socket_dir) - len("/docker-public.sock")
-        assert limit == expected
+    def test_docker_sandbox_has_no_limit(self):
+        """DockerSandboxRuntime uses sbx (single daemon socket) — no name length constraint."""
+        assert DockerSandboxRuntime._max_sandbox_name_length() is None
 
-    def test_no_truncation_when_under_limit(self):
-        """Short names pass through unchanged."""
-        name = DockerSandboxRuntime.sandbox_name("claude", "short-branch")
-        assert name == "agent-loop-claude-short-branch"
+    def test_no_truncation_for_long_names(self):
+        """Long names pass through unchanged since sbx has no socket path limit."""
+        name = DockerSandboxRuntime.sandbox_name("claude", "x" * 200)
+        assert name == "agent-loop-claude-" + "x" * 200
 
     @patch.object(DockerSandboxRuntime, "_max_sandbox_name_length")
     def test_truncation_applied_when_over_limit(self, mock_max):
@@ -1018,15 +1015,10 @@ class TestSandboxNameTruncation:
     def test_truncation_strips_trailing_hyphen_before_hash(self, mock_max):
         """Avoid '--' artifact when truncation lands on a hyphen."""
         mock_max.return_value = 48
-        # 18-char prefix "agent-loop-claude-" + 20 'a's + '-' would make
-        # character index 39 land exactly on a hyphen; the 39-char cut
-        # (48 - 9 for the "-<8 hash>" suffix) should have its trailing
-        # hyphen stripped.
         branch = "a" * 20 + "-tail-that-pushes-well-over-the-limit"
         name = DockerSandboxRuntime.sandbox_name("claude", branch)
         assert "--" not in name
         assert len(name) <= 48
-        # Hash suffix is always exactly 9 chars: "-" + 8 hex chars.
         assert name[-9] == "-"
         assert all(c in "0123456789abcdef" for c in name[-8:])
 
@@ -1039,7 +1031,7 @@ class TestSandboxNameTruncation:
 
 
 # ---------------------------------------------------------------------------
-# DockerSandboxRuntime.ensure_sandbox (mocked docker)
+# DockerSandboxRuntime.ensure_sandbox (mocked sbx)
 # ---------------------------------------------------------------------------
 
 class TestSandboxEnsureSandbox:
@@ -1053,14 +1045,19 @@ class TestSandboxEnsureSandbox:
     @patch.object(DockerSandboxRuntime, "_write_sandbox_fingerprint")
     @patch.object(DockerSandboxRuntime, "apply_network_policy")
     @patch.object(DockerSandboxRuntime, "_docker_sandbox_create")
+    @patch.object(DockerSandboxRuntime, "_ensure_template_loaded")
+    @patch.object(DockerSandboxRuntime, "_ensure_global_policy")
     @patch.object(DockerSandboxRuntime, "_resolve_git_common_dir", return_value="/repo/.git")
     @patch.object(DockerSandboxRuntime, "ensure_image", return_value="agent-loop-sandbox-claude:vabc")
     @patch.object(DockerSandboxRuntime, "sandbox_exists", return_value=False)
     def test_creates_new_sandbox(self, mock_exists, mock_img, mock_resolve,
-                                 mock_create, mock_policy, mock_write_fp):
+                                 mock_policy_init, mock_tmpl, mock_create,
+                                 mock_policy, mock_write_fp):
         sb = DockerSandboxRuntime("/dotfiles")
         name = sb.ensure_sandbox("claude", "fix-auth", "/work/fix-auth")
         assert name == "agent-loop-claude-fix-auth"
+        mock_policy_init.assert_called_once()
+        mock_tmpl.assert_called_once_with("agent-loop-sandbox-claude:vabc")
         mock_create.assert_called_once_with(
             "agent-loop-claude-fix-auth", "agent-loop-sandbox-claude:vabc",
             "/work/fix-auth", "/repo/.git", sandbox_agent="claude")
@@ -1100,12 +1097,15 @@ class TestSandboxEnsureSandbox:
     @patch.object(DockerSandboxRuntime, "_read_sandbox_fingerprint", return_value="old")
     @patch.object(DockerSandboxRuntime, "apply_network_policy")
     @patch.object(DockerSandboxRuntime, "_docker_sandbox_create")
+    @patch.object(DockerSandboxRuntime, "_ensure_template_loaded")
+    @patch.object(DockerSandboxRuntime, "_ensure_global_policy")
     @patch.object(DockerSandboxRuntime, "remove_sandbox")
     @patch.object(DockerSandboxRuntime, "_resolve_git_common_dir", return_value="/repo/.git")
     @patch.object(DockerSandboxRuntime, "ensure_image", return_value="agent-loop-sandbox-claude:vabc")
     @patch.object(DockerSandboxRuntime, "sandbox_exists", return_value=True)
     def test_recreates_on_config_change(self, mock_exists, mock_img, mock_resolve,
-                                        mock_remove, mock_create, mock_policy,
+                                        mock_remove, mock_policy_init, mock_tmpl,
+                                        mock_create, mock_policy,
                                         mock_read_fp, mock_fp, mock_write_fp):
         sb = DockerSandboxRuntime("/dotfiles")
         name = sb.ensure_sandbox("claude", "fix-auth", "/work/fix-auth")
@@ -1118,6 +1118,8 @@ class TestSandboxEnsureSandbox:
     @patch.object(DockerSandboxRuntime, "_write_sandbox_fingerprint")
     @patch.object(DockerSandboxRuntime, "apply_network_policy")
     @patch.object(DockerSandboxRuntime, "_docker_sandbox_create")
+    @patch.object(DockerSandboxRuntime, "_ensure_template_loaded")
+    @patch.object(DockerSandboxRuntime, "_ensure_global_policy")
     @patch.object(DockerSandboxRuntime, "_resolve_git_common_dir", return_value="/repo/.git")
     @patch.object(DockerSandboxRuntime, "ensure_project_image",
                   return_value="agent-loop-sandbox-claude-myproj:vdef12345")
@@ -1126,13 +1128,15 @@ class TestSandboxEnsureSandbox:
     @patch.object(DockerSandboxRuntime, "sandbox_exists", return_value=False)
     def test_calls_ensure_project_image_when_project_dir(
             self, mock_exists, mock_img, mock_proj, mock_resolve,
-            mock_create, mock_policy, mock_write_fp):
+            mock_policy_init, mock_tmpl, mock_create, mock_policy, mock_write_fp):
         sb = DockerSandboxRuntime("/dotfiles")
         sb.ensure_sandbox("claude", "fix-auth", "/work/fix-auth",
                           project_dir="/repo/root")
         mock_proj.assert_called_once_with(
             "claude", "agent-loop-sandbox-claude:vabc", "/repo/root",
             force_rebuild=False)
+        mock_tmpl.assert_called_once_with(
+            "agent-loop-sandbox-claude-myproj:vdef12345")
         mock_create.assert_called_once_with(
             "agent-loop-claude-fix-auth",
             "agent-loop-sandbox-claude-myproj:vdef12345",
@@ -1141,13 +1145,15 @@ class TestSandboxEnsureSandbox:
     @patch.object(DockerSandboxRuntime, "_write_sandbox_fingerprint")
     @patch.object(DockerSandboxRuntime, "apply_network_policy")
     @patch.object(DockerSandboxRuntime, "_docker_sandbox_create")
+    @patch.object(DockerSandboxRuntime, "_ensure_template_loaded")
+    @patch.object(DockerSandboxRuntime, "_ensure_global_policy")
     @patch.object(DockerSandboxRuntime, "_resolve_git_common_dir", return_value="/repo/.git")
     @patch.object(DockerSandboxRuntime, "ensure_image",
                   return_value="agent-loop-sandbox-claude:vabc")
     @patch.object(DockerSandboxRuntime, "sandbox_exists", return_value=False)
     def test_skips_project_image_when_no_project_dir(
-            self, mock_exists, mock_img, mock_resolve, mock_create,
-            mock_policy, mock_write_fp):
+            self, mock_exists, mock_img, mock_resolve, mock_policy_init,
+            mock_tmpl, mock_create, mock_policy, mock_write_fp):
         sb = DockerSandboxRuntime("/dotfiles")
         with patch.object(DockerSandboxRuntime, "ensure_project_image") as mock_proj:
             sb.ensure_sandbox("claude", "fix-auth", "/work/fix-auth")
@@ -1160,6 +1166,8 @@ class TestSandboxEnsureSandbox:
     @patch.object(DockerSandboxRuntime, "_write_sandbox_fingerprint")
     @patch.object(DockerSandboxRuntime, "apply_network_policy")
     @patch.object(DockerSandboxRuntime, "_docker_sandbox_create")
+    @patch.object(DockerSandboxRuntime, "_ensure_template_loaded")
+    @patch.object(DockerSandboxRuntime, "_ensure_global_policy")
     @patch.object(DockerSandboxRuntime, "_resolve_git_common_dir", return_value="/repo/.git")
     @patch.object(DockerSandboxRuntime, "ensure_project_image",
                   return_value="agent-loop-sandbox-claude-myproj:vdef12345")
@@ -1168,7 +1176,7 @@ class TestSandboxEnsureSandbox:
     @patch.object(DockerSandboxRuntime, "sandbox_exists", return_value=False)
     def test_force_rebuild_passed_through(
             self, mock_exists, mock_img, mock_proj, mock_resolve,
-            mock_create, mock_policy, mock_write_fp):
+            mock_policy_init, mock_tmpl, mock_create, mock_policy, mock_write_fp):
         sb = DockerSandboxRuntime("/dotfiles")
         sb.ensure_sandbox("claude", "fix-auth", "/work/fix-auth",
                           project_dir="/repo/root", force_rebuild=True)
@@ -1180,11 +1188,14 @@ class TestSandboxEnsureSandbox:
     @patch.object(DockerSandboxRuntime, "_write_sandbox_fingerprint")
     @patch.object(DockerSandboxRuntime, "apply_network_policy")
     @patch.object(DockerSandboxRuntime, "_docker_sandbox_create")
+    @patch.object(DockerSandboxRuntime, "_ensure_template_loaded")
+    @patch.object(DockerSandboxRuntime, "_ensure_global_policy")
     @patch.object(DockerSandboxRuntime, "_resolve_git_common_dir", return_value="/repo/.git")
     @patch.object(DockerSandboxRuntime, "ensure_image", return_value="agent-loop-sandbox-cursor:vabc")
     @patch.object(DockerSandboxRuntime, "sandbox_exists", return_value=False)
     def test_cursor_uses_shell_sandbox_agent(self, mock_exists, mock_img,
-                                             mock_resolve, mock_create,
+                                             mock_resolve, mock_policy_init,
+                                             mock_tmpl, mock_create,
                                              mock_policy, mock_write_fp):
         sb = DockerSandboxRuntime("/dotfiles")
         name = sb.ensure_sandbox("cursor", "fix-auth", "/work/fix-auth")
@@ -1207,12 +1218,9 @@ class TestSandboxApplyNetworkPolicy:
         allowed = ["api.anthropic.com", "statsig.anthropic.com", "sentry.io"]
         DockerSandboxRuntime("/dotfiles").apply_network_policy("agent-loop-claude-fix-auth", allowed)
         mock_run.assert_called_once_with(
-            ["docker", "sandbox", "network", "proxy", "agent-loop-claude-fix-auth",
-             "--policy", "deny",
-             "--allow-host", "localhost",
-             "--allow-host", "api.anthropic.com",
-             "--allow-host", "statsig.anthropic.com",
-             "--allow-host", "sentry.io"],
+            ["sbx", "policy", "allow", "network",
+             "--sandbox", "agent-loop-claude-fix-auth",
+             "host.docker.internal,localhost,api.anthropic.com,statsig.anthropic.com,sentry.io"],
             check=True,
         )
 
@@ -1221,11 +1229,9 @@ class TestSandboxApplyNetworkPolicy:
         allowed = ["*.cursor.sh", "sentry.io"]
         DockerSandboxRuntime("/dotfiles").apply_network_policy("agent-loop-cursor-fix-auth", allowed)
         mock_run.assert_called_once_with(
-            ["docker", "sandbox", "network", "proxy", "agent-loop-cursor-fix-auth",
-             "--policy", "deny",
-             "--allow-host", "localhost",
-             "--allow-host", "*.cursor.sh",
-             "--allow-host", "sentry.io"],
+            ["sbx", "policy", "allow", "network",
+             "--sandbox", "agent-loop-cursor-fix-auth",
+             "host.docker.internal,localhost,*.cursor.sh,sentry.io"],
             check=True,
         )
 
@@ -1235,25 +1241,114 @@ class TestSandboxApplyNetworkPolicy:
         sb.apply_network_policy("agent-loop-claude-fix-auth",
                                 ["api.anthropic.com", "statsig.anthropic.com", "sentry.io"])
         mock_run.assert_called_once_with(
-            ["docker", "sandbox", "network", "proxy", "agent-loop-claude-fix-auth",
-             "--policy", "deny",
-             "--allow-host", "localhost",
-             "--allow-host", "api.anthropic.com",
-             "--allow-host", "statsig.anthropic.com",
-             "--allow-host", "sentry.io",
-             "--allow-host", "pypi.org",
-             "--allow-host", "registry.npmjs.org"],
+            ["sbx", "policy", "allow", "network",
+             "--sandbox", "agent-loop-claude-fix-auth",
+             "host.docker.internal,localhost,api.anthropic.com,statsig.anthropic.com,sentry.io,pypi.org,registry.npmjs.org"],
             check=True,
         )
 
     @patch("ralph.runtime.docker_sandbox.subprocess.run")
-    def test_localhost_always_included(self, mock_run):
+    def test_host_docker_internal_always_included(self, mock_run):
         DockerSandboxRuntime("/dotfiles").apply_network_policy("sandbox", ["example.com"])
         cmd = mock_run.call_args[0][0]
-        # localhost should appear before the custom host
-        assert "--allow-host" in cmd
-        idx = cmd.index("localhost")
-        assert cmd[idx - 1] == "--allow-host"
+        hosts_arg = cmd[-1]
+        assert "host.docker.internal" in hosts_arg
+        assert "localhost" in hosts_arg
+        assert hosts_arg.startswith("host.docker.internal,localhost,")
+
+
+# ---------------------------------------------------------------------------
+# DockerSandboxRuntime._ensure_global_policy
+# ---------------------------------------------------------------------------
+
+class TestEnsureGlobalPolicy:
+    @patch("ralph.runtime.docker_sandbox.subprocess.run")
+    def test_runs_sbx_policy_init_deny_all(self, mock_run):
+        DockerSandboxRuntime._ensure_global_policy()
+        mock_run.assert_called_once_with(
+            ["sbx", "policy", "init", "deny-all"],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+
+    @patch("ralph.runtime.docker_sandbox.subprocess.run")
+    def test_ignores_failure(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=1)
+        DockerSandboxRuntime._ensure_global_policy()  # should not raise
+
+
+# ---------------------------------------------------------------------------
+# DockerSandboxRuntime._sbx_template_ls and _sbx_template_loaded
+# ---------------------------------------------------------------------------
+
+class TestSbxTemplateLoaded:
+    @patch("ralph.runtime.docker_sandbox.subprocess.run")
+    def test_sbx_template_ls_parses_output(self, mock_run):
+        mock_run.return_value = MagicMock(
+            returncode=0,
+            stdout=(
+                "REPOSITORY                                    TAG        IMAGE ID    FLAVOR\n"
+                "docker.io/library/agent-loop-sandbox-claude   v01d50ddb  542afdc3e   claude-code\n"
+                "docker.io/docker/sandbox-templates            claude-code 9a3bab17  claude-code\n"
+            )
+        )
+        templates = DockerSandboxRuntime._sbx_template_ls()
+        assert len(templates) == 2
+        assert ("docker.io/library/agent-loop-sandbox-claude", "v01d50ddb") in templates
+
+    @patch("ralph.runtime.docker_sandbox.subprocess.run")
+    def test_sbx_template_ls_returns_empty_on_failure(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=1, stdout="")
+        assert DockerSandboxRuntime._sbx_template_ls() == []
+
+    @patch.object(DockerSandboxRuntime, "_sbx_template_ls")
+    def test_loaded_when_tag_present(self, mock_ls):
+        mock_ls.return_value = [
+            ("docker.io/library/agent-loop-sandbox-claude", "v01d50ddb"),
+        ]
+        sb = DockerSandboxRuntime("/dotfiles")
+        assert sb._sbx_template_loaded("agent-loop-sandbox-claude:v01d50ddb") is True
+
+    @patch.object(DockerSandboxRuntime, "_sbx_template_ls")
+    def test_not_loaded_when_tag_absent(self, mock_ls):
+        mock_ls.return_value = [
+            ("docker.io/docker/sandbox-templates", "claude-code"),
+        ]
+        sb = DockerSandboxRuntime("/dotfiles")
+        assert sb._sbx_template_loaded("agent-loop-sandbox-claude:v01d50ddb") is False
+
+    @patch.object(DockerSandboxRuntime, "_sbx_template_ls")
+    def test_not_loaded_when_store_empty(self, mock_ls):
+        mock_ls.return_value = []
+        sb = DockerSandboxRuntime("/dotfiles")
+        assert sb._sbx_template_loaded("agent-loop-sandbox-claude:v01d50ddb") is False
+
+
+# ---------------------------------------------------------------------------
+# DockerSandboxRuntime._ensure_template_loaded
+# ---------------------------------------------------------------------------
+
+class TestEnsureTemplateLoaded:
+    @patch.object(DockerSandboxRuntime, "_sbx_template_loaded", return_value=True)
+    def test_skips_when_already_loaded(self, mock_loaded):
+        sb = DockerSandboxRuntime("/dotfiles")
+        with patch("ralph.runtime.docker_sandbox.subprocess.run") as mock_run:
+            sb._ensure_template_loaded("agent-loop-sandbox-claude:v01d50ddb")
+            mock_run.assert_not_called()
+
+    @patch("ralph.runtime.docker_sandbox.subprocess.run")
+    @patch.object(DockerSandboxRuntime, "_sbx_template_loaded", return_value=False)
+    def test_saves_and_loads_when_not_present(self, mock_loaded, mock_run):
+        mock_run.return_value = MagicMock(returncode=0)
+        sb = DockerSandboxRuntime("/dotfiles")
+        sb._ensure_template_loaded("agent-loop-sandbox-claude:v01d50ddb")
+        calls = mock_run.call_args_list
+        save_calls = [c for c in calls if c[0][0][0] == "docker" and "save" in c[0][0]]
+        load_calls = [c for c in calls if c[0][0][0] == "sbx" and "load" in c[0][0]]
+        assert len(save_calls) == 1
+        assert len(load_calls) == 1
+        assert "agent-loop-sandbox-claude:v01d50ddb" in save_calls[0][0][0]
 
 
 # ---------------------------------------------------------------------------
@@ -1265,37 +1360,35 @@ class TestSandboxCleanup:
     def test_removes_sandbox(self, mock_run):
         DockerSandboxRuntime("/dotfiles").cleanup_sandbox("claude", "fix-auth")
         mock_run.assert_called_once_with(
-            ["docker", "sandbox", "rm", "agent-loop-claude-fix-auth"],
+            ["sbx", "rm", "--force", "agent-loop-claude-fix-auth"],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             check=False,
         )
 
 
 # ---------------------------------------------------------------------------
-# DockerSandboxRuntime.prune_sandboxes (mocked docker + filesystem)
+# DockerSandboxRuntime.prune_sandboxes (mocked sbx + filesystem)
 # ---------------------------------------------------------------------------
 
 class TestSandboxPruneSandboxes:
     @patch("ralph.runtime.docker_sandbox.subprocess.run")
     @patch.object(DockerSandboxRuntime, "_docker_sandbox_ls")
     def test_removes_orphans(self, mock_ls, mock_run, tmp_path):
-        # Create one workspace that exists
         existing = tmp_path / "workspace"
         existing.mkdir()
         mock_ls.return_value = {
-            "vms": [
-                {"name": "agent-loop-claude-active", "workspace": str(existing)},
-                {"name": "agent-loop-claude-orphan", "workspace": "/nonexistent/path"},
+            "sandboxes": [
+                {"name": "agent-loop-claude-active", "workspaces": [str(existing)]},
+                {"name": "agent-loop-claude-orphan", "workspaces": ["/nonexistent/path"]},
             ]
         }
         sb = DockerSandboxRuntime(str(tmp_path))
-        # Mark active sandbox as recently used so it won't be pruned
         with patch.object(sb, "_sandbox_last_used",
                           side_effect=lambda n: time.time() if "active" in n else None):
             pruned = sb.prune_sandboxes("claude")
         assert pruned == ["agent-loop-claude-orphan"]
         mock_run.assert_called_once_with(
-            ["docker", "sandbox", "rm", "agent-loop-claude-orphan"],
+            ["sbx", "rm", "--force", "agent-loop-claude-orphan"],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             check=False,
         )
@@ -1306,12 +1399,11 @@ class TestSandboxPruneSandboxes:
         existing = tmp_path / "workspace"
         existing.mkdir()
         mock_ls.return_value = {
-            "vms": [
-                {"name": "agent-loop-claude-active", "workspace": str(existing)},
+            "sandboxes": [
+                {"name": "agent-loop-claude-active", "workspaces": [str(existing)]},
             ]
         }
         sb = DockerSandboxRuntime(str(tmp_path))
-        # Mark sandbox as recently used
         with patch.object(sb, "_sandbox_last_used", return_value=time.time()):
             pruned = sb.prune_sandboxes("claude")
         assert pruned == []
@@ -1320,8 +1412,8 @@ class TestSandboxPruneSandboxes:
     @patch.object(DockerSandboxRuntime, "_docker_sandbox_ls")
     def test_ignores_other_agents(self, mock_ls, tmp_path):
         mock_ls.return_value = {
-            "vms": [
-                {"name": "agent-loop-codex-orphan", "workspace": "/nonexistent"},
+            "sandboxes": [
+                {"name": "agent-loop-codex-orphan", "workspaces": ["/nonexistent"]},
             ]
         }
         sb = DockerSandboxRuntime(str(tmp_path))
@@ -1329,8 +1421,8 @@ class TestSandboxPruneSandboxes:
         assert pruned == []
 
     @patch.object(DockerSandboxRuntime, "_docker_sandbox_ls")
-    def test_empty_vm_list(self, mock_ls, tmp_path):
-        mock_ls.return_value = {"vms": []}
+    def test_empty_sandbox_list(self, mock_ls, tmp_path):
+        mock_ls.return_value = {"sandboxes": []}
         sb = DockerSandboxRuntime(str(tmp_path))
         pruned = sb.prune_sandboxes("claude")
         assert pruned == []
@@ -1343,23 +1435,30 @@ class TestSandboxPruneSandboxes:
 class TestDockerSandboxRuntimeLs:
     @patch("ralph.runtime.docker_sandbox.subprocess.run")
     def test_parses_json_output(self, mock_run):
-        vms_data = {"vms": [{"name": "test-vm", "workspace": "/tmp/w"}]}
+        sandboxes_data = {"sandboxes": [{"name": "test-vm", "workspaces": ["/tmp/w"]}]}
         mock_run.return_value = MagicMock(
-            returncode=0, stdout=json.dumps(vms_data))
+            returncode=0, stdout=json.dumps(sandboxes_data))
         result = DockerSandboxRuntime._docker_sandbox_ls()
-        assert result == vms_data
+        assert result == sandboxes_data
+
+    @patch("ralph.runtime.docker_sandbox.subprocess.run")
+    def test_calls_sbx_ls_json(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=0, stdout='{"sandboxes":[]}')
+        DockerSandboxRuntime._docker_sandbox_ls()
+        cmd = mock_run.call_args[0][0]
+        assert cmd == ["sbx", "ls", "--json"]
 
     @patch("ralph.runtime.docker_sandbox.subprocess.run")
     def test_returns_empty_on_failure(self, mock_run):
         mock_run.return_value = MagicMock(returncode=1, stdout="")
         result = DockerSandboxRuntime._docker_sandbox_ls()
-        assert result == {"vms": []}
+        assert result == {"sandboxes": []}
 
     @patch("ralph.runtime.docker_sandbox.subprocess.run")
     def test_returns_empty_on_invalid_json(self, mock_run):
         mock_run.return_value = MagicMock(returncode=0, stdout="not json")
         result = DockerSandboxRuntime._docker_sandbox_ls()
-        assert result == {"vms": []}
+        assert result == {"sandboxes": []}
 
 
 # ---------------------------------------------------------------------------
@@ -1373,7 +1472,7 @@ class TestDockerSandboxRuntimeCreate:
             "my-sandbox", "img:v1", "/work", sandbox_agent="claude")
         cmd = mock_run.call_args[0][0]
         assert cmd == [
-            "docker", "sandbox", "create",
+            "sbx", "create",
             "--name", "my-sandbox", "-t", "img:v1", "claude", "/work"]
 
     @patch("ralph.runtime.docker_sandbox.subprocess.run")
@@ -1382,7 +1481,7 @@ class TestDockerSandboxRuntimeCreate:
             "my-sandbox", "img:v1", "/work", sandbox_agent="shell")
         cmd = mock_run.call_args[0][0]
         assert cmd == [
-            "docker", "sandbox", "create",
+            "sbx", "create",
             "--name", "my-sandbox", "-t", "img:v1", "shell", "/work"]
 
     @patch("ralph.runtime.docker_sandbox.subprocess.run")
@@ -1398,13 +1497,13 @@ class TestDockerSandboxRuntimeCreate:
             sandbox_agent="shell")
         cmd = mock_run.call_args[0][0]
         assert cmd == [
-            "docker", "sandbox", "create",
+            "sbx", "create",
             "--name", "my-sandbox", "-t", "img:v1", "shell",
             "/work", "/repo/.git"]
 
 
 # ---------------------------------------------------------------------------
-# DockerSandboxRuntime.preflight_check (mocked token, proxy, docker)
+# DockerSandboxRuntime.preflight_check (mocked token, proxy, sbx)
 # ---------------------------------------------------------------------------
 
 class TestSandboxPreflightCheck:
@@ -1490,7 +1589,7 @@ class TestSandboxPreflightCheck:
         failures = sb.preflight_check(self.SANDBOX_NAME, "claude", 8080)
         assert len(failures) == 1
         assert "not responding" in failures[0]
-        assert f"docker sandbox rm {self.SANDBOX_NAME}" in failures[0]
+        assert f"sbx rm --force {self.SANDBOX_NAME}" in failures[0]
 
     @patch("ralph.runtime.docker_sandbox.subprocess.run")
     @patch("ralph.runtime.proxy_health_check",
@@ -1504,10 +1603,8 @@ class TestSandboxPreflightCheck:
         mock_run.side_effect = self._run_side_effect(echo_rc=1, curl_rc=0)
         sb = DockerSandboxRuntime("/dotfiles")
         failures = sb.preflight_check(self.SANDBOX_NAME, "claude", 8080)
-        # Should only have sandbox error, not network policy error
         assert len(failures) == 1
         assert "not responding" in failures[0]
-        # curl should not have been called
         curl_calls = [c for c in mock_run.call_args_list if "curl" in c[0][0]]
         assert len(curl_calls) == 0
 
@@ -1519,7 +1616,6 @@ class TestSandboxPreflightCheck:
     def test_network_policy_not_applied_returns_error(self, mock_time, mock_read, mock_health, mock_run):
         future_ms = 1700000000000 + 30 * 86400 * 1000
         mock_read.return_value = {"accessToken": "sk-test", "expiresAt": future_ms}
-        # echo succeeds, curl also succeeds (google.com reachable = bad)
         mock_run.side_effect = self._run_side_effect(echo_rc=0, curl_rc=0)
         sb = DockerSandboxRuntime("/dotfiles")
         failures = sb.preflight_check(self.SANDBOX_NAME, "claude", 8080)
@@ -1553,19 +1649,19 @@ class TestSandboxSetupGitConfig:
 
         name_call = mock_run.call_args_list[0]
         assert name_call[0][0] == [
-            "docker", "sandbox", "exec", "my-sandbox",
+            "sbx", "exec", "my-sandbox",
             "git", "config", "--global", "user.name", "Ralph",
         ]
 
         email_call = mock_run.call_args_list[1]
         assert email_call[0][0] == [
-            "docker", "sandbox", "exec", "my-sandbox",
+            "sbx", "exec", "my-sandbox",
             "git", "config", "--global", "user.email", "ralph@test.com",
         ]
 
         safe_call = mock_run.call_args_list[2]
         assert safe_call[0][0] == [
-            "docker", "sandbox", "exec", "my-sandbox",
+            "sbx", "exec", "my-sandbox",
             "git", "config", "--global", "--add", "safe.directory", "*",
         ]
 
@@ -1594,10 +1690,12 @@ class TestSandboxRunIteration:
         assert "tee" in write_call[0][0]
         assert "/tmp/spec.md" in write_call[0][0]
 
-        # Verify claude call
+        # Verify claude call uses sbx exec with stdin=DEVNULL (avoids sbx
+        # 3-second wait warning when no stdin is piped)
         claude_call = mock_run.call_args_list[1]
         cmd = claude_call[0][0]
-        assert "claude" in cmd
+        assert cmd[0] == "sbx"
+        assert cmd[1] == "exec"
         assert "-w" in cmd
         assert cmd[cmd.index("-w") + 1] == "/work/tree"
         assert "--model" in cmd
@@ -1607,6 +1705,7 @@ class TestSandboxRunIteration:
         assert "--effort" in cmd
         assert cmd[cmd.index("-p") + 1] == \
             DockerSandboxRuntime.iteration_prompt("/tmp/spec.md")
+        assert claude_call[1].get("stdin") == subprocess.DEVNULL
 
         # Verify read-back call
         read_call = mock_run.call_args_list[2]
@@ -1638,7 +1737,6 @@ class TestSandboxRunIteration:
         rc, updated = sb.run_iteration("my-sandbox", "original", "sonnet")
         assert rc == 1
         assert updated == "original"
-        # Only the write call should have been made
         assert mock_run.call_count == 1
 
     @patch("ralph.runtime.docker_sandbox.subprocess.run")
@@ -1682,13 +1780,11 @@ class TestSandboxRunIteration:
         assert rc == 0
         assert updated == "updated spec"
 
-        # Verify secret file write
         key_call = mock_run.call_args_list[1]
         assert key_call[1]["input"] == "test-api-key-123"
         assert "tee" in key_call[0][0]
         assert "/tmp/.agent-api-key" in key_call[0][0]
 
-        # Verify shell wrapper command
         agent_call = mock_run.call_args_list[2]
         cmd = agent_call[0][0]
         assert "sh" in cmd
@@ -1705,8 +1801,8 @@ class TestSandboxRunIteration:
             DockerSandboxRuntime.iteration_prompt("/tmp/spec.md")) in inner
 
     @patch("ralph.runtime.docker_sandbox.subprocess.run")
-    def test_cursor_no_env_vars_in_docker_exec(self, mock_run):
-        """Cursor agent should not pass env vars via docker exec -e flags."""
+    def test_cursor_no_env_vars_in_exec(self, mock_run):
+        """Cursor agent should not pass env vars via exec -e flags."""
         mock_run.side_effect = [
             MagicMock(returncode=0),  # write spec
             MagicMock(returncode=0),  # write api key
@@ -1735,7 +1831,6 @@ class TestSandboxRunIteration:
             agent="cursor", api_key="key123")
         assert rc == 1
         assert updated == "original"
-        # Only spec write + key write calls
         assert mock_run.call_count == 2
 
     @patch("ralph.runtime.docker_sandbox.subprocess.run")

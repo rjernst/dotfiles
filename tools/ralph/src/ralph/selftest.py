@@ -276,6 +276,8 @@ def _selftest_docker(runtime, agent, sandbox_name, port, auth_mode, report,
     # 4. Create test sandbox
     try:
         runtime.remove_sandbox(sandbox_name)
+        runtime._ensure_global_policy()
+        runtime._ensure_template_loaded(tag)
         git_common_dir = DockerSandboxRuntime._resolve_git_common_dir(os.getcwd())
         agent_config = get_agent(agent)
         runtime._docker_sandbox_create(sandbox_name, tag, os.getcwd(),
@@ -297,7 +299,7 @@ def _selftest_docker(runtime, agent, sandbox_name, port, auth_mode, report,
 
     # 6. Verify proxy reachable from sandbox
     result = subprocess.run(
-        ["docker", "sandbox", "exec", sandbox_name,
+        ["sbx", "exec", sandbox_name,
          "curl", "-sf", "--max-time", "5",
          f"http://host.docker.internal:{port}/health"],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
@@ -314,7 +316,7 @@ def _selftest_docker(runtime, agent, sandbox_name, port, auth_mode, report,
     for k, v in env_vars.items():
         env_args.extend(["-e", f"{k}={v}"])
     result = subprocess.run(
-        ["docker", "sandbox", "exec"] + env_args + [
+        ["sbx", "exec"] + env_args + [
          sandbox_name,
          "claude", "-p", "say ok", "--model", "haiku"],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
@@ -324,10 +326,12 @@ def _selftest_docker(runtime, agent, sandbox_name, port, auth_mode, report,
            "response received" if result.returncode == 0
            else f"exit code {result.returncode}")
 
-    # 8. Verify network isolation (google.com should be blocked)
+    # 8. Verify network isolation (google.com should be blocked).
+    # Use -sf so curl exits non-zero on HTTP 4xx responses (sbx gateway blocks
+    # via MITM 403, not at the TCP level, so -f is required to detect blocking).
     result = subprocess.run(
-        ["docker", "sandbox", "exec", sandbox_name,
-         "curl", "-s", "--max-time", "5", "https://google.com"],
+        ["sbx", "exec", sandbox_name,
+         "curl", "-sf", "--max-time", "5", "https://google.com"],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
         check=False,
     )
