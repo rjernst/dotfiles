@@ -454,4 +454,8 @@ if [ -f $HOME/.zshrc.local ]; then
   source $HOME/.zshrc.local
 fi
 
+
+
+
+
 if [[ "${ESSS_LOAD:-}" && -f "/Users/rjernst/code/elastic/elasticsearch-serverless-support/lib/post-shell.sh" ]]; then source "/Users/rjernst/code/elastic/elasticsearch-serverless-support/lib/post-shell.sh"; fi # elasticsearch-serverless-support

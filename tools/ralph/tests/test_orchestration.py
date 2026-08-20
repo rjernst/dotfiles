@@ -226,6 +226,21 @@ class TestEnsureWorktree:
         result = ensure_worktree(git, "user/my-feature")
         assert result == "/Users/me/code/myrepo-user-my-feature"
 
+    def test_path_collision_uses_numeric_suffix(self):
+        """If the computed path is occupied by a different branch, use a suffixed path."""
+        git = _mock_git_for_worktree(remotes="origin", ls_remote_ok=False,
+                                     local_branch_exists=False)
+
+        with patch("ralph.orchestration.os.path.exists") as mock_exists:
+            # First candidate path is occupied; second is free
+            mock_exists.side_effect = lambda p: p == "/Users/me/code/myrepo-new-feature"
+            result = ensure_worktree(git, "new-feature")
+
+        assert result == "/Users/me/code/myrepo-new-feature-2"
+        git.run.assert_any_call(
+            "worktree", "add", "-b", "new-feature",
+            "/Users/me/code/myrepo-new-feature-2", "main")
+
     def test_worktree_list_failure_treated_as_empty(self):
         """If git worktree list fails, treat as no existing worktrees."""
         git = _mock_git_for_worktree(remotes="origin", ls_remote_ok=False,

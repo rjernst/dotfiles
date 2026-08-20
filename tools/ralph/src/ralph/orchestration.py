@@ -108,6 +108,13 @@ def ensure_worktree(git, branch, base=None):
             wt_dir = ""
             wt_branch = ""
 
+    # If the computed path is already occupied by a different worktree, find a free one
+    if os.path.exists(wt_path):
+        suffix = 2
+        while os.path.exists(f"{wt_path}-{suffix}"):
+            suffix += 1
+        wt_path = f"{wt_path}-{suffix}"
+
     # Determine remote (upstream > origin)
     remote = ""
     remotes_raw = git.output("remote")

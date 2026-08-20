@@ -1,5 +1,12 @@
-model = "gpt-5.3-codex"
+model = "gpt-5.6-sol"
+model_reasoning_effort = "medium"
 [projects."/Users/rjernst/code/eli5-app"]
+trust_level = "trusted"
+
+[projects."/Users/rjernst/code/elastic/estc"]
+trust_level = "trusted"
+
+[projects."/Users/rjernst/code/elastic/elasticsearch"]
 trust_level = "trusted"
 
 [notice.model_migrations]
