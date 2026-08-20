@@ -20,11 +20,12 @@ from ralph.runtime import load_runtime_config, create_runtime
 from ralph.util import parse_frontmatter, parse_issue_branch
 
 
-def _open_review_workspace(branch, issue_number):
+def _open_review_workspace(branch, issue_number, work_dir=None):
     """Open a tmux review workspace and send a macOS notification."""
     result = subprocess.run(
         ["ta", "workspace", "create", branch, "--cmd", 'claude "/review"'],
         check=False, capture_output=True, text=True,
+        cwd=work_dir,
     )
     if result.returncode == 0:
         print(f"ralph: opened review workspace for {branch}")
@@ -247,7 +248,7 @@ def process_issue(issue_number, git, dotfiles_dir, gh, agent, push, model,
                                   add_label="status:done")
                     unblock_ready_specs(repo, gh)
                     runtime.cleanup_sandbox(agent, branch)
-                    _open_review_workspace(branch, issue_number)
+                    _open_review_workspace(branch, issue_number, work_dir)
                 break
 
             # Sync commits from sandbox to host worktree

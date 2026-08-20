@@ -587,7 +587,7 @@ class TestProcessIssueSandbox:
             remove_labels="status:in-progress",
             add_label="status:done")
         mock_unblock.assert_called_once_with("owner/repo", gh)
-        mock_open_review.assert_called_once_with("my-branch", 42)
+        mock_open_review.assert_called_once_with("my-branch", 42, "/work/my-branch")
 
 
 # ---------------------------------------------------------------------------
@@ -601,11 +601,12 @@ class TestOpenReviewWorkspace:
         from ralph.loop import _open_review_workspace
         mock_run.return_value = MagicMock(returncode=0, stderr="")
 
-        _open_review_workspace("my-branch", 42)
+        _open_review_workspace("my-branch", 42, "/work/my-branch")
 
         first_call = mock_run.call_args_list[0]
         assert first_call[0][0] == ["ta", "workspace", "create", "my-branch",
                                      "--cmd", 'claude "/review"']
+        assert first_call[1]["cwd"] == "/work/my-branch"
         second_call = mock_run.call_args_list[1]
         assert second_call[0][0][0] == "osascript"
         assert "my-branch" in second_call[0][0][-1]
@@ -617,7 +618,7 @@ class TestOpenReviewWorkspace:
         from ralph.loop import _open_review_workspace
         mock_run.return_value = MagicMock(returncode=0, stderr="")
 
-        _open_review_workspace("my-branch", 42)
+        _open_review_workspace("my-branch", 42, "/work/my-branch")
 
         assert mock_run.call_count == 1  # only the ta workspace create call
 
@@ -627,7 +628,7 @@ class TestOpenReviewWorkspace:
         from ralph.loop import _open_review_workspace
         mock_run.return_value = MagicMock(returncode=1, stderr="session exists")
 
-        _open_review_workspace("my-branch", 42)
+        _open_review_workspace("my-branch", 42, "/work/my-branch")
 
         captured = capsys.readouterr()
         assert "warning" in captured.err
