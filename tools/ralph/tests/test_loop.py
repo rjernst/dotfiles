@@ -547,6 +547,7 @@ class TestProcessIssueSandbox:
         assert call_args[1]["agent"] == "claude"
         assert call_args[1]["api_key"] is None
 
+    @patch("ralph.loop._open_review_workspace")
     @patch("ralph.loop.create_runtime")
     @patch("ralph.loop.load_runtime_config", return_value={"type": "docker-sandbox"})
     @patch("ralph.loop.unblock_ready_specs")
@@ -554,6 +555,7 @@ class TestProcessIssueSandbox:
     @patch("ralph.loop.resolve_repo", return_value="owner/repo")
     def test_no_blocked_marker_marks_done_and_unblocks(self, mock_repo, mock_wt, mock_unblock,
                                                         mock_config, mock_create,
+                                                        mock_open_review,
                                                         mock_ensure_proxy):
         git = MagicMock()
         # HEAD doesn't change = no commit made
@@ -585,6 +587,50 @@ class TestProcessIssueSandbox:
             remove_labels="status:in-progress",
             add_label="status:done")
         mock_unblock.assert_called_once_with("owner/repo", gh)
+        mock_open_review.assert_called_once_with("my-branch", 42)
+
+
+# ---------------------------------------------------------------------------
+# _open_review_workspace
+# ---------------------------------------------------------------------------
+
+class TestOpenReviewWorkspace:
+    @patch("ralph.loop.subprocess.run")
+    @patch("ralph.loop.platform.system", return_value="Darwin")
+    def test_opens_workspace_and_notifies_on_macos(self, mock_platform, mock_run):
+        from ralph.loop import _open_review_workspace
+        mock_run.return_value = MagicMock(returncode=0, stderr="")
+
+        _open_review_workspace("my-branch", 42)
+
+        first_call = mock_run.call_args_list[0]
+        assert first_call[0][0] == ["ta", "workspace", "create", "my-branch",
+                                     "--cmd", 'claude "/review"']
+        second_call = mock_run.call_args_list[1]
+        assert second_call[0][0][0] == "osascript"
+        assert "my-branch" in second_call[0][0][-1]
+        assert "42" in second_call[0][0][-1]
+
+    @patch("ralph.loop.subprocess.run")
+    @patch("ralph.loop.platform.system", return_value="Linux")
+    def test_no_notification_on_non_macos(self, mock_platform, mock_run):
+        from ralph.loop import _open_review_workspace
+        mock_run.return_value = MagicMock(returncode=0, stderr="")
+
+        _open_review_workspace("my-branch", 42)
+
+        assert mock_run.call_count == 1  # only the ta workspace create call
+
+    @patch("ralph.loop.subprocess.run")
+    @patch("ralph.loop.platform.system", return_value="Darwin")
+    def test_workspace_failure_does_not_raise(self, mock_platform, mock_run, capsys):
+        from ralph.loop import _open_review_workspace
+        mock_run.return_value = MagicMock(returncode=1, stderr="session exists")
+
+        _open_review_workspace("my-branch", 42)
+
+        captured = capsys.readouterr()
+        assert "warning" in captured.err
 
 
 # ---------------------------------------------------------------------------

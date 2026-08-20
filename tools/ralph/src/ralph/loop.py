@@ -1,7 +1,9 @@
 """Issue processing loop and poll mode."""
 
 import os
+import platform
 import signal
+import subprocess
 import sys
 import time
 
@@ -16,6 +18,26 @@ from ralph.proxy import (
 )
 from ralph.runtime import load_runtime_config, create_runtime
 from ralph.util import parse_frontmatter, parse_issue_branch
+
+
+def _open_review_workspace(branch, issue_number):
+    """Open a tmux review workspace and send a macOS notification."""
+    result = subprocess.run(
+        ["ta", "workspace", "create", branch, "--cmd", 'claude "/review"'],
+        check=False, capture_output=True, text=True,
+    )
+    if result.returncode == 0:
+        print(f"ralph: opened review workspace for {branch}")
+    else:
+        print(f"ralph: warning: could not open review workspace for {branch}: "
+              f"{result.stderr.strip()}", file=sys.stderr)
+
+    if platform.system() == "Darwin":
+        subprocess.run([
+            "osascript", "-e",
+            f'display notification "Review workspace ready for {branch} (issue #{issue_number})"'
+            f' with title "ralph" sound name "Glass"',
+        ], check=False)
 
 
 def process_issue(issue_number, git, dotfiles_dir, gh, agent, push, model,
@@ -225,6 +247,7 @@ def process_issue(issue_number, git, dotfiles_dir, gh, agent, push, model,
                                   add_label="status:done")
                     unblock_ready_specs(repo, gh)
                     runtime.cleanup_sandbox(agent, branch)
+                    _open_review_workspace(branch, issue_number)
                 break
 
             # Sync commits from sandbox to host worktree
