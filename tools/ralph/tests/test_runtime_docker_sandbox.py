@@ -3,14 +3,20 @@
 import datetime
 import json
 import os
+import shlex
 import subprocess
 import time
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from ralph.runtime import Runtime, load_runtime_config, create_runtime
+from ralph.runtime import (
+    Runtime, load_runtime_config, create_runtime, resolve_project_runtime,
+)
+from ralph.runtime.container import DockerContainerRuntime
 from ralph.runtime.docker_sandbox import DockerSandboxRuntime
+from ralph.runtime.nono import NonoRuntime
+from ralph.runtime.tart import TartRuntime
 
 
 # ---------------------------------------------------------------------------
@@ -78,6 +84,64 @@ class TestLoadRuntimeConfig:
         (config_dir / "config.json").write_text('{"type": "kubernetes"}')
         with pytest.raises(ValueError, match="unknown runtime type"):
             load_runtime_config(str(tmp_path))
+
+    def test_unknown_type_message_lists_nono(self, tmp_path):
+        config_dir = tmp_path / ".agent-loop"
+        config_dir.mkdir()
+        (config_dir / "config.json").write_text('{"type": "kubernetes"}')
+        with pytest.raises(ValueError) as exc_info:
+            load_runtime_config(str(tmp_path))
+        assert "'nono'" in str(exc_info.value)
+
+    def test_nono_type(self, tmp_path):
+        config_dir = tmp_path / ".agent-loop"
+        config_dir.mkdir()
+        (config_dir / "config.json").write_text('{"type": "nono"}')
+        assert load_runtime_config(str(tmp_path)) == {"type": "nono"}
+
+    def test_nono_type_with_network_and_hosts(self, tmp_path):
+        config_dir = tmp_path / ".agent-loop"
+        config_dir.mkdir()
+        config = {
+            "type": "nono",
+            "allowed_hosts": ["registry.npmjs.org"],
+            "network": "unrestricted",
+        }
+        (config_dir / "config.json").write_text(json.dumps(config))
+        result = load_runtime_config(str(tmp_path))
+        assert result["type"] == "nono"
+        assert result["network"] == "unrestricted"
+        assert result["allowed_hosts"] == ["registry.npmjs.org"]
+
+    def test_network_filtered_accepted(self, tmp_path):
+        config_dir = tmp_path / ".agent-loop"
+        config_dir.mkdir()
+        (config_dir / "config.json").write_text(
+            '{"type": "nono", "network": "filtered"}')
+        assert load_runtime_config(str(tmp_path))["network"] == "filtered"
+
+    def test_unknown_network_raises_value_error(self, tmp_path):
+        config_dir = tmp_path / ".agent-loop"
+        config_dir.mkdir()
+        (config_dir / "config.json").write_text(
+            '{"type": "nono", "network": "open"}')
+        with pytest.raises(ValueError, match="unknown network mode 'open'"):
+            load_runtime_config(str(tmp_path))
+
+    def test_network_not_validated_for_other_runtimes(self, tmp_path):
+        """'network' is nono-only; other backends ignore unknown keys."""
+        config_dir = tmp_path / ".agent-loop"
+        config_dir.mkdir()
+        (config_dir / "config.json").write_text(
+            '{"type": "docker-sandbox", "network": "open"}')
+        assert load_runtime_config(str(tmp_path))["network"] == "open"
+
+    def test_omitted_network_is_not_defaulted_into_config(self, tmp_path):
+        """The default lives in NonoRuntime, not in the loaded config."""
+        config_dir = tmp_path / ".agent-loop"
+        config_dir.mkdir()
+        (config_dir / "config.json").write_text('{"type": "nono"}')
+        assert "network" not in load_runtime_config(str(tmp_path))
 
     def test_allowed_hosts_passed_through(self, tmp_path):
         config_dir = tmp_path / ".agent-loop"
@@ -164,6 +228,142 @@ class TestRuntime:
 
 
 # ---------------------------------------------------------------------------
+# proxy_listen_addr
+# ---------------------------------------------------------------------------
+
+class TestProxyListenAddr:
+    def test_base_defaults_to_dual_stack(self):
+        assert Runtime().proxy_listen_addr() == "::"
+
+    def test_docker_sandbox_uses_loopback(self):
+        assert create_runtime(
+            "docker-sandbox", "/dotfiles").proxy_listen_addr() == "127.0.0.1"
+
+    def test_docker_container_uses_loopback(self):
+        assert create_runtime(
+            "docker-container", "/dotfiles").proxy_listen_addr() == "127.0.0.1"
+
+    def test_tart_uses_dual_stack(self):
+        runtime = create_runtime("tart", "/dotfiles",
+                                 base_image="ghcr.io/example/vm:latest")
+        assert runtime.proxy_listen_addr() == "::"
+
+    def test_nono_uses_loopback(self):
+        assert create_runtime(
+            "nono", "/dotfiles").proxy_listen_addr() == "127.0.0.1"
+
+    @pytest.mark.parametrize("runtime_type", ["docker-sandbox",
+                                              "docker-container"])
+    def test_env_overrides_backend_default(self, monkeypatch, runtime_type):
+        monkeypatch.setenv("RALPH_PROXY_LISTEN_ADDR", "::1")
+        runtime = create_runtime(runtime_type, "/dotfiles")
+        assert runtime.proxy_listen_addr() == "::1"
+
+    def test_env_overrides_base_default(self, monkeypatch):
+        monkeypatch.setenv("RALPH_PROXY_LISTEN_ADDR", "192.168.1.5")
+        assert Runtime().proxy_listen_addr() == "192.168.1.5"
+
+    def test_empty_env_falls_back_to_backend_default(self, monkeypatch):
+        monkeypatch.setenv("RALPH_PROXY_LISTEN_ADDR", "")
+        runtime = create_runtime("docker-sandbox", "/dotfiles")
+        assert runtime.proxy_listen_addr() == "127.0.0.1"
+
+
+# ---------------------------------------------------------------------------
+# uses_credential_proxy
+# ---------------------------------------------------------------------------
+
+class TestUsesCredentialProxy:
+    def test_base_uses_credential_proxy(self):
+        assert Runtime().uses_credential_proxy is True
+
+    @pytest.mark.parametrize("runtime_type", ["docker-sandbox",
+                                              "docker-container"])
+    def test_docker_backends_use_credential_proxy(self, runtime_type):
+        assert create_runtime(
+            runtime_type, "/dotfiles").uses_credential_proxy is True
+
+    def test_tart_uses_credential_proxy(self):
+        runtime = create_runtime("tart", "/dotfiles", base_image="vm:latest")
+        assert runtime.uses_credential_proxy is True
+
+    def test_nono_does_not_use_credential_proxy(self):
+        assert create_runtime(
+            "nono", "/dotfiles").uses_credential_proxy is False
+
+
+# ---------------------------------------------------------------------------
+# resolve_project_runtime
+# ---------------------------------------------------------------------------
+
+class TestResolveProjectRuntime:
+    @staticmethod
+    def _git(repo_root):
+        git = MagicMock()
+        git.output.return_value = repo_root
+        return git
+
+    @classmethod
+    def _addr(cls, repo_root, dotfiles_dir="/dotfiles"):
+        """The listen address cli.py derives from the resolved runtime."""
+        return resolve_project_runtime(
+            cls._git(repo_root), dotfiles_dir)[1].proxy_listen_addr()
+
+    def test_returns_type_and_runtime(self, tmp_path):
+        cfg_dir = tmp_path / ".agent-loop"
+        cfg_dir.mkdir()
+        (cfg_dir / "config.json").write_text('{"type": "nono"}')
+        runtime_type, runtime = resolve_project_runtime(
+            self._git(str(tmp_path)), "/dotfiles")
+        assert runtime_type == "nono"
+        assert isinstance(runtime, NonoRuntime)
+
+    def test_defaults_to_docker_sandbox(self, tmp_path):
+        runtime_type, runtime = resolve_project_runtime(
+            self._git(str(tmp_path)), "/dotfiles")
+        assert runtime_type == "docker-sandbox"
+        assert isinstance(runtime, DockerSandboxRuntime)
+
+    def test_bad_config_falls_back_to_base_runtime(self, tmp_path):
+        cfg_dir = tmp_path / ".agent-loop"
+        cfg_dir.mkdir()
+        (cfg_dir / "config.json").write_text("{not json")
+        runtime_type, runtime = resolve_project_runtime(
+            self._git(str(tmp_path)), "/dotfiles")
+        assert runtime_type is None
+        assert type(runtime) is Runtime
+        assert runtime.uses_credential_proxy is True
+
+    def test_listen_addr_uses_project_runtime_default(self, tmp_path):
+        assert self._addr(str(tmp_path)) == "127.0.0.1"
+
+    def test_listen_addr_reads_configured_runtime_type(self, tmp_path):
+        cfg_dir = tmp_path / ".agent-loop"
+        cfg_dir.mkdir()
+        (cfg_dir / "config.json").write_text(
+            json.dumps({"type": "tart", "base_image": "vm:latest"}))
+        assert self._addr(str(tmp_path)) == "::"
+
+    def test_listen_addr_bad_config_falls_back_to_base_default(self, tmp_path):
+        cfg_dir = tmp_path / ".agent-loop"
+        cfg_dir.mkdir()
+        (cfg_dir / "config.json").write_text("{not json")
+        assert self._addr(str(tmp_path)) == "::"
+
+    def test_listen_addr_env_override_applies(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("RALPH_PROXY_LISTEN_ADDR", "::1")
+        assert self._addr(str(tmp_path)) == "::1"
+
+    def test_listen_addr_env_override_applies_on_fallback(self, monkeypatch):
+        monkeypatch.setenv("RALPH_PROXY_LISTEN_ADDR", "::1")
+        git = MagicMock()
+        git.output.side_effect = RuntimeError("not a git repo")
+        runtime_type, runtime = resolve_project_runtime(git, "/dotfiles")
+        assert runtime_type is None
+        assert runtime.proxy_listen_addr() == "::1"
+
+
+# ---------------------------------------------------------------------------
 # create_runtime factory
 # ---------------------------------------------------------------------------
 
@@ -211,6 +411,55 @@ class TestCreateRuntime:
     def test_unknown_type_raises_value_error(self):
         with pytest.raises(ValueError, match="unknown runtime type 'podman'"):
             create_runtime("podman", "/dotfiles")
+
+    def test_nono_returns_nono_runtime(self):
+        backend = create_runtime("nono", "/dotfiles")
+        assert isinstance(backend, NonoRuntime)
+        assert backend.dotfiles_dir == "/dotfiles"
+        assert backend.allowed_hosts == ()
+        assert backend.network == "filtered"
+        assert backend.project_dir is None
+
+    def test_nono_config_passed_through(self, tmp_path):
+        backend = create_runtime(
+            "nono", "/dotfiles",
+            allowed_hosts=["registry.npmjs.org", "pypi.org"],
+            network="unrestricted", project_dir=str(tmp_path))
+        assert backend.allowed_hosts == ("registry.npmjs.org", "pypi.org")
+        assert backend.network == "unrestricted"
+        assert backend.project_dir == str(tmp_path)
+
+    def test_nono_rejects_unknown_network(self):
+        with pytest.raises(ValueError, match="unknown network mode 'open'"):
+            create_runtime("nono", "/dotfiles", network="open")
+
+    def test_nono_receives_credentials(self):
+        """auth_mode/token_data reach NonoRuntime for the credential route."""
+        token_data = {"baseUrl": "https://gw.example.com"}
+        backend = create_runtime("nono", "/dotfiles", auth_mode="gateway",
+                                 token_data=token_data)
+        assert backend.auth_mode == "gateway"
+        assert backend.token_data == token_data
+
+    def test_nono_credentials_default_to_none(self):
+        backend = create_runtime("nono", "/dotfiles")
+        assert backend.auth_mode is None
+        assert backend.token_data is None
+
+    def test_credentials_not_passed_to_other_backends(self):
+        """Backends without their own injection ignore credential kwargs."""
+        backend = create_runtime("docker-sandbox", "/dotfiles",
+                                 auth_mode="oauth", token_data={"a": 1})
+        assert isinstance(backend, DockerSandboxRuntime)
+
+    def test_tart_config_excludes_credentials(self, tmp_path):
+        """Credential kwargs never land in the tart config dict."""
+        with patch("ralph.runtime.tart.TartRuntime") as mock_tart:
+            create_runtime("tart", "/dotfiles", base_image="img:latest",
+                           project_dir=str(tmp_path), auth_mode="oauth",
+                           token_data={"accessToken": "secret"})
+        config = mock_tart.call_args[1]["config"]
+        assert config == {"base_image": "img:latest"}
 
     def test_kwargs_passed_through(self):
         """Extra kwargs don't break DockerSandboxRuntime creation."""
@@ -1173,7 +1422,8 @@ class TestSandboxPreflightCheck:
         return fn
 
     @patch("ralph.runtime.docker_sandbox.subprocess.run")
-    @patch("ralph.runtime.proxy_health_check", return_value=(True, "abc123", "oauth"))
+    @patch("ralph.runtime.proxy_health_check",
+           return_value=(True, "abc123", "oauth", "::"))
     @patch("ralph.runtime.read_token_from_keychain")
     @patch("ralph.runtime.time.time", return_value=1700000000.0)
     def test_all_checks_pass(self, mock_time, mock_read, mock_health, mock_run):
@@ -1185,7 +1435,8 @@ class TestSandboxPreflightCheck:
         assert failures == []
 
     @patch("ralph.runtime.docker_sandbox.subprocess.run")
-    @patch("ralph.runtime.proxy_health_check", return_value=(True, "abc123", "oauth"))
+    @patch("ralph.runtime.proxy_health_check",
+           return_value=(True, "abc123", "oauth", "::"))
     @patch("ralph.runtime.read_token_from_keychain", return_value=None)
     @patch("ralph.runtime.time.time", return_value=1700000000.0)
     def test_token_missing_returns_error(self, mock_time, mock_read, mock_health, mock_run):
@@ -1197,7 +1448,8 @@ class TestSandboxPreflightCheck:
         assert "ralph store-token" in failures[0]
 
     @patch("ralph.runtime.docker_sandbox.subprocess.run")
-    @patch("ralph.runtime.proxy_health_check", return_value=(True, "abc123", "oauth"))
+    @patch("ralph.runtime.proxy_health_check",
+           return_value=(True, "abc123", "oauth", "::"))
     @patch("ralph.runtime.read_token_from_keychain")
     @patch("ralph.runtime.time.time", return_value=1700000000.0)
     def test_token_expired_returns_error(self, mock_time, mock_read, mock_health, mock_run):
@@ -1211,7 +1463,8 @@ class TestSandboxPreflightCheck:
         assert "ralph store-token" in failures[0]
 
     @patch("ralph.runtime.docker_sandbox.subprocess.run")
-    @patch("ralph.runtime.proxy_health_check", return_value=(False, None, None))
+    @patch("ralph.runtime.proxy_health_check",
+           return_value=(False, None, None, None))
     @patch("ralph.runtime.read_token_from_keychain")
     @patch("ralph.runtime.time.time", return_value=1700000000.0)
     def test_proxy_down_returns_error(self, mock_time, mock_read, mock_health, mock_run):
@@ -1225,7 +1478,8 @@ class TestSandboxPreflightCheck:
         assert "start the credential proxy" in failures[0]
 
     @patch("ralph.runtime.docker_sandbox.subprocess.run")
-    @patch("ralph.runtime.proxy_health_check", return_value=(True, "abc123", "oauth"))
+    @patch("ralph.runtime.proxy_health_check",
+           return_value=(True, "abc123", "oauth", "::"))
     @patch("ralph.runtime.read_token_from_keychain")
     @patch("ralph.runtime.time.time", return_value=1700000000.0)
     def test_sandbox_unresponsive_returns_error(self, mock_time, mock_read, mock_health, mock_run):
@@ -1239,7 +1493,8 @@ class TestSandboxPreflightCheck:
         assert f"docker sandbox rm {self.SANDBOX_NAME}" in failures[0]
 
     @patch("ralph.runtime.docker_sandbox.subprocess.run")
-    @patch("ralph.runtime.proxy_health_check", return_value=(True, "abc123", "oauth"))
+    @patch("ralph.runtime.proxy_health_check",
+           return_value=(True, "abc123", "oauth", "::"))
     @patch("ralph.runtime.read_token_from_keychain")
     @patch("ralph.runtime.time.time", return_value=1700000000.0)
     def test_sandbox_unresponsive_skips_network_check(self, mock_time, mock_read, mock_health, mock_run):
@@ -1257,7 +1512,8 @@ class TestSandboxPreflightCheck:
         assert len(curl_calls) == 0
 
     @patch("ralph.runtime.docker_sandbox.subprocess.run")
-    @patch("ralph.runtime.proxy_health_check", return_value=(True, "abc123", "oauth"))
+    @patch("ralph.runtime.proxy_health_check",
+           return_value=(True, "abc123", "oauth", "::"))
     @patch("ralph.runtime.read_token_from_keychain")
     @patch("ralph.runtime.time.time", return_value=1700000000.0)
     def test_network_policy_not_applied_returns_error(self, mock_time, mock_read, mock_health, mock_run):
@@ -1272,7 +1528,8 @@ class TestSandboxPreflightCheck:
         assert "outbound requests should be blocked" in failures[0]
 
     @patch("ralph.runtime.docker_sandbox.subprocess.run")
-    @patch("ralph.runtime.proxy_health_check", return_value=(False, None, None))
+    @patch("ralph.runtime.proxy_health_check",
+           return_value=(False, None, None, None))
     @patch("ralph.runtime.read_token_from_keychain", return_value=None)
     @patch("ralph.runtime.time.time", return_value=1700000000.0)
     def test_multiple_failures_collected(self, mock_time, mock_read, mock_health, mock_run):
@@ -1348,6 +1605,8 @@ class TestSandboxRunIteration:
         assert cmd[idx + 1] == "sonnet"
         assert "--dangerously-skip-permissions" in cmd
         assert "--effort" in cmd
+        assert cmd[cmd.index("-p") + 1] == \
+            DockerSandboxRuntime.iteration_prompt("/tmp/spec.md")
 
         # Verify read-back call
         read_call = mock_run.call_args_list[2]
@@ -1442,6 +1701,8 @@ class TestSandboxRunIteration:
         assert "--force" in inner
         assert "--trust" in inner
         assert "--output-format text" in inner
+        assert shlex.quote(
+            DockerSandboxRuntime.iteration_prompt("/tmp/spec.md")) in inner
 
     @patch("ralph.runtime.docker_sandbox.subprocess.run")
     def test_cursor_no_env_vars_in_docker_exec(self, mock_run):
@@ -1519,23 +1780,94 @@ class TestSandboxSyncToHost:
 
 
 # ---------------------------------------------------------------------------
-# ITERATION_PROMPT content
+# Runtime.iteration_prompt
 # ---------------------------------------------------------------------------
 
+# The iteration prompt exactly as it read before the spec path became a
+# template parameter.  Rendering the template with the historical
+# "/tmp/spec.md" path must still reproduce it byte for byte.
+PREVIOUS_ITERATION_PROMPT = """\
+You are an AI coding agent. You will be invoked repeatedly — once per task.
+Read the spec file at `/tmp/spec.md` for what to build.
+
+Your job this iteration: implement EXACTLY ONE task, then stop.
+
+Steps:
+1. Study the spec and existing codebase (especially CLAUDE.md) to understand patterns
+2. Check git log to see what has already been implemented
+3. Pick the FIRST incomplete task from the spec
+4. Implement that single task fully — no stubs or placeholders
+
+If ALL tasks are already complete, just say so — do not make any commits.
+
+Rules:
+- Follow conventions in CLAUDE.md if it exists
+- Search the codebase before assuming something isn't implemented
+- NEVER run `git init`. If git commands fail in the workspace, the sandbox runtime is misconfigured. Stop immediately and report the error — do not attempt to fix git yourself.
+
+For each task, follow this workflow:
+
+1. **Implement** — Write the code described in the task
+2. **Test** — Write tests that cover the task's Acceptance criteria
+3. **Verify** — Run tests and any commands listed in Acceptance. Fix failures until all pass.
+4. **Self-review** — Review your changes from a fresh perspective, as if you are a different developer seeing this code for the first time. Look at the full diff of your changes and check for:
+   - Bugs, off-by-one errors, edge cases
+   - Logic errors or missed requirements from the spec
+   - Adherence to project conventions (CLAUDE.md, existing patterns)
+   - Security issues, resource leaks
+   If using Claude Code, use the Agent tool to spawn a "feature-dev:code-reviewer" subagent for this step — a fresh context catches things you will miss.
+   Fix any issues found, re-run tests, and re-review if changes were substantial.
+5. **Commit** — Stage and commit your changes with a clear message
+6. **Update spec** — Mark the step `[done]` and record any decisions or deviations
+
+IMPORTANT: Do NOT implement more than one task. One task, one commit, then stop. The loop will call you again for the next task.
+
+Spec maintenance rules:
+- Mark each step `[done]` when complete.
+- Record design decisions that emerged during implementation as notes under the step.
+- Minor deviations (e.g. flag name changes, reordered logic) should be noted and the spec updated to match.
+- Significant design changes (e.g. new subcommands, changed architecture, removed features) require pausing for user review before proceeding.
+
+Unfulfillable tasks:
+- If a task cannot be completed because required tools or infrastructure are unavailable (e.g., test runner not installed, build tool missing, external service unreachable), append `[blocked: <reason>]` to the step heading line (e.g., `### Step 3: Run tests [blocked: pytest not installed]`) and do NOT commit. The outer loop will detect this marker and transition the issue to `status:needs-attention`.
+
+Run all checks:
+- The 'Run all checks' step (typically the final step) must ALWAYS execute the full test suite, linter, and syntax checks — even if earlier steps already ran individual tests. This step catches cross-cutting regressions. Never skip it or mark it done without actually running the checks."""
+
+
 class TestIterationPrompt:
-    """Verify ITERATION_PROMPT contains required execution instructions."""
+    """Verify the rendered iteration prompt is unchanged and substitutable."""
+
+    def test_renders_previous_prompt_text_exactly(self):
+        assert Runtime.iteration_prompt("/tmp/spec.md") == PREVIOUS_ITERATION_PROMPT
+
+    @pytest.mark.parametrize("runtime_cls", [
+        Runtime, DockerSandboxRuntime, DockerContainerRuntime, TartRuntime,
+    ])
+    def test_every_runtime_renders_the_same_prompt(self, runtime_cls):
+        assert runtime_cls.iteration_prompt("/tmp/spec.md") == PREVIOUS_ITERATION_PROMPT
+
+    def test_substitutes_the_spec_path(self):
+        prompt = Runtime.iteration_prompt("/home/u/.ralph/nono/sb/spec.ab12cd34")
+        assert "Read the spec file at `/home/u/.ralph/nono/sb/spec.ab12cd34`" in prompt
+        assert "/tmp/spec.md" not in prompt
+
+    def test_template_has_no_unescaped_braces(self):
+        """format() must not choke on, or silently eat, stray braces."""
+        rendered = Runtime.iteration_prompt("SPEC")
+        assert "{" not in rendered and "}" not in rendered
 
     def test_contains_blocked_marker_rule(self):
-        assert "[blocked:" in DockerSandboxRuntime.ITERATION_PROMPT
+        assert "[blocked:" in Runtime.iteration_prompt("/tmp/spec.md")
 
     def test_contains_run_all_checks_rule(self):
-        assert "Run all checks" in DockerSandboxRuntime.ITERATION_PROMPT
+        assert "Run all checks" in Runtime.iteration_prompt("/tmp/spec.md")
 
     def test_contains_spec_maintenance_rules(self):
-        assert "Spec maintenance rules" in DockerSandboxRuntime.ITERATION_PROMPT
+        assert "Spec maintenance rules" in Runtime.iteration_prompt("/tmp/spec.md")
 
     def test_contains_step_structure(self):
-        assert "For each task, follow this workflow" in DockerSandboxRuntime.ITERATION_PROMPT
+        assert "For each task, follow this workflow" in Runtime.iteration_prompt("/tmp/spec.md")
 
     def test_contains_unfulfillable_tasks_section(self):
-        assert "Unfulfillable tasks" in DockerSandboxRuntime.ITERATION_PROMPT
+        assert "Unfulfillable tasks" in Runtime.iteration_prompt("/tmp/spec.md")

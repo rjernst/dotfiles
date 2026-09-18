@@ -5,6 +5,7 @@ import http.server
 import io
 import os
 import re
+import socket
 import sys
 import threading
 import urllib.error
@@ -84,12 +85,14 @@ class TestReadModeAndCredential:
 # patches only affect the proxy's internal upstream calls.
 # ---------------------------------------------------------------------------
 
-def _start_proxy_server(token, target, version_hash="testhash1234", auth_mode="oauth"):
+def _start_proxy_server(token, target, version_hash="testhash1234",
+                        auth_mode="oauth", listen_addr="127.0.0.1"):
     """Start a proxy server on an ephemeral port and return (server, port)."""
     proxy.ProxyHandler.real_credential = token
     proxy.ProxyHandler.target = target
     proxy.ProxyHandler.version_hash = version_hash
     proxy.ProxyHandler.AUTH_MODE = auth_mode
+    proxy.ProxyHandler.listen_addr = listen_addr
 
     server = http.server.HTTPServer(("127.0.0.1", 0), proxy.ProxyHandler)
     port = server.server_address[1]
@@ -131,6 +134,29 @@ class TestVersionHash:
         assert proxy.compute_version_hash() == proxy.compute_version_hash()
 
 
+class TestMakeServer:
+    """proxy.py takes its server classes from proxy_base.
+
+    The address parsing itself is covered by test_proxy_base.py; what
+    matters here is that this script uses the shared implementation
+    rather than a copy that could drift from it.
+    """
+
+    def test_server_helpers_come_from_proxy_base(self):
+        import proxy_base
+        assert proxy.make_server is proxy_base.make_server
+        assert proxy.IdleShutdown is proxy_base.IdleShutdown
+        assert proxy.compute_version_hash is proxy_base.compute_version_hash
+
+    def test_default_listen_addr_is_dual_stack(self):
+        assert proxy.DEFAULT_LISTEN_ADDR == "::"
+
+    def test_version_covers_proxy_base(self):
+        """A proxy_base change must retire proxies running the old code."""
+        assert (proxy.compute_version_hash(proxy.__file__)
+                != proxy.compute_version_hash())
+
+
 class TestHealthEndpoint:
     def test_returns_200_with_version_and_mode_oauth(self):
         server, port = _start_proxy_server("test-token", "http://unused",
@@ -139,7 +165,8 @@ class TestHealthEndpoint:
         try:
             resp, data = _http_request(port, "GET", "/health")
             assert resp.status == 200
-            assert data == b"agent-loop-proxy ok v=abc123def456 mode=oauth"
+            assert data == (b"agent-loop-proxy ok v=abc123def456 "
+                            b"mode=oauth addr=127.0.0.1")
         finally:
             server.shutdown()
 
@@ -150,7 +177,20 @@ class TestHealthEndpoint:
         try:
             resp, data = _http_request(port, "GET", "/health")
             assert resp.status == 200
-            assert data == b"agent-loop-proxy ok v=abc123def456 mode=api_key"
+            assert data == (b"agent-loop-proxy ok v=abc123def456 "
+                            b"mode=api_key addr=127.0.0.1")
+        finally:
+            server.shutdown()
+
+    def test_health_reports_configured_listen_addr(self):
+        server, port = _start_proxy_server("test-token", "http://unused",
+                                           version_hash="abc123def456",
+                                           auth_mode="oauth",
+                                           listen_addr="::")
+        try:
+            resp, data = _http_request(port, "GET", "/health")
+            assert resp.status == 200
+            assert data.endswith(b"addr=::")
         finally:
             server.shutdown()
 

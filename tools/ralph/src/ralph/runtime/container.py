@@ -45,6 +45,10 @@ class DockerContainerRuntime(DockerImageMixin, Runtime):
         self.allowed_hosts = tuple(allowed_hosts) if allowed_hosts else ()
         self._worktree_path = None
 
+    # Docker Desktop routes host.docker.internal to the host's loopback,
+    # so the proxies never need to be exposed beyond 127.0.0.1.
+    PROXY_LISTEN_ADDR = "127.0.0.1"
+
     def proxy_host(self):
         """Return the hostname for reaching the credential proxy."""
         return "host.docker.internal"
@@ -117,12 +121,13 @@ class DockerContainerRuntime(DockerImageMixin, Runtime):
             return name
 
         # Ensure Docker socket proxy is running
-        ensure_docker_proxy(DOCKER_PROXY_PORT, self.dotfiles_dir)
+        listen_addr = self.proxy_listen_addr()
+        ensure_docker_proxy(DOCKER_PROXY_PORT, self.dotfiles_dir, listen_addr)
 
         # Ensure network proxy is running (if allowed_hosts configured)
         if self.allowed_hosts:
             ensure_network_proxy(NETWORK_PROXY_PORT, self.dotfiles_dir,
-                                self.allowed_hosts)
+                                self.allowed_hosts, listen_addr)
 
         base_tag = self.ensure_image(agent, force_rebuild=force_rebuild)
         if project_dir:
@@ -407,7 +412,7 @@ class DockerContainerRuntime(DockerImageMixin, Runtime):
                     cmd.extend(["-e", f"{k}={v}"])
             cmd.extend([
                 sandbox_name, cli_command,
-                "-p", self.ITERATION_PROMPT,
+                "-p", self.iteration_prompt(spec_path),
                 "--model", model,
             ] + cli_flags)
             rc = subprocess.run(cmd, check=False).returncode
@@ -420,7 +425,7 @@ class DockerContainerRuntime(DockerImageMixin, Runtime):
                 f'export {env_var_name}="$(cat {secret_path})" && '
                 f"rm {secret_path} && "
                 f"exec {cli_command} -p "
-                + shlex.quote(self.ITERATION_PROMPT)
+                + shlex.quote(self.iteration_prompt(spec_path))
                 + f" --model {shlex.quote(model)}"
             )
             for flag in cli_flags:
@@ -450,7 +455,7 @@ class DockerContainerRuntime(DockerImageMixin, Runtime):
         failures = []
 
         # 1. Docker socket proxy health
-        healthy, _ = docker_proxy_health_check(DOCKER_PROXY_PORT)
+        healthy, _, _ = docker_proxy_health_check(DOCKER_PROXY_PORT)
         if not healthy:
             failures.append(
                 f"docker socket proxy not reachable at "
@@ -458,7 +463,7 @@ class DockerContainerRuntime(DockerImageMixin, Runtime):
 
         # 1b. Network proxy health (only when allowed_hosts configured)
         if self.allowed_hosts:
-            healthy, _, _ = network_proxy_health_check(NETWORK_PROXY_PORT)
+            healthy, _, _, _ = network_proxy_health_check(NETWORK_PROXY_PORT)
             if not healthy:
                 failures.append(
                     f"network proxy not reachable at "

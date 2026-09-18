@@ -17,6 +17,10 @@ from ralph.token import read_token_from_keychain
 DEFAULT_PROXY_PORTS = {"claude": 18080}
 DEFAULT_PROXY_PORT = 18080
 
+# Address the host-side proxies bind to unless a runtime asks for another.
+# "::" is a dual-stack wildcard socket, reachable from containers and VMs.
+DEFAULT_PROXY_LISTEN_ADDR = "::"
+
 # Map short model aliases to full model IDs for ANTHROPIC_CUSTOM_MODEL_OPTION.
 MODEL_ALIASES = {
     "opus": "claude-opus-4-6",
@@ -92,11 +96,24 @@ def proxy_script_path(dotfiles_dir):
     return os.path.join(dotfiles_dir, "docker", "agent-loop", "proxy", "proxy.py")
 
 
+def proxy_script_version(script_path):
+    """Version string a proxy script reports as ``v=`` on /health.
+
+    Both the script and proxy_base are hashed: the proxies compute their
+    version the same way, so a change to the shared module has to bump it
+    here too or running proxies would look current after a fix.
+    """
+    base = os.path.join(os.path.dirname(script_path), "proxy_base.py")
+    digest = hashlib.sha256()
+    for path in (script_path, base):
+        with open(path, "rb") as f:
+            digest.update(f.read())
+    return digest.hexdigest()[:12]
+
+
 def compute_proxy_version(dotfiles_dir):
     """Hash proxy.py source and return a 12-char hex version string."""
-    path = proxy_script_path(dotfiles_dir)
-    with open(path, "rb") as f:
-        return hashlib.sha256(f.read()).hexdigest()[:12]
+    return proxy_script_version(proxy_script_path(dotfiles_dir))
 
 
 def proxy_pid_file(agent):
@@ -122,27 +139,31 @@ def proxy_port_for_agent(agent):
 def proxy_health_check(port):
     """Check if the proxy is healthy at the given port.
 
-    Returns (healthy, version, mode) where version is the v=<hash> string
-    and mode is the mode=<mode> string from the health response, or None
-    if unhealthy/absent.
+    Returns (healthy, version, mode, addr) where version is the v=<hash>
+    string, mode is the mode=<mode> string, and addr is the addr=<addr>
+    listen address from the health response.  Any field absent from the
+    response (e.g. addr on an older proxy) comes back as None.
     """
     try:
         resp = urllib.request.urlopen(
             f"http://localhost:{port}/health", timeout=3)
         if resp.status != 200:
-            return False, None, None
+            return False, None, None, None
         body = resp.read().decode().strip()
-        # Parse "agent-loop-proxy ok v=<hash> mode=<mode>"
+        # Parse "agent-loop-proxy ok v=<hash> mode=<mode> addr=<addr>"
         m = re.search(r'v=([a-f0-9]+)', body)
         version = m.group(1) if m else None
         m = re.search(r'mode=(\w+)', body)
         mode = m.group(1) if m else None
-        return True, version, mode
+        m = re.search(r'addr=(\S+)', body)
+        addr = m.group(1) if m else None
+        return True, version, mode, addr
     except Exception:
-        return False, None, None
+        return False, None, None, None
 
 
-def start_proxy(agent, port, dotfiles_dir, auth_mode=None):
+def start_proxy(agent, port, dotfiles_dir, auth_mode=None,
+                listen_addr=DEFAULT_PROXY_LISTEN_ADDR):
     """Start the credential injection proxy as a native subprocess.
 
     Reads the token from Keychain and pipes it via stdin.
@@ -153,6 +174,7 @@ def start_proxy(agent, port, dotfiles_dir, auth_mode=None):
         port: port to listen on
         dotfiles_dir: path to the dotfiles repository
         auth_mode: auth mode string (e.g. "oauth", "api_key")
+        listen_addr: address to bind (default "::", dual-stack wildcard)
 
     Returns the subprocess.Popen object.
     """
@@ -176,10 +198,11 @@ def start_proxy(agent, port, dotfiles_dir, auth_mode=None):
     pid_file = proxy_pid_file(agent)
     log_file = proxy_log_file(agent)
 
-    print(f"ralph: starting proxy on port {port}...")
+    print(f"ralph: starting proxy on {listen_addr}:{port}...")
     log_fh = open(log_file, "a")
     proxy_env = {**os.environ,
                  "LISTEN_PORT": str(port),
+                 "LISTEN_ADDR": listen_addr,
                  "PID_FILE": pid_file}
     if base_url:
         proxy_env["TARGET"] = base_url
@@ -268,13 +291,14 @@ def start_proxy_keepalive(port, interval=60):
     return stop
 
 
-def ensure_proxy(agent, port, dotfiles_dir, auth_mode=None):
+def ensure_proxy(agent, port, dotfiles_dir, auth_mode=None,
+                 listen_addr=DEFAULT_PROXY_LISTEN_ADDR):
     """Ensure the proxy is running and healthy in the requested mode.
 
-    If a proxy is already running and healthy in the same mode, reuse it
-    (even if outdated — the idle timeout will retire it naturally).
-    If running in a different mode, restart it in the requested mode.
-    Otherwise start a new one.
+    If a proxy is already running and healthy in the same mode and on the
+    same listen address, reuse it (even if outdated — the idle timeout
+    will retire it naturally).  If running in a different mode or on a
+    different address, restart it as requested.  Otherwise start a new one.
 
     Uses a file lock to serialize proxy lifecycle management across
     concurrent ralph instances sharing the same port.
@@ -286,9 +310,20 @@ def ensure_proxy(agent, port, dotfiles_dir, auth_mode=None):
     with open(lock_path, "w") as lock_fh:
         fcntl.flock(lock_fh, fcntl.LOCK_EX)
 
-        healthy, version, running_mode = proxy_health_check(port)
+        healthy, version, running_mode, running_addr = proxy_health_check(port)
         if healthy:
-            if running_mode == resolved_mode:
+            if running_mode != resolved_mode:
+                # Mode mismatch — restart in the requested mode
+                print(f"ralph: proxy running in {running_mode or 'unknown'} mode, "
+                      f"restarting in {resolved_mode} mode")
+                stop_proxy(agent, wait=True)
+            elif running_addr != listen_addr:
+                # Listen address mismatch — restart on the requested address
+                print(f"ralph: proxy listening on "
+                      f"{running_addr or 'unknown'}, "
+                      f"restarting on {listen_addr}")
+                stop_proxy(agent, wait=True)
+            else:
                 current = compute_proxy_version(dotfiles_dir)
                 if version == current:
                     print(f"ralph: reusing healthy proxy on port {port}")
@@ -296,22 +331,16 @@ def ensure_proxy(agent, port, dotfiles_dir, auth_mode=None):
                     print(f"ralph: reusing proxy on port {port} "
                           f"(outdated v={version}, current v={current})")
                 return port
-            else:
-                # Mode mismatch — restart in the requested mode
-                print(f"ralph: proxy running in {running_mode or 'unknown'} mode, "
-                      f"restarting in {resolved_mode} mode")
-                stop_proxy(agent, wait=True)
-
-        if not healthy:
+        else:
             # Kill any lingering proxy process so the port is free.
             stop_proxy(agent, wait=True)
 
-        start_proxy(agent, port, dotfiles_dir, auth_mode)
+        start_proxy(agent, port, dotfiles_dir, auth_mode, listen_addr)
 
         # Wait for health check
         for _ in range(10):
             time.sleep(0.5)
-            healthy, _, _ = proxy_health_check(port)
+            healthy, _, _, _ = proxy_health_check(port)
             if healthy:
                 return port
 

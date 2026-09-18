@@ -37,21 +37,31 @@ class TestNetworkProxyScriptPath:
 
 
 class TestComputeNetworkProxyVersion:
-    @patch(
-        "builtins.open",
-        MagicMock(return_value=io.BytesIO(b"proxy source code")),
-    )
+    def _sources(self):
+        """Fresh handles per call: the script and proxy_base are both read."""
+        return lambda *args, **kwargs: io.BytesIO(b"proxy source code")
+
     def test_returns_12_char_hex_hash(self):
-        version = compute_network_proxy_version("/fake/dotfiles")
+        with patch("builtins.open", self._sources()):
+            version = compute_network_proxy_version("/fake/dotfiles")
         assert len(version) == 12
         assert all(c in "0123456789abcdef" for c in version)
 
     def test_same_input_same_hash(self):
-        with patch("builtins.open", return_value=io.BytesIO(b"proxy source code")):
+        with patch("builtins.open", self._sources()):
             v1 = compute_network_proxy_version("/fake/dotfiles")
-        with patch("builtins.open", return_value=io.BytesIO(b"proxy source code")):
+        with patch("builtins.open", self._sources()):
             v2 = compute_network_proxy_version("/fake/dotfiles")
         assert v1 == v2
+
+    def test_proxy_base_is_part_of_the_version(self):
+        """A fix in the shared module must retire running proxies."""
+        sources = iter([b"script", b"base one", b"script", b"base two"])
+        with patch("builtins.open",
+                   lambda *a, **k: io.BytesIO(next(sources))):
+            first = compute_network_proxy_version("/fake/dotfiles")
+            second = compute_network_proxy_version("/fake/dotfiles")
+        assert first != second
 
 
 # ---------------------------------------------------------------------------
@@ -65,24 +75,26 @@ class TestNetworkProxyHealthCheck:
         mock_resp = MagicMock()
         mock_resp.status = 200
         mock_resp.read.return_value = (
-            b"network-proxy ok hosts=example.com,github.com v=abc123def456"
+            b"network-proxy ok hosts=example.com,github.com v=abc123def456 addr=::"
         )
         mock_urlopen.return_value = mock_resp
-        healthy, version, hosts = network_proxy_health_check(18082)
+        healthy, version, hosts, addr = network_proxy_health_check(18082)
         assert healthy is True
         assert version == "abc123def456"
         assert hosts == frozenset({"example.com", "github.com"})
+        assert addr == "::"
 
     @patch("ralph.network_proxy.urllib.request.urlopen")
     def test_returns_empty_hosts_when_none_configured(self, mock_urlopen):
         mock_resp = MagicMock()
         mock_resp.status = 200
-        mock_resp.read.return_value = b"network-proxy ok hosts= v=abc123def456"
+        mock_resp.read.return_value = b"network-proxy ok hosts= v=abc123def456 addr=127.0.0.1"
         mock_urlopen.return_value = mock_resp
-        healthy, version, hosts = network_proxy_health_check(18082)
+        healthy, version, hosts, addr = network_proxy_health_check(18082)
         assert healthy is True
         assert version == "abc123def456"
         assert hosts == frozenset()
+        assert addr == "127.0.0.1"
 
     @patch("ralph.network_proxy.urllib.request.urlopen")
     def test_returns_healthy_none_version_on_old_format(self, mock_urlopen):
@@ -90,30 +102,33 @@ class TestNetworkProxyHealthCheck:
         mock_resp.status = 200
         mock_resp.read.return_value = b"network-proxy ok"
         mock_urlopen.return_value = mock_resp
-        healthy, version, hosts = network_proxy_health_check(18082)
+        healthy, version, hosts, addr = network_proxy_health_check(18082)
         assert healthy is True
         assert version is None
         assert hosts == frozenset()
+        assert addr is None
 
     @patch("ralph.network_proxy.urllib.request.urlopen")
     def test_returns_unhealthy_on_non_200(self, mock_urlopen):
         mock_resp = MagicMock()
         mock_resp.status = 500
         mock_urlopen.return_value = mock_resp
-        healthy, version, hosts = network_proxy_health_check(18082)
+        healthy, version, hosts, addr = network_proxy_health_check(18082)
         assert healthy is False
         assert version is None
         assert hosts is None
+        assert addr is None
 
     @patch(
         "ralph.network_proxy.urllib.request.urlopen",
         side_effect=Exception("connection refused"),
     )
     def test_returns_unhealthy_on_connection_error(self, mock_urlopen):
-        healthy, version, hosts = network_proxy_health_check(18082)
+        healthy, version, hosts, addr = network_proxy_health_check(18082)
         assert healthy is False
         assert version is None
         assert hosts is None
+        assert addr is None
 
     @patch("ralph.network_proxy.urllib.request.urlopen")
     def test_parses_single_host(self, mock_urlopen):
@@ -123,7 +138,7 @@ class TestNetworkProxyHealthCheck:
             b"network-proxy ok hosts=api.example.com v=aaa111bbb222"
         )
         mock_urlopen.return_value = mock_resp
-        healthy, version, hosts = network_proxy_health_check(18082)
+        healthy, version, hosts, addr = network_proxy_health_check(18082)
         assert healthy is True
         assert hosts == frozenset({"api.example.com"})
 
@@ -152,6 +167,7 @@ class TestStartNetworkProxy:
         assert env["LISTEN_PORT"] == "18082"
         assert env["PID_FILE"] == PID_FILE
         assert env["ALLOWED_HOSTS"] == "example.com,github.com"
+        assert env["LISTEN_ADDR"] == "::"
         # Verify stdin is DEVNULL
         assert mock_popen.call_args[1]["stdin"] == __import__("subprocess").DEVNULL
 
@@ -164,6 +180,14 @@ class TestStartNetworkProxy:
         start_network_proxy(18082, "/fake/dotfiles", [])
         env = mock_popen.call_args[1]["env"]
         assert env["ALLOWED_HOSTS"] == ""
+
+    @patch("builtins.open", MagicMock())
+    @patch("ralph.network_proxy.subprocess.Popen")
+    def test_passes_listen_addr_to_proxy_env(self, mock_popen):
+        mock_popen.return_value = MagicMock()
+        start_network_proxy(18082, "/fake/dotfiles", ["example.com"], "127.0.0.1")
+        env = mock_popen.call_args[1]["env"]
+        assert env["LISTEN_ADDR"] == "127.0.0.1"
 
     @patch("builtins.open", MagicMock())
     @patch(
@@ -230,7 +254,7 @@ class TestEnsureNetworkProxy:
     )
     @patch(
         "ralph.network_proxy.network_proxy_health_check",
-        return_value=(True, "abc123def456", frozenset({"example.com"})),
+        return_value=(True, "abc123def456", frozenset({"example.com"}), "::"),
     )
     def test_reuses_healthy_current_proxy(self, mock_health, mock_version):
         result = ensure_network_proxy(18082, "/fake/dotfiles", ["example.com"])
@@ -243,7 +267,7 @@ class TestEnsureNetworkProxy:
     )
     @patch(
         "ralph.network_proxy.network_proxy_health_check",
-        return_value=(True, "oldversion456", frozenset({"example.com"})),
+        return_value=(True, "oldversion456", frozenset({"example.com"}), "::"),
     )
     def test_reuses_outdated_proxy_with_warning(
         self, mock_health, mock_version, capsys
@@ -257,8 +281,8 @@ class TestEnsureNetworkProxy:
     @patch(
         "ralph.network_proxy.network_proxy_health_check",
         side_effect=[
-            (False, None, None),
-            (True, "abc123", frozenset({"example.com"})),
+            (False, None, None, None),
+            (True, "abc123", frozenset({"example.com"}), "::"),
         ],
     )
     @patch("ralph.network_proxy.start_network_proxy")
@@ -269,13 +293,13 @@ class TestEnsureNetworkProxy:
         result = ensure_network_proxy(18082, "/fake/dotfiles", ["example.com"])
         assert result == 18082
         mock_stop.assert_called_once_with(wait=True)
-        mock_start.assert_called_once_with(18082, "/fake/dotfiles", ["example.com"])
+        mock_start.assert_called_once_with(18082, "/fake/dotfiles", ["example.com"], "::")
 
     @patch("ralph.network_proxy.os.path.isfile", return_value=False)
     @patch("ralph.network_proxy.stop_network_proxy")
     @patch(
         "ralph.network_proxy.network_proxy_health_check",
-        return_value=(False, None, None),
+        return_value=(False, None, None, None),
     )
     @patch("ralph.network_proxy.start_network_proxy")
     @patch("ralph.network_proxy.time.sleep")
@@ -302,9 +326,9 @@ class TestEnsureNetworkProxyAllowlistChange:
         "ralph.network_proxy.network_proxy_health_check",
         side_effect=[
             # First check: healthy but with old allowlist
-            (True, "abc123def456", frozenset({"old-host.com"})),
+            (True, "abc123def456", frozenset({"old-host.com"}), "::"),
             # After restart: healthy with new allowlist
-            (True, "abc123def456", frozenset({"new-host.com"})),
+            (True, "abc123def456", frozenset({"new-host.com"}), "::"),
         ],
     )
     @patch("ralph.network_proxy.start_network_proxy")
@@ -316,7 +340,7 @@ class TestEnsureNetworkProxyAllowlistChange:
         assert result == 18082
         # Should stop the old proxy and start a new one
         mock_stop.assert_called_once_with(wait=True)
-        mock_start.assert_called_once_with(18082, "/fake/dotfiles", ["new-host.com"])
+        mock_start.assert_called_once_with(18082, "/fake/dotfiles", ["new-host.com"], "::")
         captured = capsys.readouterr()
         assert "allowlist changed" in captured.out
 
@@ -326,7 +350,7 @@ class TestEnsureNetworkProxyAllowlistChange:
     )
     @patch(
         "ralph.network_proxy.network_proxy_health_check",
-        return_value=(True, "abc123def456", frozenset({"a.com", "b.com"})),
+        return_value=(True, "abc123def456", frozenset({"a.com", "b.com"}), "::"),
     )
     def test_order_independent_allowlist_comparison(
         self, mock_health, mock_version
@@ -339,13 +363,95 @@ class TestEnsureNetworkProxyAllowlistChange:
         mock_health.assert_called_once_with(18082)
 
 
+class TestEnsureNetworkProxyListenAddr:
+    @patch(
+        "ralph.network_proxy.compute_network_proxy_version",
+        return_value="abc123def456",
+    )
+    @patch(
+        "ralph.network_proxy.network_proxy_health_check",
+        return_value=(True, "abc123def456", frozenset({"example.com"}),
+                      "127.0.0.1"),
+    )
+    def test_reuses_proxy_on_matching_addr(self, mock_health, mock_version):
+        result = ensure_network_proxy(18082, "/fake/dotfiles", ["example.com"],
+                                      "127.0.0.1")
+        assert result == 18082
+
+    @patch("ralph.network_proxy.stop_network_proxy")
+    @patch(
+        "ralph.network_proxy.network_proxy_health_check",
+        side_effect=[
+            (True, "abc123", frozenset({"example.com"}), "::"),
+            (True, "abc123", frozenset({"example.com"}), "127.0.0.1"),
+        ],
+    )
+    @patch("ralph.network_proxy.start_network_proxy")
+    @patch("ralph.network_proxy.time.sleep")
+    def test_restarts_when_addr_differs(
+        self, mock_sleep, mock_start, mock_health, mock_stop, capsys
+    ):
+        result = ensure_network_proxy(18082, "/fake/dotfiles", ["example.com"],
+                                      "127.0.0.1")
+        assert result == 18082
+        mock_stop.assert_called_once_with(wait=True)
+        mock_start.assert_called_once_with(18082, "/fake/dotfiles",
+                                           ["example.com"], "127.0.0.1")
+        captured = capsys.readouterr()
+        assert ("network proxy listening on ::, restarting on 127.0.0.1"
+                in captured.out)
+
+    @patch("ralph.network_proxy.stop_network_proxy")
+    @patch(
+        "ralph.network_proxy.network_proxy_health_check",
+        side_effect=[
+            (True, "abc123", frozenset({"example.com"}), None),
+            (True, "abc123", frozenset({"example.com"}), "::"),
+        ],
+    )
+    @patch("ralph.network_proxy.start_network_proxy")
+    @patch("ralph.network_proxy.time.sleep")
+    def test_restarts_proxy_without_addr_field(
+        self, mock_sleep, mock_start, mock_health, mock_stop, capsys
+    ):
+        result = ensure_network_proxy(18082, "/fake/dotfiles", ["example.com"])
+        assert result == 18082
+        mock_stop.assert_called_once_with(wait=True)
+        captured = capsys.readouterr()
+        assert ("network proxy listening on unknown, restarting on ::"
+                in captured.out)
+
+    @patch("ralph.network_proxy.stop_network_proxy")
+    @patch(
+        "ralph.network_proxy.network_proxy_health_check",
+        side_effect=[
+            (True, "abc123", frozenset({"old-host.com"}), "::"),
+            (True, "abc123", frozenset({"new-host.com"}), "127.0.0.1"),
+        ],
+    )
+    @patch("ralph.network_proxy.start_network_proxy")
+    @patch("ralph.network_proxy.time.sleep")
+    def test_allowlist_change_takes_precedence_over_addr(
+        self, mock_sleep, mock_start, mock_health, mock_stop, capsys
+    ):
+        """Both allowlist and addr differ — a single restart fixes both."""
+        result = ensure_network_proxy(18082, "/fake/dotfiles", ["new-host.com"],
+                                      "127.0.0.1")
+        assert result == 18082
+        mock_stop.assert_called_once_with(wait=True)
+        mock_start.assert_called_once_with(18082, "/fake/dotfiles",
+                                           ["new-host.com"], "127.0.0.1")
+        captured = capsys.readouterr()
+        assert "allowlist changed" in captured.out
+
+
 class TestEnsureNetworkProxyStaleCleanup:
     @patch("ralph.network_proxy.stop_network_proxy")
     @patch(
         "ralph.network_proxy.network_proxy_health_check",
         side_effect=[
-            (False, None, None),
-            (True, "abc123", frozenset({"example.com"})),
+            (False, None, None, None),
+            (True, "abc123", frozenset({"example.com"}), "::"),
         ],
     )
     @patch("ralph.network_proxy.start_network_proxy")
@@ -357,7 +463,7 @@ class TestEnsureNetworkProxyStaleCleanup:
         result = ensure_network_proxy(18082, "/fake/dotfiles", ["example.com"])
         assert result == 18082
         mock_stop.assert_called_once_with(wait=True)
-        mock_start.assert_called_once_with(18082, "/fake/dotfiles", ["example.com"])
+        mock_start.assert_called_once_with(18082, "/fake/dotfiles", ["example.com"], "::")
 
 
 # ---------------------------------------------------------------------------

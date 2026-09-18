@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from ralph.proxy import (
+    DEFAULT_PROXY_LISTEN_ADDR,
     DEFAULT_PROXY_PORT,
     GATEWAY_MODEL_ALIASES,
     GATEWAY_TIER_MODELS,
@@ -42,23 +43,25 @@ class TestProxyHealthCheck:
     def test_returns_healthy_with_version_and_mode(self, mock_urlopen):
         mock_resp = MagicMock()
         mock_resp.status = 200
-        mock_resp.read.return_value = b"agent-loop-proxy ok v=abc123def456 mode=oauth"
+        mock_resp.read.return_value = b"agent-loop-proxy ok v=abc123def456 mode=oauth addr=::"
         mock_urlopen.return_value = mock_resp
-        healthy, version, mode = proxy_health_check(18080)
+        healthy, version, mode, addr = proxy_health_check(18080)
         assert healthy is True
         assert version == "abc123def456"
         assert mode == "oauth"
+        assert addr == "::"
 
     @patch("ralph.proxy.urllib.request.urlopen")
     def test_parses_api_key_mode(self, mock_urlopen):
         mock_resp = MagicMock()
         mock_resp.status = 200
-        mock_resp.read.return_value = b"agent-loop-proxy ok v=abc123 mode=api_key"
+        mock_resp.read.return_value = b"agent-loop-proxy ok v=abc123 mode=api_key addr=127.0.0.1"
         mock_urlopen.return_value = mock_resp
-        healthy, version, mode = proxy_health_check(18080)
+        healthy, version, mode, addr = proxy_health_check(18080)
         assert healthy is True
         assert version == "abc123"
         assert mode == "api_key"
+        assert addr == "127.0.0.1"
 
     @patch("ralph.proxy.urllib.request.urlopen")
     def test_returns_none_mode_for_old_format(self, mock_urlopen):
@@ -66,10 +69,11 @@ class TestProxyHealthCheck:
         mock_resp.status = 200
         mock_resp.read.return_value = b"agent-loop-proxy ok v=abc123def456"
         mock_urlopen.return_value = mock_resp
-        healthy, version, mode = proxy_health_check(18080)
+        healthy, version, mode, addr = proxy_health_check(18080)
         assert healthy is True
         assert version == "abc123def456"
         assert mode is None
+        assert addr is None
 
     @patch("ralph.proxy.urllib.request.urlopen")
     def test_returns_healthy_none_version_on_old_format(self, mock_urlopen):
@@ -77,27 +81,30 @@ class TestProxyHealthCheck:
         mock_resp.status = 200
         mock_resp.read.return_value = b"agent-loop-proxy ok"
         mock_urlopen.return_value = mock_resp
-        healthy, version, mode = proxy_health_check(18080)
+        healthy, version, mode, addr = proxy_health_check(18080)
         assert healthy is True
         assert version is None
         assert mode is None
+        assert addr is None
 
     @patch("ralph.proxy.urllib.request.urlopen")
     def test_returns_unhealthy_on_non_200(self, mock_urlopen):
         mock_resp = MagicMock()
         mock_resp.status = 500
         mock_urlopen.return_value = mock_resp
-        healthy, version, mode = proxy_health_check(18080)
+        healthy, version, mode, addr = proxy_health_check(18080)
         assert healthy is False
         assert version is None
         assert mode is None
+        assert addr is None
 
     @patch("ralph.proxy.urllib.request.urlopen", side_effect=Exception("connection refused"))
     def test_returns_unhealthy_on_connection_error(self, mock_urlopen):
-        healthy, version, mode = proxy_health_check(18080)
+        healthy, version, mode, addr = proxy_health_check(18080)
         assert healthy is False
         assert version is None
         assert mode is None
+        assert addr is None
 
 
 # ---------------------------------------------------------------------------
@@ -228,6 +235,32 @@ class TestStartProxy:
         env = mock_popen.call_args[1]["env"]
         assert "TARGET" not in env
 
+    @patch("builtins.open", MagicMock())
+    @patch("ralph.proxy.subprocess.Popen")
+    @patch("ralph.proxy.read_token_from_keychain")
+    @patch("ralph.proxy.time.time", return_value=1700000000.0)
+    def test_defaults_listen_addr_to_dual_stack(self, mock_time, mock_read, mock_popen):
+        future_ms = 1700000000000 + 30 * 86400 * 1000
+        mock_read.return_value = {"accessToken": "sk-test", "expiresAt": future_ms}
+        mock_popen.return_value = MagicMock()
+
+        start_proxy("claude", 18080, "/fake/dotfiles")
+        env = mock_popen.call_args[1]["env"]
+        assert env["LISTEN_ADDR"] == DEFAULT_PROXY_LISTEN_ADDR
+
+    @patch("builtins.open", MagicMock())
+    @patch("ralph.proxy.subprocess.Popen")
+    @patch("ralph.proxy.read_token_from_keychain")
+    @patch("ralph.proxy.time.time", return_value=1700000000.0)
+    def test_passes_listen_addr_to_proxy_env(self, mock_time, mock_read, mock_popen):
+        future_ms = 1700000000000 + 30 * 86400 * 1000
+        mock_read.return_value = {"accessToken": "sk-test", "expiresAt": future_ms}
+        mock_popen.return_value = MagicMock()
+
+        start_proxy("claude", 18080, "/fake/dotfiles", listen_addr="127.0.0.1")
+        env = mock_popen.call_args[1]["env"]
+        assert env["LISTEN_ADDR"] == "127.0.0.1"
+
 
 # ---------------------------------------------------------------------------
 # stop_proxy
@@ -317,20 +350,20 @@ class TestProxyKeepalive:
 
 class TestEnsureProxy:
     @patch("ralph.proxy.compute_proxy_version", return_value="abc123def456")
-    @patch("ralph.proxy.proxy_health_check", return_value=(True, "abc123def456", "oauth"))
+    @patch("ralph.proxy.proxy_health_check", return_value=(True, "abc123def456", "oauth", "::"))
     def test_reuses_healthy_current_proxy_same_mode(self, mock_health, mock_version):
         result = ensure_proxy("claude", 18080, "/fake/dotfiles")
         assert result == 18080
         mock_health.assert_called_once_with(18080)
 
     @patch("ralph.proxy.compute_proxy_version", return_value="abc123def456")
-    @patch("ralph.proxy.proxy_health_check", return_value=(True, "abc123def456", "api_key"))
+    @patch("ralph.proxy.proxy_health_check", return_value=(True, "abc123def456", "api_key", "::"))
     def test_reuses_healthy_proxy_when_mode_matches(self, mock_health, mock_version):
         result = ensure_proxy("claude", 18080, "/fake/dotfiles", auth_mode="api_key")
         assert result == 18080
 
     @patch("ralph.proxy.compute_proxy_version", return_value="newversion123")
-    @patch("ralph.proxy.proxy_health_check", return_value=(True, "oldversion456", "oauth"))
+    @patch("ralph.proxy.proxy_health_check", return_value=(True, "oldversion456", "oauth", "::"))
     def test_reuses_outdated_proxy_with_warning(self, mock_health, mock_version, capsys):
         result = ensure_proxy("claude", 18080, "/fake/dotfiles")
         assert result == 18080
@@ -339,28 +372,28 @@ class TestEnsureProxy:
 
     @patch("ralph.proxy.stop_proxy")
     @patch("ralph.proxy.proxy_health_check",
-           side_effect=[(False, None, None), (True, "abc123", "oauth")])
+           side_effect=[(False, None, None, None), (True, "abc123", "oauth", "::")])
     @patch("ralph.proxy.start_proxy")
     @patch("ralph.proxy.time.sleep")
     def test_starts_new_when_none_running(self, mock_sleep, mock_start, mock_health, mock_stop):
         result = ensure_proxy("claude", 18080, "/fake/dotfiles")
         assert result == 18080
         mock_stop.assert_called_once_with("claude", wait=True)
-        mock_start.assert_called_once_with("claude", 18080, "/fake/dotfiles", None)
+        mock_start.assert_called_once_with("claude", 18080, "/fake/dotfiles", None, "::")
 
     @patch("ralph.proxy.stop_proxy")
     @patch("ralph.proxy.proxy_health_check",
-           side_effect=[(False, None, None), (True, "abc123", "api_key")])
+           side_effect=[(False, None, None, None), (True, "abc123", "api_key", "::")])
     @patch("ralph.proxy.start_proxy")
     @patch("ralph.proxy.time.sleep")
     def test_starts_new_with_auth_mode(self, mock_sleep, mock_start, mock_health, mock_stop):
         result = ensure_proxy("claude", 18080, "/fake/dotfiles", auth_mode="api_key")
         assert result == 18080
-        mock_start.assert_called_once_with("claude", 18080, "/fake/dotfiles", "api_key")
+        mock_start.assert_called_once_with("claude", 18080, "/fake/dotfiles", "api_key", "::")
 
     @patch("ralph.proxy.os.path.isfile", return_value=False)
     @patch("ralph.proxy.stop_proxy")
-    @patch("ralph.proxy.proxy_health_check", return_value=(False, None, None))
+    @patch("ralph.proxy.proxy_health_check", return_value=(False, None, None, None))
     @patch("ralph.proxy.start_proxy")
     @patch("ralph.proxy.time.sleep")
     def test_exits_when_proxy_fails_to_become_healthy(self, mock_sleep, mock_start,
@@ -376,7 +409,7 @@ class TestEnsureProxy:
 
     @patch("ralph.proxy.stop_proxy")
     @patch("ralph.proxy.proxy_health_check",
-           side_effect=[(True, "abc123", "oauth"), (True, "abc123", "api_key")])
+           side_effect=[(True, "abc123", "oauth", "::"), (True, "abc123", "api_key", "::")])
     @patch("ralph.proxy.start_proxy")
     @patch("ralph.proxy.time.sleep")
     def test_restarts_when_mode_differs(self, mock_sleep, mock_start, mock_health,
@@ -387,13 +420,13 @@ class TestEnsureProxy:
         # Should have stopped the old proxy
         mock_stop.assert_called_once_with("claude", wait=True)
         # Should have started a new one with the requested mode
-        mock_start.assert_called_once_with("claude", 18080, "/fake/dotfiles", "api_key")
+        mock_start.assert_called_once_with("claude", 18080, "/fake/dotfiles", "api_key", "::")
         captured = capsys.readouterr()
         assert "proxy running in oauth mode, restarting in api_key mode" in captured.out
 
     @patch("ralph.proxy.stop_proxy")
     @patch("ralph.proxy.proxy_health_check",
-           side_effect=[(True, "abc123", "api_key"), (True, "abc123", "oauth")])
+           side_effect=[(True, "abc123", "api_key", "::"), (True, "abc123", "oauth", "::")])
     @patch("ralph.proxy.start_proxy")
     @patch("ralph.proxy.time.sleep")
     def test_restarts_from_api_key_to_oauth(self, mock_sleep, mock_start, mock_health,
@@ -402,13 +435,13 @@ class TestEnsureProxy:
         result = ensure_proxy("claude", 18080, "/fake/dotfiles", auth_mode="oauth")
         assert result == 18080
         mock_stop.assert_called_once_with("claude", wait=True)
-        mock_start.assert_called_once_with("claude", 18080, "/fake/dotfiles", "oauth")
+        mock_start.assert_called_once_with("claude", 18080, "/fake/dotfiles", "oauth", "::")
         captured = capsys.readouterr()
         assert "proxy running in api_key mode, restarting in oauth mode" in captured.out
 
     @patch("ralph.proxy.stop_proxy")
     @patch("ralph.proxy.proxy_health_check",
-           side_effect=[(True, "abc123", None), (True, "abc123", "oauth")])
+           side_effect=[(True, "abc123", None, "::"), (True, "abc123", "oauth", "::")])
     @patch("ralph.proxy.start_proxy")
     @patch("ralph.proxy.time.sleep")
     def test_restarts_when_mode_is_none(self, mock_sleep, mock_start, mock_health,
@@ -417,15 +450,78 @@ class TestEnsureProxy:
         result = ensure_proxy("claude", 18080, "/fake/dotfiles", auth_mode="oauth")
         assert result == 18080
         mock_stop.assert_called_once_with("claude", wait=True)
-        mock_start.assert_called_once_with("claude", 18080, "/fake/dotfiles", "oauth")
+        mock_start.assert_called_once_with("claude", 18080, "/fake/dotfiles", "oauth", "::")
         captured = capsys.readouterr()
         assert "proxy running in unknown mode, restarting in oauth mode" in captured.out
+
+
+class TestEnsureProxyListenAddr:
+    @patch("ralph.proxy.compute_proxy_version", return_value="abc123def456")
+    @patch("ralph.proxy.proxy_health_check",
+           return_value=(True, "abc123def456", "oauth", "127.0.0.1"))
+    def test_reuses_proxy_on_matching_addr(self, mock_health, mock_version):
+        result = ensure_proxy("claude", 18080, "/fake/dotfiles",
+                              listen_addr="127.0.0.1")
+        assert result == 18080
+
+    @patch("ralph.proxy.stop_proxy")
+    @patch("ralph.proxy.proxy_health_check",
+           side_effect=[(True, "abc123", "oauth", "::"),
+                        (True, "abc123", "oauth", "127.0.0.1")])
+    @patch("ralph.proxy.start_proxy")
+    @patch("ralph.proxy.time.sleep")
+    def test_restarts_when_addr_differs(self, mock_sleep, mock_start, mock_health,
+                                        mock_stop, capsys):
+        """A proxy bound to the wrong address is restarted on the right one."""
+        result = ensure_proxy("claude", 18080, "/fake/dotfiles",
+                              auth_mode="oauth", listen_addr="127.0.0.1")
+        assert result == 18080
+        mock_stop.assert_called_once_with("claude", wait=True)
+        mock_start.assert_called_once_with("claude", 18080, "/fake/dotfiles",
+                                           "oauth", "127.0.0.1")
+        captured = capsys.readouterr()
+        assert "proxy listening on ::, restarting on 127.0.0.1" in captured.out
+
+    @patch("ralph.proxy.stop_proxy")
+    @patch("ralph.proxy.proxy_health_check",
+           side_effect=[(True, "abc123", "oauth", None),
+                        (True, "abc123", "oauth", "::")])
+    @patch("ralph.proxy.start_proxy")
+    @patch("ralph.proxy.time.sleep")
+    def test_restarts_proxy_without_addr_field(self, mock_sleep, mock_start,
+                                               mock_health, mock_stop, capsys):
+        """A pre-upgrade proxy reports no addr, so it is restarted once."""
+        result = ensure_proxy("claude", 18080, "/fake/dotfiles", auth_mode="oauth")
+        assert result == 18080
+        mock_stop.assert_called_once_with("claude", wait=True)
+        captured = capsys.readouterr()
+        assert "proxy listening on unknown, restarting on ::" in captured.out
+
+    @patch("ralph.proxy.compute_proxy_version", return_value="abc123def456")
+    @patch("ralph.proxy.stop_proxy")
+    @patch("ralph.proxy.proxy_health_check",
+           side_effect=[(True, "abc123def456", "oauth", "::"),
+                        (True, "abc123def456", "api_key", "127.0.0.1")])
+    @patch("ralph.proxy.start_proxy")
+    @patch("ralph.proxy.time.sleep")
+    def test_mode_mismatch_takes_precedence_over_addr(self, mock_sleep, mock_start,
+                                                      mock_health, mock_stop,
+                                                      mock_version, capsys):
+        """Both mode and addr differ — one restart, reported as a mode change."""
+        result = ensure_proxy("claude", 18080, "/fake/dotfiles",
+                              auth_mode="api_key", listen_addr="127.0.0.1")
+        assert result == 18080
+        mock_stop.assert_called_once_with("claude", wait=True)
+        mock_start.assert_called_once_with("claude", 18080, "/fake/dotfiles",
+                                           "api_key", "127.0.0.1")
+        captured = capsys.readouterr()
+        assert "restarting in api_key mode" in captured.out
 
 
 class TestEnsureProxyStaleCleanup:
     @patch("ralph.proxy.stop_proxy")
     @patch("ralph.proxy.proxy_health_check",
-           side_effect=[(False, None, None), (True, "abc123", "oauth")])
+           side_effect=[(False, None, None, None), (True, "abc123", "oauth", "::")])
     @patch("ralph.proxy.start_proxy")
     @patch("ralph.proxy.time.sleep")
     def test_logs_and_removes_stale_container(self, mock_sleep,
@@ -435,7 +531,7 @@ class TestEnsureProxyStaleCleanup:
         result = ensure_proxy("claude", 18080, "/fake/dotfiles")
         assert result == 18080
         mock_stop.assert_called_once_with("claude", wait=True)
-        mock_start.assert_called_once_with("claude", 18080, "/fake/dotfiles", None)
+        mock_start.assert_called_once_with("claude", 18080, "/fake/dotfiles", None, "::")
 
 
 # ---------------------------------------------------------------------------

@@ -6,7 +6,6 @@ proxy and Docker socket proxy.
 """
 
 import fcntl
-import hashlib
 import os
 import re
 import signal
@@ -14,6 +13,8 @@ import subprocess
 import sys
 import time
 import urllib.request
+
+from ralph.proxy import DEFAULT_PROXY_LISTEN_ADDR, proxy_script_version
 
 # Default port for the network proxy.
 NETWORK_PROXY_PORT = 18082
@@ -32,26 +33,25 @@ def network_proxy_script_path(dotfiles_dir):
 
 def compute_network_proxy_version(dotfiles_dir):
     """Hash network_proxy.py source and return a 12-char hex version string."""
-    path = network_proxy_script_path(dotfiles_dir)
-    with open(path, "rb") as f:
-        return hashlib.sha256(f.read()).hexdigest()[:12]
+    return proxy_script_version(network_proxy_script_path(dotfiles_dir))
 
 
 def network_proxy_health_check(port):
     """Check if the network proxy is healthy at the given port.
 
-    Returns (healthy, version, hosts) where version is the v=<hash> string
-    and hosts is a frozenset of allowed hostnames from the health response,
-    or (False, None, None) if unhealthy.
+    Returns (healthy, version, hosts, addr) where version is the v=<hash>
+    string, hosts is a frozenset of allowed hostnames, and addr is the
+    addr=<addr> listen address from the health response, or
+    (False, None, None, None) if unhealthy.
     """
     try:
         resp = urllib.request.urlopen(
             f"http://localhost:{port}/health", timeout=3
         )
         if resp.status != 200:
-            return False, None, None
+            return False, None, None, None
         body = resp.read().decode().strip()
-        # Parse "network-proxy ok hosts=<comma-list> v=<hash>"
+        # Parse "network-proxy ok hosts=<comma-list> v=<hash> addr=<addr>"
         m_version = re.search(r"v=([a-f0-9]+)", body)
         version = m_version.group(1) if m_version else None
         m_hosts = re.search(r"hosts=(\S*)", body)
@@ -62,12 +62,15 @@ def network_proxy_health_check(port):
             )
         else:
             hosts = frozenset()
-        return True, version, hosts
+        m_addr = re.search(r"addr=(\S+)", body)
+        addr = m_addr.group(1) if m_addr else None
+        return True, version, hosts, addr
     except Exception:
-        return False, None, None
+        return False, None, None, None
 
 
-def start_network_proxy(port, dotfiles_dir, allowed_hosts):
+def start_network_proxy(port, dotfiles_dir, allowed_hosts,
+                        listen_addr=DEFAULT_PROXY_LISTEN_ADDR):
     """Start the network proxy as a native subprocess.
 
     No stdin token is needed — this proxy has no secrets, just hostname
@@ -78,7 +81,7 @@ def start_network_proxy(port, dotfiles_dir, allowed_hosts):
     script = network_proxy_script_path(dotfiles_dir)
     hosts_str = ",".join(sorted(allowed_hosts)) if allowed_hosts else ""
 
-    print(f"ralph: starting network proxy on port {port}...")
+    print(f"ralph: starting network proxy on {listen_addr}:{port}...")
     log_fh = open(LOG_FILE, "a")
     proc = subprocess.Popen(
         ["python3", script],
@@ -88,6 +91,7 @@ def start_network_proxy(port, dotfiles_dir, allowed_hosts):
         env={
             **os.environ,
             "LISTEN_PORT": str(port),
+            "LISTEN_ADDR": listen_addr,
             "ALLOWED_HOSTS": hosts_str,
             "PID_FILE": PID_FILE,
         },
@@ -129,11 +133,13 @@ def stop_network_proxy(wait=False):
         pass
 
 
-def ensure_network_proxy(port, dotfiles_dir, allowed_hosts):
+def ensure_network_proxy(port, dotfiles_dir, allowed_hosts,
+                         listen_addr=DEFAULT_PROXY_LISTEN_ADDR):
     """Ensure the network proxy is running and healthy with the given allowlist.
 
-    If a proxy is already running and healthy with the same allowlist, reuse it.
-    If the allowlist has changed, stop and restart.  Otherwise start a new one.
+    If a proxy is already running and healthy with the same allowlist on the
+    same listen address, reuse it.  If the allowlist or the listen address
+    has changed, stop and restart.  Otherwise start a new one.
 
     Uses a file lock to serialize proxy lifecycle management across
     concurrent ralph instances sharing the same port.
@@ -147,9 +153,24 @@ def ensure_network_proxy(port, dotfiles_dir, allowed_hosts):
     with open(LOCK_FILE, "w") as lock_fh:
         fcntl.flock(lock_fh, fcntl.LOCK_EX)
 
-        healthy, version, running_hosts = network_proxy_health_check(port)
+        healthy, version, running_hosts, running_addr = \
+            network_proxy_health_check(port)
         if healthy:
-            if running_hosts == wanted_hosts:
+            if running_hosts != wanted_hosts:
+                # Allowlist changed — restart.
+                print(
+                    f"ralph: restarting network proxy on port {port} "
+                    f"(allowlist changed)"
+                )
+                stop_network_proxy(wait=True)
+            elif running_addr != listen_addr:
+                # Listen address changed — restart.
+                print(
+                    f"ralph: network proxy listening on "
+                    f"{running_addr or 'unknown'}, restarting on {listen_addr}"
+                )
+                stop_network_proxy(wait=True)
+            else:
                 current = compute_network_proxy_version(dotfiles_dir)
                 if version == current:
                     print(f"ralph: reusing healthy network proxy on port {port}")
@@ -159,24 +180,18 @@ def ensure_network_proxy(port, dotfiles_dir, allowed_hosts):
                         f"(outdated v={version}, current v={current})"
                     )
                 return port
-            else:
-                # Allowlist changed — restart.
-                print(
-                    f"ralph: restarting network proxy on port {port} "
-                    f"(allowlist changed)"
-                )
-                stop_network_proxy(wait=True)
 
         else:
             # Kill any lingering proxy process so the port is free.
             stop_network_proxy(wait=True)
 
-        start_network_proxy(port, dotfiles_dir, sorted(wanted_hosts))
+        start_network_proxy(port, dotfiles_dir, sorted(wanted_hosts),
+                            listen_addr)
 
         # Wait for health check
         for _ in range(10):
             time.sleep(0.5)
-            healthy, _, _ = network_proxy_health_check(port)
+            healthy, _, _, _ = network_proxy_health_check(port)
             if healthy:
                 return port
 

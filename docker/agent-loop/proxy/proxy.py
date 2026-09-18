@@ -13,33 +13,28 @@ Supported modes:
 
 Environment variables:
   LISTEN_PORT   — port to listen on (default: 18080)
+  LISTEN_ADDR   — address to bind (default: ::, dual-stack wildcard)
   TARGET        — upstream base URL (default: https://api.anthropic.com)
   IDLE_TIMEOUT  — seconds of inactivity before self-shutdown (default: 300, 0=disabled)
 """
 
-import hashlib
 import http.server
 import os
 import signal
-import socket
-import socketserver
 import sys
-import threading
 import urllib.error
 import urllib.request
+
+# proxy_base sits beside this script; both are copied together.
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+from proxy_base import (  # noqa: E402
+    DEFAULT_LISTEN_ADDR, IdleShutdown, compute_version_hash, make_server,
+)
 
 # Headers that should not be copied from the client request to upstream.
 _STRIP_HEADERS = frozenset(["host", "content-length", "transfer-encoding"])
 
 _VALID_MODES = frozenset(["oauth", "api_key", "gateway"])
-
-
-def compute_version_hash():
-    """Hash this script's source and return a 12-char hex version string."""
-    path = os.path.realpath(__file__)
-    with open(path, "rb") as f:
-        return hashlib.sha256(f.read()).hexdigest()[:12]
-
 
 def read_mode_and_credential():
     """Read auth mode and credential from stdin (two lines).
@@ -56,38 +51,6 @@ def read_mode_and_credential():
     return mode, credential
 
 
-class IdleShutdown:
-    """Shuts down an HTTPServer after a period of inactivity."""
-
-    def __init__(self, timeout, server):
-        self.timeout = timeout
-        self.server = server
-        self._timer = None
-
-    def reset(self):
-        """Reset the idle countdown. Call on every request."""
-        if self._timer:
-            self._timer.cancel()
-        self._timer = threading.Timer(self.timeout, self._shutdown)
-        self._timer.daemon = True
-        self._timer.start()
-
-    def _shutdown(self):
-        print(f"proxy: idle for {self.timeout}s, shutting down", file=sys.stderr)
-        self.server.shutdown()
-
-
-class DualStackHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
-    """Threaded HTTPServer that accepts both IPv4 and IPv6 connections."""
-
-    address_family = socket.AF_INET6
-    daemon_threads = True
-
-    def server_bind(self):
-        self.socket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
-        super().server_bind()
-
-
 class ProxyHandler(http.server.BaseHTTPRequestHandler):
     """Forwards requests to TARGET, injecting the real credential."""
 
@@ -96,6 +59,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
     target = None
     idle_shutdown = None
     version_hash = None
+    listen_addr = DEFAULT_LISTEN_ADDR
     AUTH_MODE = None
 
     # Suppress default stderr request logging — we do our own.
@@ -108,7 +72,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         if self.idle_shutdown:
             self.idle_shutdown.reset()
         if self.path == "/health":
-            body = f"agent-loop-proxy ok v={self.version_hash} mode={self.AUTH_MODE}".encode()
+            body = (f"agent-loop-proxy ok v={self.version_hash} "
+                    f"mode={self.AUTH_MODE} addr={self.listen_addr}").encode()
             self.send_response(200)
             self.send_header("Content-Type", "text/plain")
             self.send_header("Content-Length", str(len(body)))
@@ -197,17 +162,19 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
 def main():
     mode, credential = read_mode_and_credential()
     port = int(os.environ.get("LISTEN_PORT", "18080"))
+    listen_addr = os.environ.get("LISTEN_ADDR", DEFAULT_LISTEN_ADDR)
     target = os.environ.get("TARGET", "https://api.anthropic.com")
     idle_timeout = int(os.environ.get("IDLE_TIMEOUT", "300"))
     pid_file = os.environ.get("PID_FILE", "")
 
-    version = compute_version_hash()
+    version = compute_version_hash(__file__)
     ProxyHandler.real_credential = credential
     ProxyHandler.target = target
     ProxyHandler.version_hash = version
+    ProxyHandler.listen_addr = listen_addr
     ProxyHandler.AUTH_MODE = mode
 
-    server = DualStackHTTPServer(("::", port), ProxyHandler)
+    server = make_server(listen_addr, port, ProxyHandler)
 
     # Write PID file after port bind succeeds (port bind is the mutex).
     if pid_file:
@@ -225,11 +192,11 @@ def main():
         idle = IdleShutdown(idle_timeout, server)
         ProxyHandler.idle_shutdown = idle
         idle.reset()
-        print(f"proxy: listening on :{port}, target={target}, "
+        print(f"proxy: listening on {listen_addr}:{port}, target={target}, "
               f"idle_timeout={idle_timeout}s, v={version}, mode={mode}",
               file=sys.stderr)
     else:
-        print(f"proxy: listening on :{port}, target={target}, "
+        print(f"proxy: listening on {listen_addr}:{port}, target={target}, "
               f"v={version}, mode={mode}",
               file=sys.stderr)
 

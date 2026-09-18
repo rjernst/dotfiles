@@ -14,12 +14,21 @@ import subprocess
 import tempfile
 import time
 
-from ralph.proxy import proxy_health_check
+from ralph.proxy import DEFAULT_PROXY_LISTEN_ADDR, proxy_health_check
 from ralph.token import read_token_from_keychain
 
 # Directory where per-sandbox timestamp files are stored.  The mtime of each
 # file records when the sandbox was last used by process_issue / ensure_sandbox.
 SANDBOX_STATE_DIR = os.path.expanduser("~/.ralph/sandbox-used")
+
+# Runtime types accepted in .agent-loop/config.json and on --runtime.
+RUNTIME_TYPES = ("docker-sandbox", "docker-container", "tart", "nono")
+
+# Network modes accepted in .agent-loop/config.json.  "filtered" restricts
+# the sandbox to the configured domain allowlist; "unrestricted" is an
+# escape hatch for toolchains the filter breaks (see the ralph guide).
+NETWORK_MODES = ("filtered", "unrestricted")
+DEFAULT_NETWORK_MODE = "filtered"
 
 
 # ---------------------------------------------------------------------------
@@ -301,8 +310,11 @@ def load_runtime_config(project_dir):
     Returns a dict with at least {"type": "docker-sandbox"} as default.
     For "tart" type, may also include: base_image (str, required),
     cpu (int, optional), memory_gb (int, optional).
+    For "nono" type, may also include: network (str, "filtered" or
+    "unrestricted"; defaults to "filtered").
 
-    Raises ValueError for unknown runtime types or malformed JSON.
+    Raises ValueError for unknown runtime types, unknown network modes, or
+    malformed JSON.
     """
     config_path = os.path.join(project_dir, ".agent-loop", "config.json")
     if not os.path.isfile(config_path):
@@ -310,11 +322,20 @@ def load_runtime_config(project_dir):
     with open(config_path) as f:
         config = json.load(f)
     runtime_type = config.get("type", "docker-sandbox")
-    if runtime_type not in ("docker-sandbox", "docker-container", "tart"):
+    if runtime_type not in RUNTIME_TYPES:
+        expected = ", ".join(repr(t) for t in RUNTIME_TYPES[:-1])
         raise ValueError(
             f"ralph: unknown runtime type {runtime_type!r} "
-            f"in {config_path} (expected 'docker-sandbox', "
-            f"'docker-container', or 'tart')")
+            f"in {config_path} (expected {expected}, "
+            f"or {RUNTIME_TYPES[-1]!r})")
+    # "network" is only meaningful to the nono backend.  Other backends
+    # ignore unknown keys, as they always have.
+    if runtime_type == "nono":
+        network = config.get("network", DEFAULT_NETWORK_MODE)
+        if network not in NETWORK_MODES:
+            raise ValueError(
+                f"ralph: unknown network mode {network!r} "
+                f"in {config_path} (expected 'filtered' or 'unrestricted')")
     config["type"] = runtime_type
     return config
 
@@ -323,9 +344,11 @@ def create_runtime(runtime_type, dotfiles_dir, **kwargs):
     """Factory: create the appropriate runtime backend.
 
     Args:
-        runtime_type: "docker-sandbox", "docker-container", or "tart"
+        runtime_type: one of RUNTIME_TYPES
         dotfiles_dir: path to the dotfiles repository
-        **kwargs: additional config (passed through from load_runtime_config)
+        **kwargs: additional config (passed through from load_runtime_config),
+            plus the optional ``auth_mode`` / ``token_data`` the caller
+            resolved from the host token store
 
     Returns:
         A Runtime instance.
@@ -336,6 +359,12 @@ def create_runtime(runtime_type, dotfiles_dir, **kwargs):
     """
     from ralph.runtime.docker_sandbox import DockerSandboxRuntime
     from ralph.runtime.tart import TartRuntime
+
+    # Credential material is only meaningful to backends that inject it
+    # themselves; take it out of kwargs so every other backend's config is
+    # exactly what .agent-loop/config.json provided.
+    auth_mode = kwargs.pop("auth_mode", None)
+    token_data = kwargs.pop("token_data", None)
 
     if runtime_type == "docker-sandbox":
         allowed_hosts = kwargs.get("allowed_hosts")
@@ -354,8 +383,39 @@ def create_runtime(runtime_type, dotfiles_dir, **kwargs):
                 with open(deps_path) as f:
                     config["dependencies_content"] = f.read()
         return TartRuntime(dotfiles_dir, config=config)
+    elif runtime_type == "nono":
+        from ralph.runtime.nono import NonoRuntime
+        return NonoRuntime(
+            dotfiles_dir,
+            allowed_hosts=kwargs.get("allowed_hosts"),
+            network=kwargs.get("network", DEFAULT_NETWORK_MODE),
+            project_dir=kwargs.get("project_dir"),
+            auth_mode=auth_mode,
+            token_data=token_data,
+        )
     else:
         raise ValueError(f"ralph: unknown runtime type {runtime_type!r}")
+
+
+def resolve_project_runtime(git, dotfiles_dir):
+    """Return ``(runtime_type, runtime)`` for the current repo's config.
+
+    Used before the runtime itself is needed (proxy startup in cli.py) so
+    the credential proxy is only started — and only bound to the address —
+    that ``process_issue`` will later ask for.  A repo without a usable
+    runtime config falls back to ``(None, Runtime())`` rather than failing
+    startup: the config error surfaces later, where ``poll_loop`` reports
+    it per-issue.
+    """
+    try:
+        repo_root = git.output("rev-parse", "--show-toplevel")
+        config = load_runtime_config(repo_root)
+        config["project_dir"] = repo_root
+        runtime_type = config.pop("type")
+        runtime = create_runtime(runtime_type, dotfiles_dir, **config)
+    except Exception:
+        return None, Runtime()
+    return runtime_type, runtime
 
 
 # ---------------------------------------------------------------------------
@@ -369,10 +429,14 @@ class Runtime:
     for their respective isolation technologies.
     """
 
-    ITERATION_PROMPT = (
+    # Template for the per-iteration agent prompt.  ``{spec_path}`` is
+    # substituted with the path the spec was written to inside the sandbox;
+    # any other literal brace must be doubled.  Render it with
+    # ``iteration_prompt()`` rather than using this string directly.
+    ITERATION_PROMPT_TEMPLATE = (
         "You are an AI coding agent. You will be invoked repeatedly "
         "— once per task.\n"
-        "Read the spec file at `/tmp/spec.md` for what to build.\n"
+        "Read the spec file at `{spec_path}` for what to build.\n"
         "\n"
         "Your job this iteration: implement EXACTLY ONE task, then stop.\n"
         "\n"
@@ -451,6 +515,16 @@ class Runtime:
     )
 
     @classmethod
+    def iteration_prompt(cls, spec_path):
+        """Render the iteration prompt for a spec written to ``spec_path``.
+
+        Backends that inject the spec at a fixed location inside the sandbox
+        pass ``/tmp/spec.md``; backends that run the agent on the host pass
+        the per-iteration temp file they created.
+        """
+        return cls.ITERATION_PROMPT_TEMPLATE.format(spec_path=spec_path)
+
+    @classmethod
     def _max_sandbox_name_length(cls):
         """Upper bound on sandbox names imposed by the backend.
 
@@ -484,9 +558,28 @@ class Runtime:
         truncated = name[: max_len - len(hash_suffix)].rstrip("-")
         return truncated + hash_suffix
 
+    # Whether the agent inside this backend reaches Anthropic through
+    # ralph's own TCP credential proxy.  Backends that inject credentials
+    # by other means (nono's per-session proxy) set this False, and ralph
+    # then never starts its proxy for them.
+    uses_credential_proxy = True
+
     def proxy_host(self):
         """Return the hostname for reaching the credential proxy."""
         raise NotImplementedError
+
+    # Address ralph's host-side proxies bind to for this backend.  The
+    # default dual-stack wildcard is reachable from anywhere; backends that
+    # only need loopback narrow it.
+    PROXY_LISTEN_ADDR = DEFAULT_PROXY_LISTEN_ADDR
+
+    def proxy_listen_addr(self):
+        """Return the address ralph's host-side proxies should bind to.
+
+        ``RALPH_PROXY_LISTEN_ADDR`` overrides the backend's default for
+        every runtime.
+        """
+        return os.environ.get("RALPH_PROXY_LISTEN_ADDR") or self.PROXY_LISTEN_ADDR
 
     def ensure_image(self, agent, force_rebuild=False):
         """Ensure the sandbox image is built and up-to-date. Returns image tag."""
@@ -528,7 +621,7 @@ class Runtime:
                     " — run: ralph store-token")
 
         # 2. Proxy running
-        healthy, _, _ = proxy_health_check(proxy_port)
+        healthy, _, _, _ = proxy_health_check(proxy_port)
         if not healthy:
             failures.append(
                 f"proxy not reachable at http://localhost:{proxy_port}/health"

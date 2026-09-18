@@ -35,32 +35,87 @@ def keychain_service_name(agent, auth_mode=None):
     return f"{agent}-token"
 
 
+def _keystore_missing_message(binary):
+    """Return the stderr message for a missing keystore backend binary."""
+    if binary == "secret-tool":
+        return "ralph: secret-tool not found (install libsecret)"
+    return f"ralph: {binary} not found"
+
+
+def keystore_read_command(service):
+    """Return the command that reads a service's secret on this platform.
+
+    macOS uses the Keychain via 'security'; other platforms use the
+    libsecret collection via 'secret-tool'. Both store under the
+    'agent-loop' account.
+
+    Exposed because the nono runtime runs this command *inside* the
+    sandbox to prove the agent cannot reach the token store.
+    """
+    if sys.platform == "darwin":
+        return ["security", "find-generic-password",
+                "-s", service, "-a", "agent-loop", "-w"]
+    return ["secret-tool", "lookup", "service", service, "account", "agent-loop"]
+
+
+def _keystore_read(service):
+    """Read the raw secret for a service from the platform keystore.
+
+    Returns the stored string, or None if it is missing or the backend
+    binary is unavailable.
+    """
+    cmd = keystore_read_command(service)
+    try:
+        result = subprocess.run(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True,
+        )
+    except FileNotFoundError:
+        print(_keystore_missing_message(cmd[0]), file=sys.stderr)
+        return None
+    except subprocess.CalledProcessError:
+        return None
+    return result.stdout.strip()
+
+
+def _keystore_write(service, secret):
+    """Write a secret for a service into the platform keystore.
+
+    Exits 1 if the backend binary is unavailable.
+    """
+    if sys.platform == "darwin":
+        cmd = ["security", "add-generic-password",
+               "-s", service, "-a", "agent-loop", "-w", secret, "-U"]
+        kwargs = {}
+    else:
+        cmd = ["secret-tool", "store", "--label", f"ralph {service}",
+               "service", service, "account", "agent-loop"]
+        kwargs = {"input": secret, "text": True}
+    try:
+        subprocess.run(cmd, check=True, **kwargs)
+    except FileNotFoundError:
+        print(_keystore_missing_message(cmd[0]), file=sys.stderr)
+        sys.exit(1)
+
+
 def read_token_from_keychain(agent, auth_mode=None):
-    """Read and parse the token JSON from macOS Keychain.
+    """Read and parse the token JSON from the platform keystore.
 
     Returns the parsed dict, or None if not found.
     """
     service = keychain_service_name(agent, auth_mode)
-    try:
-        result = subprocess.run(
-            ["security", "find-generic-password", "-s", service, "-a", "agent-loop", "-w"],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True,
-        )
-        return json.loads(result.stdout.strip())
-    except subprocess.CalledProcessError:
+    raw = _keystore_read(service)
+    if raw is None:
         return None
+    try:
+        return json.loads(raw)
     except (json.JSONDecodeError, ValueError):
         return None
 
 
 def write_token_to_keychain(agent, json_str, auth_mode=None):
-    """Write token JSON string to macOS Keychain."""
+    """Write token JSON string to the platform keystore."""
     service = keychain_service_name(agent, auth_mode)
-    subprocess.run(
-        ["security", "add-generic-password",
-         "-s", service, "-a", "agent-loop", "-w", json_str, "-U"],
-        check=True,
-    )
+    _keystore_write(service, json_str)
 
 
 def format_expiry_date(expires_at_ms):

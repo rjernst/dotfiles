@@ -5,3 +5,8 @@ version = "0.0.0"
 [tool.pytest.ini_options]
 pythonpath = ["src", "../libs"]
 testpaths = ["tests"]
+# Kept in sync with the repo-root pyproject.toml, which configures the same
+# marker for `pytest tests/`.
+markers = [
+    "integration: end-to-end tests requiring Docker Desktop and valid token",
+]

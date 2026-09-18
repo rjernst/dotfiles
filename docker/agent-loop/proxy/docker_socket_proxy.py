@@ -7,6 +7,8 @@ with 403.
 
 Environment variables:
   LISTEN_PORT    — port to listen on (default: 18081)
+  LISTEN_ADDR    — address to bind (default: ::, dual-stack wildcard)
+  LISTEN_SOCKET  — Unix socket path to serve on instead of a TCP port
   DOCKER_SOCKET  — path to Docker socket (default: /var/run/docker.sock)
   IDLE_TIMEOUT   — seconds of inactivity before self-shutdown (default: 300, 0=disabled)
   PID_FILE       — optional path to write PID
@@ -19,7 +21,7 @@ import re
 import socket
 import sys
 
-from proxy_base import CHUNK_SIZE, run_proxy_server
+from proxy_base import CHUNK_SIZE, DEFAULT_LISTEN_ADDR, run_proxy_server
 
 # Docker API version prefix pattern: /v1.45/...
 _VERSION_PREFIX = re.compile(r"^/v\d+\.\d+")
@@ -76,6 +78,7 @@ class DockerSocketProxyHandler(http.server.BaseHTTPRequestHandler):
     docker_socket = None
     idle_shutdown = None
     version_hash = None
+    listen_addr = DEFAULT_LISTEN_ADDR
 
     # Suppress default stderr request logging.
     def log_message(self, fmt, *args):
@@ -84,7 +87,8 @@ class DockerSocketProxyHandler(http.server.BaseHTTPRequestHandler):
     # --- health endpoint ---------------------------------------------------
 
     def _handle_health(self):
-        body = f"docker-socket-proxy ok v={self.version_hash}".encode()
+        body = (f"docker-socket-proxy ok v={self.version_hash} "
+                f"addr={self.listen_addr}").encode()
         self.send_response(200)
         self.send_header("Content-Type", "text/plain")
         self.send_header("Content-Length", str(len(body)))
@@ -251,6 +255,8 @@ class DockerSocketProxyHandler(http.server.BaseHTTPRequestHandler):
 
 def main():
     port = int(os.environ.get("LISTEN_PORT", "18081"))
+    listen_addr = os.environ.get("LISTEN_ADDR", DEFAULT_LISTEN_ADDR)
+    listen_socket = os.environ.get("LISTEN_SOCKET", "")
     docker_socket = os.environ.get("DOCKER_SOCKET", "/var/run/docker.sock")
     idle_timeout = int(os.environ.get("IDLE_TIMEOUT", "300"))
     pid_file = os.environ.get("PID_FILE", "")
@@ -263,6 +269,8 @@ def main():
         handler_class=DockerSocketProxyHandler,
         idle_timeout=idle_timeout,
         pid_file=pid_file,
+        listen_addr=listen_addr,
+        listen_socket=listen_socket or None,
     )
 
 

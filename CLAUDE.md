@@ -152,6 +152,7 @@ docker/
 - `ralph --rebuild` — Force re-pull base image and rebuild sandbox
 - `ralph --agent <name>` — Use a specific agent (default: claude)
 - `ralph selftest` — Smoke test the full pipeline (proxy, sandbox, auth, network isolation)
+- `ralph selftest --runtime <type>` — Smoke test a specific runtime: `docker-sandbox`, `docker-container`, `tart`, `nono`
 - `/create-spec` — Interactive Ralph spec generator (creates GitHub Issues with `spec` + `status:ready` labels)
   - Issue title format: `[<branch-name>] Feature Title`
   - Labels: `spec` (identifies as Ralph spec), `status:ready` / `status:in-progress` / `status:done` / `status:needs-attention`

@@ -506,6 +506,9 @@ class TestContainerRunIteration:
         assert spec == "updated spec"
         # Check that docker exec was called for write, run, and read
         assert mock_run.call_count == 3
+        cmd = mock_run.call_args_list[1][0][0]
+        assert cmd[cmd.index("-p") + 1] == \
+            DockerContainerRuntime.iteration_prompt("/tmp/spec.md")
 
     @patch("ralph.runtime.container.subprocess.run")
     def test_non_proxy_agent_iteration(self, mock_run):
@@ -575,7 +578,7 @@ class TestContainerPreflightChecks:
 
     @patch("ralph.runtime.container.subprocess.run")
     @patch("ralph.runtime.container.docker_proxy_health_check",
-           return_value=(True, "abc123"))
+           return_value=(True, "abc123", "::"))
     def test_all_checks_pass(self, mock_health, mock_run):
         mock_run.side_effect = self._run_side_effect(echo_rc=0, curl_rc=28)
         rt = DockerContainerRuntime("/dotfiles")
@@ -584,7 +587,7 @@ class TestContainerPreflightChecks:
 
     @patch("ralph.runtime.container.subprocess.run")
     @patch("ralph.runtime.container.docker_proxy_health_check",
-           return_value=(False, None))
+           return_value=(False, None, None))
     def test_docker_proxy_unhealthy(self, mock_health, mock_run):
         mock_run.side_effect = self._run_side_effect(echo_rc=0, curl_rc=28)
         rt = DockerContainerRuntime("/dotfiles")
@@ -593,7 +596,7 @@ class TestContainerPreflightChecks:
 
     @patch("ralph.runtime.container.subprocess.run")
     @patch("ralph.runtime.container.docker_proxy_health_check",
-           return_value=(True, "abc123"))
+           return_value=(True, "abc123", "::"))
     def test_container_not_responsive(self, mock_health, mock_run):
         mock_run.side_effect = self._run_side_effect(echo_rc=1, curl_rc=28)
         rt = DockerContainerRuntime("/dotfiles")
@@ -602,7 +605,7 @@ class TestContainerPreflightChecks:
 
     @patch("ralph.runtime.container.subprocess.run")
     @patch("ralph.runtime.container.docker_proxy_health_check",
-           return_value=(True, "abc123"))
+           return_value=(True, "abc123", "::"))
     def test_network_isolation_failure(self, mock_health, mock_run):
         # curl succeeds = network isolation is broken
         mock_run.side_effect = self._run_side_effect(echo_rc=0, curl_rc=0)
@@ -612,7 +615,7 @@ class TestContainerPreflightChecks:
 
     @patch("ralph.runtime.container.subprocess.run")
     @patch("ralph.runtime.container.docker_proxy_health_check",
-           return_value=(True, "abc123"))
+           return_value=(True, "abc123", "::"))
     def test_curl_not_found_fails_preflight(self, mock_health, mock_run):
         mock_run.side_effect = self._run_side_effect(
             echo_rc=0, curl_rc=28, which_curl_rc=1)
@@ -622,7 +625,7 @@ class TestContainerPreflightChecks:
 
     @patch("ralph.runtime.container.subprocess.run")
     @patch("ralph.runtime.container.docker_proxy_health_check",
-           return_value=(True, "abc123"))
+           return_value=(True, "abc123", "::"))
     def test_skips_network_check_when_container_down(self, mock_health, mock_run):
         # Container not responding — curl should not be called
         call_count = [0]
@@ -658,7 +661,9 @@ class TestContainerNetworkProxy:
         rt = DockerContainerRuntime("/dotfiles", allowed_hosts=["pypi.org", "npm.io"])
         rt.ensure_sandbox("claude", "fix-auth", "/work/fix-auth")
         mock_network_proxy.assert_called_once_with(
-            18082, "/dotfiles", ("pypi.org", "npm.io"))
+            18082, "/dotfiles", ("pypi.org", "npm.io"), "127.0.0.1")
+        mock_docker_proxy.assert_called_once_with(
+            18081, "/dotfiles", "127.0.0.1")
         # Verify proxy env vars in docker run command
         cmd = mock_run.call_args[0][0]
         assert "HTTP_PROXY=http://host.docker.internal:18082" in cmd
@@ -687,9 +692,9 @@ class TestContainerNetworkProxy:
 
     @patch("ralph.runtime.container.subprocess.run")
     @patch("ralph.runtime.container.network_proxy_health_check",
-           return_value=(True, "abc123", frozenset(["pypi.org"])))
+           return_value=(True, "abc123", frozenset(["pypi.org"]), "::"))
     @patch("ralph.runtime.container.docker_proxy_health_check",
-           return_value=(True, "abc123"))
+           return_value=(True, "abc123", "::"))
     def test_preflight_checks_network_proxy_with_allowed_hosts(
             self, mock_docker_health, mock_network_health, mock_run):
         mock_run.side_effect = TestContainerPreflightChecks._run_side_effect(
@@ -701,9 +706,9 @@ class TestContainerNetworkProxy:
 
     @patch("ralph.runtime.container.subprocess.run")
     @patch("ralph.runtime.container.network_proxy_health_check",
-           return_value=(False, None, None))
+           return_value=(False, None, None, None))
     @patch("ralph.runtime.container.docker_proxy_health_check",
-           return_value=(True, "abc123"))
+           return_value=(True, "abc123", "::"))
     def test_preflight_checks_network_proxy_unhealthy(
             self, mock_docker_health, mock_network_health, mock_run):
         mock_run.side_effect = TestContainerPreflightChecks._run_side_effect(
@@ -715,7 +720,7 @@ class TestContainerNetworkProxy:
     @patch("ralph.runtime.container.subprocess.run")
     @patch("ralph.runtime.container.network_proxy_health_check")
     @patch("ralph.runtime.container.docker_proxy_health_check",
-           return_value=(True, "abc123"))
+           return_value=(True, "abc123", "::"))
     def test_preflight_checks_skips_network_proxy_without_allowed_hosts(
             self, mock_docker_health, mock_network_health, mock_run):
         mock_run.side_effect = TestContainerPreflightChecks._run_side_effect(

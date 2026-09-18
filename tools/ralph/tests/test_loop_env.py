@@ -24,6 +24,7 @@ def _make_mocks():
 
     runtime = MagicMock()
     runtime.proxy_host.return_value = "host.docker.internal"
+    runtime.proxy_listen_addr.return_value = "127.0.0.1"
     runtime.ensure_sandbox.return_value = "sandbox-1"
     runtime.check_in_sync.return_value = True
     # Make run_iteration return rc=0, and simulate "no commit" (head unchanged)
@@ -49,7 +50,8 @@ def mock_env():
                              "project_dir": "/fake/repo",
                          }),
         "create_rt": patch("ralph.loop.create_runtime", return_value=runtime),
-        "health": patch("ralph.loop.proxy_health_check", return_value=(True, "abc", "oauth")),
+        "health": patch("ralph.loop.proxy_health_check",
+                          return_value=(True, "abc", "oauth", "127.0.0.1")),
         "ensure_px": patch("ralph.loop.ensure_proxy"),
     }
     started = {k: p.start() for k, p in patches.items()}
@@ -150,7 +152,7 @@ class TestProxyRecoveryPassesAuthMode:
             (1, "spec body"),  # failure
             (0, "spec body [done]"),  # success after recovery
         ]
-        mocks["health"].return_value = (False, None, None)
+        mocks["health"].return_value = (False, None, None, None)
 
         process_issue(
             issue_number=1, git=git, dotfiles_dir="/fake/dotfiles",
@@ -159,7 +161,8 @@ class TestProxyRecoveryPassesAuthMode:
             proxy_port=18080, token="ignored",
             auth_mode="api_key",
         )
-        # ensure_proxy should have been called with auth_mode="api_key"
-        mocks["ensure_px"].assert_called_once_with(
-            "claude", 18080, "/fake/dotfiles", "api_key"
-        )
+        # process_issue ensures the proxy twice: once as a pre-issue health
+        # check, once to recover from the mid-iteration death.  Both calls
+        # must carry auth_mode and the runtime's listen address.
+        expected = call("claude", 18080, "/fake/dotfiles", "api_key", "127.0.0.1")
+        assert mocks["ensure_px"].call_args_list == [expected, expected]

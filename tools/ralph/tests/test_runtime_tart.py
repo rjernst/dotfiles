@@ -2,6 +2,7 @@
 
 import json
 import os
+import shlex
 import subprocess
 import time
 from unittest.mock import MagicMock, patch
@@ -473,6 +474,112 @@ class TestTartEnsureSandbox:
         name = t.ensure_sandbox("claude", "my-branch", "/work/my-branch")
         assert t._vm_procs[name] is vm_proc
 
+    @patch.object(TartRuntime, "_setup_worktree_git")
+    @patch.object(TartRuntime, "_wait_for_guest_agent")
+    @patch("ralph.runtime.tart.subprocess.Popen")
+    @patch("ralph.runtime.tart.subprocess.run")
+    @patch.object(TartRuntime, "ensure_image", return_value="template-name")
+    @patch.object(TartRuntime, "_check_vm_limit")
+    @patch.object(TartRuntime, "_vm_state", return_value=None)
+    def test_mounts_git_common_dir_for_worktree(self, _state, _limit, _ensure,
+                                                _run, mock_popen, _wait,
+                                                mock_setup_wt):
+        """A worktree also gets the shared .git dir mounted as `gitdir`."""
+        mock_popen.return_value = MagicMock()
+        git_common = "/work/myrepo/.git"
+        t = self._make()
+        with patch.object(TartRuntime, "_resolve_git_common_dir",
+                          return_value=git_common):
+            name = t.ensure_sandbox("claude", "my-branch", "/work/myrepo-my-branch")
+
+        popen_args = mock_popen.call_args[0][0]
+        assert "--dir=workspace:/work/myrepo-my-branch" in popen_args
+        assert f"--dir=gitdir:{git_common}" in popen_args
+        mock_setup_wt.assert_called_once_with(name, git_common)
+
+    @patch.object(TartRuntime, "_setup_worktree_git")
+    @patch.object(TartRuntime, "_wait_for_guest_agent")
+    @patch("ralph.runtime.tart.subprocess.Popen")
+    @patch("ralph.runtime.tart.subprocess.run")
+    @patch.object(TartRuntime, "ensure_image", return_value="template-name")
+    @patch.object(TartRuntime, "_check_vm_limit")
+    @patch.object(TartRuntime, "_vm_state", return_value=None)
+    def test_skips_git_dir_for_regular_repo(self, _state, _limit, _ensure,
+                                            _run, mock_popen, _wait,
+                                            _setup_wt):
+        mock_popen.return_value = MagicMock()
+        t = self._make()
+        with patch.object(TartRuntime, "_resolve_git_common_dir",
+                          return_value=None):
+            t.ensure_sandbox("claude", "my-branch", "/work/myrepo")
+
+        popen_args = mock_popen.call_args[0][0]
+        assert not any(a.startswith("--dir=gitdir:") for a in popen_args)
+
+
+# ---------------------------------------------------------------------------
+# TartRuntime._resolve_git_common_dir
+# ---------------------------------------------------------------------------
+
+class TestTartResolveGitCommonDir:
+    # The ambient global gitconfig must not reach these repos — this repo's
+    # own git/config sets commit.gpgsign = true, which would fail the commit.
+    _GIT_CONFIG = [
+        "-c", "user.name=ralph-test", "-c", "user.email=ralph@test",
+        "-c", "commit.gpgsign=false",
+    ]
+
+    @classmethod
+    def _git(cls, *args):
+        subprocess.run(["git", *cls._GIT_CONFIG, *args], check=True,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    @classmethod
+    def _init_repo(cls, path, commit=False):
+        path.mkdir()
+        cls._git("init", str(path))
+        if commit:
+            # A worktree can only be added to a repo with a commit
+            cls._git("-C", str(path), "commit", "--allow-empty", "-m", "init")
+
+    @classmethod
+    def _add_worktree(cls, repo, wt):
+        cls._git("-C", str(repo), "worktree", "add", "-b", "test-branch",
+                 str(wt))
+
+    def test_returns_none_for_regular_repo(self, tmp_path):
+        """A regular repo has a .git directory, not a file — returns None."""
+        repo = tmp_path / "repo"
+        self._init_repo(repo)
+        assert TartRuntime._resolve_git_common_dir(str(repo)) is None
+
+    def test_returns_common_dir_for_worktree(self, tmp_path):
+        """A worktree's .git file points into the main repo's .git dir."""
+        repo = tmp_path / "repo"
+        self._init_repo(repo, commit=True)
+        wt = tmp_path / "worktree"
+        self._add_worktree(repo, wt)
+
+        result = TartRuntime._resolve_git_common_dir(str(wt))
+        assert result == os.path.realpath(str(repo / ".git"))
+
+    def test_returns_none_when_no_git(self, tmp_path):
+        """Non-git directory has no .git file — returns None."""
+        assert TartRuntime._resolve_git_common_dir(str(tmp_path)) is None
+
+    def test_returns_none_for_broken_worktree(self, tmp_path):
+        """A worktree whose .git file was replaced with a directory."""
+        repo = tmp_path / "repo"
+        self._init_repo(repo, commit=True)
+        wt = tmp_path / "worktree"
+        self._add_worktree(repo, wt)
+
+        git_path = wt / ".git"
+        git_path.unlink()
+        git_path.mkdir()
+
+        assert TartRuntime._resolve_git_common_dir(str(wt)) is None
+
 
 # ---------------------------------------------------------------------------
 # TartRuntime._wait_for_virtiofs_mounts
@@ -536,6 +643,12 @@ class TestTartSetupGitCommonDirSymlink:
         bash_cmd = cmd[5]
         assert "sudo mkdir -p" in bash_cmd
         assert "sudo ln -sfn" in bash_cmd
+        # mkdir creates the host .git's parent; the symlink points the host
+        # .git path at the gitdir VirtioFS share (not the workspace share).
+        # The share paths contain spaces, so they are shell-quoted.
+        gitdir = shlex.quote(TartRuntime.SHARED_DIR_GITDIR)
+        assert "sudo mkdir -p /Users/me/repo &&" in bash_cmd
+        assert f"sudo ln -sfn {gitdir} /Users/me/repo/.git" in bash_cmd
 
     @patch("ralph.runtime.tart.subprocess.run")
     def test_failure_raises(self, mock_run):
@@ -667,6 +780,8 @@ class TestTartRunIteration:
         assert "--model" in bash_cmd
         assert "--dangerously-skip-permissions" in bash_cmd
         assert f"cd '{TartRuntime.SHARED_DIR}'" in bash_cmd
+        assert shlex.quote(
+            TartRuntime.iteration_prompt("/tmp/spec.md")) in bash_cmd
 
         # Check read command
         read_call = mock_run.call_args_list[2]
@@ -922,7 +1037,8 @@ class TestTartPreflightCheck:
         return TartRuntime("/dotfiles", config={"base_image": "img:latest"})
 
     @patch("ralph.runtime.tart.subprocess.run")
-    @patch("ralph.runtime.proxy_health_check", return_value=(True, "", "oauth"))
+    @patch("ralph.runtime.proxy_health_check",
+           return_value=(True, "", "oauth", "::"))
     @patch("ralph.runtime.read_token_from_keychain",
            return_value={"expiresAt": int(time.time() * 1000) + 600000})
     def test_all_pass(self, _token, _proxy, mock_run):
@@ -932,7 +1048,8 @@ class TestTartPreflightCheck:
         assert failures == []
 
     @patch("ralph.runtime.tart.subprocess.run")
-    @patch("ralph.runtime.proxy_health_check", return_value=(True, "", "oauth"))
+    @patch("ralph.runtime.proxy_health_check",
+           return_value=(True, "", "oauth", "::"))
     @patch("ralph.runtime.read_token_from_keychain", return_value=None)
     def test_token_missing(self, _token, _proxy, mock_run):
         mock_run.return_value = MagicMock(returncode=0, stdout="ok\n")
@@ -941,7 +1058,8 @@ class TestTartPreflightCheck:
         assert any("no token found" in f for f in failures)
 
     @patch("ralph.runtime.tart.subprocess.run")
-    @patch("ralph.runtime.proxy_health_check", return_value=(True, "", "oauth"))
+    @patch("ralph.runtime.proxy_health_check",
+           return_value=(True, "", "oauth", "::"))
     @patch("ralph.runtime.read_token_from_keychain",
            return_value={"expiresAt": 0})
     def test_token_expired(self, _token, _proxy, mock_run):
@@ -951,7 +1069,8 @@ class TestTartPreflightCheck:
         assert any("token expired" in f for f in failures)
 
     @patch("ralph.runtime.tart.subprocess.run")
-    @patch("ralph.runtime.proxy_health_check", return_value=(False, "", None))
+    @patch("ralph.runtime.proxy_health_check",
+           return_value=(False, "", None, None))
     @patch("ralph.runtime.read_token_from_keychain",
            return_value={"expiresAt": int(time.time() * 1000) + 600000})
     def test_proxy_down(self, _token, _proxy, mock_run):
@@ -961,7 +1080,8 @@ class TestTartPreflightCheck:
         assert any("proxy not reachable" in f for f in failures)
 
     @patch("ralph.runtime.tart.subprocess.run")
-    @patch("ralph.runtime.proxy_health_check", return_value=(True, "", "oauth"))
+    @patch("ralph.runtime.proxy_health_check",
+           return_value=(True, "", "oauth", "::"))
     @patch("ralph.runtime.read_token_from_keychain",
            return_value={"expiresAt": int(time.time() * 1000) + 600000})
     def test_vm_unresponsive(self, _token, _proxy, mock_run):

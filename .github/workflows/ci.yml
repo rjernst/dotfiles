@@ -85,5 +85,3 @@ jobs:
             command -v rg
           '
 
-      - name: Build proxy image
-        run: docker build -t agent-loop-proxy:test docker/agent-loop/proxy/

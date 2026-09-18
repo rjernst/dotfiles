@@ -9,6 +9,7 @@ Handles CONNECT (for HTTPS tunnels) and plain HTTP methods (GET, POST, etc.).
 
 Environment variables:
   LISTEN_PORT    — port to listen on (default: 18082)
+  LISTEN_ADDR    — address to bind (default: ::, dual-stack wildcard)
   ALLOWED_HOSTS  — comma-separated list of allowed hostnames
   IDLE_TIMEOUT   — seconds of inactivity before self-shutdown (default: 300, 0=disabled)
   PID_FILE       — optional path to write PID
@@ -22,7 +23,7 @@ import socket
 import sys
 import urllib.parse
 
-from proxy_base import CHUNK_SIZE, run_proxy_server
+from proxy_base import CHUNK_SIZE, DEFAULT_LISTEN_ADDR, run_proxy_server
 
 
 def parse_allowed_hosts(hosts_str):
@@ -59,6 +60,7 @@ class NetworkProxyHandler(http.server.BaseHTTPRequestHandler):
     allowed_hosts = frozenset()
     idle_shutdown = None
     version_hash = None
+    listen_addr = DEFAULT_LISTEN_ADDR
 
     # Suppress default stderr request logging.
     def log_message(self, fmt, *args):
@@ -68,7 +70,8 @@ class NetworkProxyHandler(http.server.BaseHTTPRequestHandler):
 
     def _handle_health(self):
         hosts_str = ",".join(sorted(self.allowed_hosts))
-        body = f"network-proxy ok hosts={hosts_str} v={self.version_hash}".encode()
+        body = (f"network-proxy ok hosts={hosts_str} v={self.version_hash} "
+                f"addr={self.listen_addr}").encode()
         self.send_response(200)
         self.send_header("Content-Type", "text/plain")
         self.send_header("Content-Length", str(len(body)))
@@ -287,6 +290,7 @@ class NetworkProxyHandler(http.server.BaseHTTPRequestHandler):
 
 def main():
     port = int(os.environ.get("LISTEN_PORT", "18082"))
+    listen_addr = os.environ.get("LISTEN_ADDR", DEFAULT_LISTEN_ADDR)
     allowed_hosts_str = os.environ.get("ALLOWED_HOSTS", "")
     idle_timeout = int(os.environ.get("IDLE_TIMEOUT", "300"))
     pid_file = os.environ.get("PID_FILE", "")
@@ -300,6 +304,7 @@ def main():
         handler_class=NetworkProxyHandler,
         idle_timeout=idle_timeout,
         pid_file=pid_file,
+        listen_addr=listen_addr,
     )
 
 

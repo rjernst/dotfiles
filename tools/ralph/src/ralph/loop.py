@@ -21,12 +21,31 @@ def process_issue(issue_number, git, dotfiles_dir, gh, agent, push, model,
                   git_user, git_email, proxy_port, token, rebuild=False,
                   auth_mode=None, token_data=None):
     """Process a single GitHub Issue spec."""
+    agent_config = get_agent(agent)
+
+    # Create the runtime backend first — it decides which address the
+    # host-side proxies bind to.
+    repo_root = git.output("rev-parse", "--show-toplevel")
+    config = load_runtime_config(repo_root)
+    config["project_dir"] = repo_root
+    runtime_type = config.pop("type")
+    # Credential material comes from the host token store resolved in
+    # cli.py, never from project config — backends that inject credentials
+    # themselves (nono) build their credential route from it.  Set last so
+    # a stray key in .agent-loop/config.json cannot override it.
+    config["auth_mode"] = auth_mode
+    config["token_data"] = token_data
+    runtime = create_runtime(runtime_type, dotfiles_dir, **config)
+    listen_addr = runtime.proxy_listen_addr()
+    # Backends that inject credentials themselves (nono) never reach
+    # ralph's credential proxy, so it is neither started nor monitored.
+    needs_proxy = agent_config["uses_proxy"] and runtime.uses_credential_proxy
+
     # Re-verify proxy health before each issue so a proxy that died during
     # an idle gap (poll interval, rework cycle) gets restarted before we
     # spin up a sandbox that depends on it.
-    agent_config = get_agent(agent)
-    if agent_config["uses_proxy"]:
-        ensure_proxy(agent, proxy_port, dotfiles_dir, auth_mode)
+    if needs_proxy:
+        ensure_proxy(agent, proxy_port, dotfiles_dir, auth_mode, listen_addr)
 
     repo = resolve_repo(git)
     if not repo:
@@ -89,15 +108,6 @@ def process_issue(issue_number, git, dotfiles_dir, gh, agent, push, model,
     if ff_ref:
         print(f"ralph: fast-forwarded {branch} to {ff_ref}")
 
-    # Resolve project root for project-level sandbox dependencies
-    repo_root = git.output("rev-parse", "--show-toplevel")
-
-    # Create runtime backend based on project config
-    config = load_runtime_config(repo_root)
-    config["project_dir"] = repo_root
-    runtime_type = config.pop("type")
-    runtime = create_runtime(runtime_type, dotfiles_dir, **config)
-
     # Auto-prune stale sandboxes before creating/reusing ours
     try:
         pruned = runtime.prune_sandboxes(agent)
@@ -135,6 +145,10 @@ def process_issue(issue_number, git, dotfiles_dir, gh, agent, push, model,
     # Build env vars and API key based on agent type.
     # The token was already resolved by ensure_token() in cli.py and
     # passed through — no need to re-read from Keychain.
+    # Note: this is keyed off the agent alone, not off needs_proxy.
+    # Backends with their own credential injection still want the model
+    # env vars built here; they are responsible for dropping the phantom
+    # token and the (meaningless to them) ANTHROPIC_BASE_URL.
     if agent_config["uses_proxy"]:
         # Real token stays in proxy — sandbox only sees a phantom token
         # and the proxy's base URL.  OAuth mode also sets
@@ -164,11 +178,12 @@ def process_issue(issue_number, git, dotfiles_dir, gh, agent, push, model,
             if rc != 0:
                 # For proxy-based agents, check if failure was caused by
                 # the proxy being down (e.g. idle timeout after sleep)
-                if agent_config["uses_proxy"]:
-                    healthy, _, _ = proxy_health_check(proxy_port)
+                if needs_proxy:
+                    healthy, _, _, _ = proxy_health_check(proxy_port)
                     if not healthy:
                         print("ralph: proxy died during iteration, restarting and retrying...")
-                        ensure_proxy(agent, proxy_port, dotfiles_dir, auth_mode)
+                        ensure_proxy(agent, proxy_port, dotfiles_dir,
+                                     auth_mode, listen_addr)
                         continue
                 print(f"ralph: iteration failed for issue #{issue_number}", file=sys.stderr)
                 gh.issue_edit(issue_number, repo,

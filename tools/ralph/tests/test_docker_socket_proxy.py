@@ -6,8 +6,12 @@ These tests cover the proxy's filtering logic without requiring a real Docker so
 import http.client
 import io
 import json
+import os
+import shutil
 import socket
+import subprocess
 import sys
+import tempfile
 import threading
 import time
 from http.server import HTTPServer
@@ -16,10 +20,13 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 # The proxy script lives outside the ralph package, so import it by path.
-sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parents[3]
-                       / "docker" / "agent-loop" / "proxy"))
+PROXY_DIR = (__import__("pathlib").Path(__file__).resolve().parents[3]
+             / "docker" / "agent-loop" / "proxy")
+sys.path.insert(0, str(PROXY_DIR))
 import docker_socket_proxy as dsp
 import proxy_base
+
+from ralph import docker_proxy
 
 
 # ---------------------------------------------------------------------------
@@ -177,6 +184,7 @@ class TestHandlerHealthEndpoint:
         dsp.DockerSocketProxyHandler.docker_socket = "/nonexistent.sock"
         dsp.DockerSocketProxyHandler.idle_shutdown = None
         dsp.DockerSocketProxyHandler.version_hash = "test123abc00"
+        dsp.DockerSocketProxyHandler.listen_addr = "127.0.0.1"
 
         self.server = HTTPServer(("127.0.0.1", 0), dsp.DockerSocketProxyHandler)
         self.port = self.server.server_address[1]
@@ -187,14 +195,15 @@ class TestHandlerHealthEndpoint:
     def teardown_method(self):
         self.server.shutdown()
         self.server.server_close()
+        dsp.DockerSocketProxyHandler.listen_addr = dsp.DEFAULT_LISTEN_ADDR
 
-    def test_health_returns_200_with_version(self):
+    def test_health_returns_200_with_version_and_addr(self):
         conn = http.client.HTTPConnection("127.0.0.1", self.port)
         conn.request("GET", "/health")
         resp = conn.getresponse()
         body = resp.read().decode()
         assert resp.status == 200
-        assert body == "docker-socket-proxy ok v=test123abc00"
+        assert body == "docker-socket-proxy ok v=test123abc00 addr=127.0.0.1"
         conn.close()
 
 
@@ -270,6 +279,106 @@ class TestHandlerProxyUpstreamError:
         assert resp.status == 502
         assert "upstream error" in body
         conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Unix socket listen mode — end-to-end against the real script
+# ---------------------------------------------------------------------------
+
+class TestUnixSocketMode:
+    """Run docker_socket_proxy.py with LISTEN_SOCKET and drive it over AF_UNIX."""
+
+    def setup_method(self):
+        # AF_UNIX paths are capped near 104 bytes, so keep the dir short.
+        self.tmpdir = tempfile.mkdtemp(prefix="dsp", dir="/tmp")
+        self.socket_path = os.path.join(self.tmpdir, "d.sock")
+        self.log = open(os.path.join(self.tmpdir, "log"), "w+")
+        self.proc = subprocess.Popen(
+            [sys.executable, str(PROXY_DIR / "docker_socket_proxy.py")],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=self.log,
+            env={
+                **os.environ,
+                "LISTEN_SOCKET": self.socket_path,
+                "DOCKER_SOCKET": os.path.join(self.tmpdir, "nonexistent.sock"),
+                "IDLE_TIMEOUT": "0",
+            },
+        )
+        deadline = time.time() + 10
+        while time.time() < deadline:
+            if os.path.exists(self.socket_path):
+                return
+            if self.proc.poll() is not None:
+                break
+            time.sleep(0.05)
+        self.log.seek(0)
+        stderr = self.log.read()
+        self.teardown_method()
+        pytest.fail(f"proxy did not create {self.socket_path}: {stderr}")
+
+    def teardown_method(self):
+        if self.proc.poll() is None:
+            self.proc.terminate()
+            try:
+                self.proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self.proc.kill()
+                self.proc.wait(timeout=5)
+        self.log.close()
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def _request(self, method, path):
+        # Drive the real client ralph uses, not a test-local copy.
+        conn = docker_proxy._UnixHTTPConnection(self.socket_path, timeout=5)
+        try:
+            conn.request(method, path)
+            resp = conn.getresponse()
+            return resp.status, resp.read().decode()
+        finally:
+            conn.close()
+
+    def test_health_over_unix_socket(self):
+        status, body = self._request("GET", "/health")
+        assert status == 200
+        assert body.startswith("docker-socket-proxy ok v=")
+        assert body.endswith(f"addr=unix:{self.socket_path}")
+
+    def test_ralph_health_check_against_live_socket(self):
+        healthy, version, addr = docker_proxy.docker_proxy_socket_health_check(
+            self.socket_path
+        )
+        assert healthy is True
+        assert version == docker_proxy.compute_docker_proxy_version(
+            str(PROXY_DIR.parents[2])
+        )
+        assert addr == f"unix:{self.socket_path}"
+
+    def test_ralph_health_check_on_missing_socket(self):
+        healthy, version, addr = docker_proxy.docker_proxy_socket_health_check(
+            os.path.join(self.tmpdir, "absent.sock")
+        )
+        assert (healthy, version, addr) == (False, None, None)
+
+    def test_denied_path_returns_403(self):
+        status, body = self._request("POST", "/v1.45/containers/create")
+        assert status == 403
+        assert "blocked" in body
+        assert "/v1.45/containers/create" in body
+
+    def test_allowed_path_with_no_daemon_returns_502(self):
+        status, body = self._request("GET", "/_ping")
+        assert status == 502
+        assert "upstream error" in body
+
+    def test_socket_mode_is_0600(self):
+        mode = os.stat(self.socket_path).st_mode & 0o777
+        assert mode == 0o600
+
+    def test_socket_removed_on_shutdown(self):
+        self.proc.terminate()
+        self.proc.wait(timeout=5)
+        assert not os.path.exists(self.socket_path)
 
 
 # ---------------------------------------------------------------------------

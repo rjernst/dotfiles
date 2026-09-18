@@ -109,7 +109,8 @@ class TestProcessIssueSandbox:
 
         mock_config.assert_called_once_with("/repo/root")
         mock_create.assert_called_once_with("docker-sandbox", "/dotfiles",
-                                            project_dir="/repo/root")
+                                            project_dir="/repo/root",
+                                            auth_mode=None, token_data=None)
 
         sandbox.ensure_sandbox.assert_called_once_with(
             "claude", "my-branch", "/work/my-branch",
@@ -157,7 +158,8 @@ class TestProcessIssueSandbox:
         env_vars = call_args[1].get("env_vars") or call_args[0][3]
         assert env_vars["ANTHROPIC_BASE_URL"] == "http://192.168.64.1:18080"
 
-    @patch("ralph.loop.proxy_health_check", return_value=(True, "abc123", "oauth"))
+    @patch("ralph.loop.proxy_health_check",
+           return_value=(True, "abc123", "oauth", "127.0.0.1"))
     @patch("ralph.loop.create_runtime")
     @patch("ralph.loop.load_runtime_config", return_value={"type": "docker-sandbox"})
     @patch("ralph.loop.ensure_worktree", return_value="/work/my-branch")
@@ -188,7 +190,8 @@ class TestProcessIssueSandbox:
             remove_labels="status:in-progress",
             add_label="status:needs-attention")
 
-    @patch("ralph.loop.proxy_health_check", return_value=(False, None, None))
+    @patch("ralph.loop.proxy_health_check",
+           return_value=(False, None, None, None))
     @patch("ralph.loop.create_runtime")
     @patch("ralph.loop.load_runtime_config", return_value={"type": "docker-sandbox"})
     @patch("ralph.loop.unblock_ready_specs")
@@ -205,6 +208,7 @@ class TestProcessIssueSandbox:
         sandbox.ensure_sandbox.return_value = "agent-loop-claude-my-branch"
         # First iteration fails (proxy down), retry succeeds
         sandbox.run_iteration.side_effect = [(1, "spec"), (0, "spec")]
+        sandbox.proxy_listen_addr.return_value = "127.0.0.1"
         mock_create.return_value = sandbox
 
         gh = MagicMock()
@@ -218,7 +222,8 @@ class TestProcessIssueSandbox:
 
         # Called twice: proactive check at entry + reactive restart on failure
         assert mock_ensure_proxy.call_count == 2
-        mock_ensure_proxy.assert_any_call("claude", 18080, "/dotfiles", None)
+        mock_ensure_proxy.assert_any_call("claude", 18080, "/dotfiles",
+                                          None, "127.0.0.1")
         assert sandbox.run_iteration.call_count == 2
 
     @patch("ralph.loop.create_runtime")
@@ -580,6 +585,129 @@ class TestProcessIssueSandbox:
             remove_labels="status:in-progress",
             add_label="status:done")
         mock_unblock.assert_called_once_with("owner/repo", gh)
+
+
+# ---------------------------------------------------------------------------
+# process_issue — runtimes that inject credentials themselves (nono)
+# ---------------------------------------------------------------------------
+
+@patch("ralph.loop.ensure_proxy")
+class TestProcessIssueNoCredentialProxy:
+    @staticmethod
+    def _runtime(rc=0):
+        runtime = MagicMock()
+        runtime.uses_credential_proxy = False
+        runtime.proxy_host.return_value = "127.0.0.1"
+        runtime.ensure_sandbox.return_value = "agent-loop-claude-my-branch"
+        runtime.run_iteration.return_value = (rc, "updated spec")
+        return runtime
+
+    @staticmethod
+    def _gh():
+        gh = MagicMock()
+        gh.issue_view_title.return_value = "[my-branch] Test Issue"
+        gh.issue_view_body.return_value = "---\nbranch: my-branch\n---\nSpec"
+        return gh
+
+    @patch("ralph.loop.create_runtime")
+    @patch("ralph.loop.load_runtime_config", return_value={"type": "nono"})
+    @patch("ralph.loop.unblock_ready_specs")
+    @patch("ralph.loop.ensure_worktree", return_value="/work/my-branch")
+    @patch("ralph.loop.resolve_repo", return_value="owner/repo")
+    def test_iteration_runs_without_ensure_proxy(self, mock_repo, mock_wt,
+                                                 mock_unblock, mock_config,
+                                                 mock_create,
+                                                 mock_ensure_proxy):
+        git = MagicMock()
+        git.output.return_value = "/repo/root"
+        runtime = self._runtime()
+        mock_create.return_value = runtime
+
+        result = process_issue(
+            42, git, "/dotfiles", self._gh(), "claude", False, "sonnet",
+            "user", "user@test.com", None, "sk-test")
+        assert result == 0
+
+        mock_create.assert_called_once_with("nono", "/dotfiles",
+                                            project_dir="/repo/root",
+                                            auth_mode=None, token_data=None)
+        runtime.run_iteration.assert_called_once()
+        mock_ensure_proxy.assert_not_called()
+
+    @patch("ralph.loop.create_runtime")
+    @patch("ralph.loop.load_runtime_config", return_value={"type": "nono"})
+    @patch("ralph.loop.unblock_ready_specs")
+    @patch("ralph.loop.ensure_worktree", return_value="/work/my-branch")
+    @patch("ralph.loop.resolve_repo", return_value="owner/repo")
+    def test_credentials_passed_to_runtime(self, mock_repo, mock_wt,
+                                           mock_unblock, mock_config,
+                                           mock_create, mock_ensure_proxy):
+        """The token store's auth mode and data reach the runtime backend."""
+        git = MagicMock()
+        git.output.return_value = "/repo/root"
+        mock_create.return_value = self._runtime()
+        token_data = {"accessToken": "phantom",
+                      "baseUrl": "https://gw.example.com"}
+
+        process_issue(
+            42, git, "/dotfiles", self._gh(), "claude", False, "sonnet",
+            "user", "user@test.com", None, "sk-test",
+            auth_mode="gateway", token_data=token_data)
+
+        mock_create.assert_called_once_with("nono", "/dotfiles",
+                                            project_dir="/repo/root",
+                                            auth_mode="gateway",
+                                            token_data=token_data)
+
+    @patch("ralph.loop.create_runtime")
+    @patch("ralph.loop.load_runtime_config",
+           return_value={"type": "nono", "auth_mode": "api_key",
+                         "token_data": {"accessToken": "from-config"}})
+    @patch("ralph.loop.unblock_ready_specs")
+    @patch("ralph.loop.ensure_worktree", return_value="/work/my-branch")
+    @patch("ralph.loop.resolve_repo", return_value="owner/repo")
+    def test_project_config_cannot_override_credentials(
+            self, mock_repo, mock_wt, mock_unblock, mock_config, mock_create,
+            mock_ensure_proxy):
+        git = MagicMock()
+        git.output.return_value = "/repo/root"
+        mock_create.return_value = self._runtime()
+
+        process_issue(
+            42, git, "/dotfiles", self._gh(), "claude", False, "sonnet",
+            "user", "user@test.com", None, "sk-test",
+            auth_mode="oauth", token_data={"accessToken": "real"})
+
+        mock_create.assert_called_once_with(
+            "nono", "/dotfiles", project_dir="/repo/root",
+            auth_mode="oauth", token_data={"accessToken": "real"})
+
+    @patch("ralph.loop.create_runtime")
+    @patch("ralph.loop.load_runtime_config", return_value={"type": "nono"})
+    @patch("ralph.loop.unblock_ready_specs")
+    @patch("ralph.loop.ensure_worktree", return_value="/work/my-branch")
+    @patch("ralph.loop.resolve_repo", return_value="owner/repo")
+    def test_failed_iteration_does_not_check_proxy(self, mock_repo, mock_wt,
+                                                   mock_unblock, mock_config,
+                                                   mock_create,
+                                                   mock_ensure_proxy):
+        git = MagicMock()
+        git.output.return_value = "/repo/root"
+        mock_create.return_value = self._runtime(rc=1)
+        gh = self._gh()
+
+        with patch("ralph.loop.proxy_health_check") as mock_health:
+            result = process_issue(
+                42, git, "/dotfiles", gh, "claude", False, "sonnet",
+                "user", "user@test.com", None, "sk-test")
+            assert result == 1
+            mock_health.assert_not_called()
+
+        mock_ensure_proxy.assert_not_called()
+        gh.issue_edit.assert_any_call(
+            42, "owner/repo",
+            remove_labels="status:in-progress",
+            add_label="status:needs-attention")
 
 
 # ---------------------------------------------------------------------------

@@ -10,6 +10,7 @@ import subprocess
 import sys
 import time
 
+from ralph.proxy import DEFAULT_PROXY_LISTEN_ADDR
 from ralph.runtime import Runtime
 
 
@@ -449,7 +450,7 @@ class TartRuntime(Runtime):
         claude_cmd = (
             f"cd '{self.SHARED_DIR}' && "
             f"{env_prefix}claude "
-            f"-p {shlex.quote(self.ITERATION_PROMPT)} "
+            f"-p {shlex.quote(self.iteration_prompt(spec_path))} "
             f"--model {shlex.quote(model)} "
             f"--dangerously-skip-permissions "
             f"--effort high"
@@ -467,6 +468,10 @@ class TartRuntime(Runtime):
         updated = read_proc.stdout if read_proc.returncode == 0 else spec_content
 
         return rc, updated
+
+    # Tart VMs reach the host over the bridge/en0 address, not loopback,
+    # so the proxies must stay on the dual-stack wildcard.
+    PROXY_LISTEN_ADDR = DEFAULT_PROXY_LISTEN_ADDR
 
     def proxy_host(self):
         """Return the host IP reachable from inside the Tart VM.

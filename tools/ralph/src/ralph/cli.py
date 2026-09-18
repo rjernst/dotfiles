@@ -9,7 +9,9 @@ from ralph.loop import process_issue, poll_loop
 from ralph.agents import get_agent
 from ralph.orchestration import check_dependencies_prereq
 from ralph.proxy import ensure_proxy, proxy_port_for_agent, start_proxy_keepalive
-from ralph.runtime import create_runtime
+from ralph.runtime import (
+    RUNTIME_TYPES, create_runtime, resolve_project_runtime,
+)
 from ralph.selftest import selftest
 from ralph.token import store_token, check_token, get_token, ensure_token
 from ralph.util import parse_duration
@@ -26,9 +28,11 @@ Token commands:
 
 Runtime commands:
   selftest              Smoke test the full pipeline (proxy, sandbox, auth)
-    --runtime <type>      Runtime type: docker-sandbox, docker-container, tart
+    --runtime <type>      Runtime type: docker-sandbox, docker-container,
+                          tart, nono
   prune-sandboxes       Remove orphaned and stale sandboxes
-    --runtime <type>      Runtime type: docker-sandbox, docker-container, tart
+    --runtime <type>      Runtime type: docker-sandbox, docker-container,
+                          tart, nono
 
 Issue commands:
   --issue <number>      Execute a single GitHub Issue spec
@@ -67,6 +71,18 @@ def usage(exit_code=0):
     """Print usage and exit."""
     print(USAGE_TEXT)
     sys.exit(exit_code)
+
+
+def _check_runtime_agent(runtime_type, agent):
+    """Reject agent/runtime combinations a backend cannot run.
+
+    The nono backend sandboxes the agent process itself, and only the
+    Claude Code invocation is modelled by its generated profile.
+    """
+    if runtime_type == "nono" and agent != "claude":
+        print("ralph: runtime nono only supports agent claude",
+              file=sys.stderr)
+        sys.exit(2)
 
 
 def main():
@@ -133,8 +149,7 @@ def main():
                     print("ralph: --runtime requires an argument", file=sys.stderr)
                     sys.exit(2)
                 runtime_type = rest[j + 1]
-                if runtime_type not in ("docker-sandbox", "docker-container",
-                                        "tart"):
+                if runtime_type not in RUNTIME_TYPES:
                     print(f"ralph: unknown runtime type: {runtime_type}",
                           file=sys.stderr)
                     sys.exit(2)
@@ -188,8 +203,7 @@ def main():
                     print("ralph: --runtime requires an argument", file=sys.stderr)
                     sys.exit(2)
                 runtime_type = rest[j + 1]
-                if runtime_type not in ("docker-sandbox", "docker-container",
-                                        "tart"):
+                if runtime_type not in RUNTIME_TYPES:
                     print(f"ralph: unknown runtime type: {runtime_type}",
                           file=sys.stderr)
                     sys.exit(2)
@@ -201,6 +215,7 @@ def main():
                       file=sys.stderr)
                 sys.exit(2)
 
+        _check_runtime_agent(runtime_type, agent)
         check_dependencies_prereq()
         sys.exit(selftest(agent, DOTFILES_DIR, runtime_type=runtime_type,
                           auth_mode=auth_mode))
@@ -305,21 +320,34 @@ def main():
     # Prerequisite checks
     check_dependencies_prereq()
 
+    git = Git()
+
+    # Resolve this project's runtime backend up front: it decides whether
+    # ralph's credential proxy is needed at all, and which address it
+    # binds to.
+    runtime_type, runtime = resolve_project_runtime(git, DOTFILES_DIR)
+    _check_runtime_agent(runtime_type, agent)
+
     # Auth — ensure valid token exists before starting proxy
     # (auto-runs claude setup-token if missing/expired)
     token, token_data = ensure_token(agent, auth_mode)
 
     # Start proxy for agents that need it (e.g. claude).
-    # Non-proxy agents (e.g. cursor) inject credentials via secret file.
-    if agent_config["uses_proxy"]:
+    # Non-proxy agents (e.g. cursor) inject credentials via secret file,
+    # and backends with their own credential injection (nono) never talk
+    # to ralph's proxy.
+    if agent_config["uses_proxy"] and runtime.uses_credential_proxy:
         proxy_port = proxy_port_for_agent(agent)
-        ensure_proxy(agent, proxy_port, DOTFILES_DIR, auth_mode)
+        # Bind the proxy to the address this project's runtime backend
+        # needs.  process_issue() resolves the same address, so agreeing
+        # here avoids a needless restart on the first issue.
+        ensure_proxy(agent, proxy_port, DOTFILES_DIR, auth_mode,
+                     runtime.proxy_listen_addr())
         start_proxy_keepalive(proxy_port)
     else:
         proxy_port = None
 
     # Git user config
-    git = Git()
     git_user = git.output("config", "user.name") or "ralph"
     git_email = git.output("config", "user.email") or "ralph@localhost"
     gh = GitHub()

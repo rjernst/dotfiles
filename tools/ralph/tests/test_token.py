@@ -13,6 +13,8 @@ import pytest
 from ralph.token import (
     MS_PER_DAY,
     DEFAULT_EXPIRY_DAYS,
+    _keystore_read,
+    _keystore_write,
     _resolve_mode_string,
     _validate_api_key,
     _validate_gateway_token,
@@ -97,78 +99,149 @@ class TestFormatExpiryDate:
 
 
 # ---------------------------------------------------------------------------
-# read_token_from_keychain (mocked subprocess)
+# _keystore_read / _keystore_write (platform dispatch, mocked subprocess)
 # ---------------------------------------------------------------------------
 
-class TestReadTokenFromKeychain:
+class TestKeystoreReadDarwin:
+    @patch("ralph.token.sys.platform", "darwin")
     @patch("ralph.token.subprocess.run")
-    def test_returns_parsed_json(self, mock_run):
-        token_data = {"accessToken": "sk-test", "expiresAt": 9999999999999}
-        mock_run.return_value = MagicMock(
-            stdout=json.dumps(token_data) + "\n", returncode=0
-        )
-        result = read_token_from_keychain("claude")
-        assert result == token_data
+    def test_uses_security_find_generic_password(self, mock_run):
+        mock_run.return_value = MagicMock(stdout="secret\n", returncode=0)
+        assert _keystore_read("claude-token") == "secret"
         mock_run.assert_called_once_with(
-            ["security", "find-generic-password", "-s", "claude-token", "-a", "agent-loop", "-w"],
+            ["security", "find-generic-password", "-s", "claude-token",
+             "-a", "agent-loop", "-w"],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True,
         )
 
-    @patch("ralph.token.subprocess.run")
-    def test_returns_none_when_not_found(self, mock_run):
-        mock_run.side_effect = subprocess.CalledProcessError(1, "security")
-        result = read_token_from_keychain("claude")
-        assert result is None
+    @patch("ralph.token.sys.platform", "darwin")
+    @patch("ralph.token.subprocess.run",
+           side_effect=subprocess.CalledProcessError(1, "security"))
+    def test_returns_none_when_missing(self, mock_run):
+        assert _keystore_read("claude-token") is None
 
-    @patch("ralph.token.subprocess.run")
-    def test_returns_none_on_invalid_json(self, mock_run):
-        mock_run.return_value = MagicMock(stdout="not-json\n", returncode=0)
-        result = read_token_from_keychain("claude")
-        assert result is None
+    @patch("ralph.token.sys.platform", "darwin")
+    @patch("ralph.token.subprocess.run", side_effect=FileNotFoundError)
+    def test_missing_binary_warns_and_returns_none(self, mock_run, capsys):
+        assert _keystore_read("claude-token") is None
+        assert "ralph: security not found" in capsys.readouterr().err
 
+
+class TestKeystoreReadLinux:
+    @patch("ralph.token.sys.platform", "linux")
     @patch("ralph.token.subprocess.run")
-    def test_api_key_mode_uses_correct_service(self, mock_run):
-        token_data = {"accessToken": "sk-ant-api03-test", "expiresAt": 9999999999999}
-        mock_run.return_value = MagicMock(
-            stdout=json.dumps(token_data) + "\n", returncode=0
-        )
-        result = read_token_from_keychain("claude", "api_key")
-        assert result == token_data
+    def test_uses_secret_tool_lookup(self, mock_run):
+        mock_run.return_value = MagicMock(stdout="secret\n", returncode=0)
+        assert _keystore_read("claude-token") == "secret"
         mock_run.assert_called_once_with(
-            ["security", "find-generic-password", "-s", "claude-api-key", "-a", "agent-loop", "-w"],
+            ["secret-tool", "lookup", "service", "claude-token",
+             "account", "agent-loop"],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True,
         )
 
+    @patch("ralph.token.sys.platform", "linux")
+    @patch("ralph.token.subprocess.run",
+           side_effect=subprocess.CalledProcessError(1, "secret-tool"))
+    def test_returns_none_when_missing(self, mock_run):
+        assert _keystore_read("claude-token") is None
 
-# ---------------------------------------------------------------------------
-# write_token_to_keychain (mocked subprocess)
-# ---------------------------------------------------------------------------
+    @patch("ralph.token.sys.platform", "linux")
+    @patch("ralph.token.subprocess.run", side_effect=FileNotFoundError)
+    def test_missing_binary_warns_and_returns_none(self, mock_run, capsys):
+        assert _keystore_read("claude-token") is None
+        assert "ralph: secret-tool not found (install libsecret)" in capsys.readouterr().err
 
-class TestWriteTokenToKeychain:
+
+class TestKeystoreWriteDarwin:
+    @patch("ralph.token.sys.platform", "darwin")
     @patch("ralph.token.subprocess.run")
-    def test_calls_security_with_correct_args(self, mock_run):
-        write_token_to_keychain("claude", '{"accessToken":"t","expiresAt":1}')
+    def test_uses_security_add_generic_password(self, mock_run):
+        _keystore_write("claude-token", "secret")
         mock_run.assert_called_once_with(
-            ["security", "add-generic-password",
-             "-s", "claude-token", "-a", "agent-loop",
-             "-w", '{"accessToken":"t","expiresAt":1}', "-U"],
+            ["security", "add-generic-password", "-s", "claude-token",
+             "-a", "agent-loop", "-w", "secret", "-U"],
             check=True,
         )
 
-    @patch("ralph.token.subprocess.run")
-    def test_uses_cursor_service_name(self, mock_run):
-        write_token_to_keychain("cursor", '{}')
-        cmd = mock_run.call_args[0][0]
-        assert "-s" in cmd
-        s_idx = cmd.index("-s")
-        assert cmd[s_idx + 1] == "cursor-token"
+    @patch("ralph.token.sys.platform", "darwin")
+    @patch("ralph.token.subprocess.run", side_effect=FileNotFoundError)
+    def test_missing_binary_exits_1(self, mock_run, capsys):
+        with pytest.raises(SystemExit) as exc_info:
+            _keystore_write("claude-token", "secret")
+        assert exc_info.value.code == 1
+        assert "ralph: security not found" in capsys.readouterr().err
 
+
+class TestKeystoreWriteLinux:
+    @patch("ralph.token.sys.platform", "linux")
     @patch("ralph.token.subprocess.run")
-    def test_api_key_mode_uses_correct_service(self, mock_run):
+    def test_uses_secret_tool_store_with_stdin(self, mock_run):
+        _keystore_write("claude-token", "secret")
+        mock_run.assert_called_once_with(
+            ["secret-tool", "store", "--label", "ralph claude-token",
+             "service", "claude-token", "account", "agent-loop"],
+            check=True, input="secret", text=True,
+        )
+
+    @patch("ralph.token.sys.platform", "linux")
+    @patch("ralph.token.subprocess.run", side_effect=FileNotFoundError)
+    def test_missing_binary_exits_1(self, mock_run, capsys):
+        with pytest.raises(SystemExit) as exc_info:
+            _keystore_write("claude-token", "secret")
+        assert exc_info.value.code == 1
+        assert "ralph: secret-tool not found (install libsecret)" in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------------------
+# read_token_from_keychain (mocked keystore backend)
+# ---------------------------------------------------------------------------
+
+class TestReadTokenFromKeychain:
+    @patch("ralph.token._keystore_read")
+    def test_returns_parsed_json(self, mock_read):
+        token_data = {"accessToken": "sk-test", "expiresAt": 9999999999999}
+        mock_read.return_value = json.dumps(token_data)
+        result = read_token_from_keychain("claude")
+        assert result == token_data
+        mock_read.assert_called_once_with("claude-token")
+
+    @patch("ralph.token._keystore_read", return_value=None)
+    def test_returns_none_when_not_found(self, mock_read):
+        assert read_token_from_keychain("claude") is None
+
+    @patch("ralph.token._keystore_read", return_value="not-json")
+    def test_returns_none_on_invalid_json(self, mock_read):
+        assert read_token_from_keychain("claude") is None
+
+    @patch("ralph.token._keystore_read")
+    def test_api_key_mode_uses_correct_service(self, mock_read):
+        token_data = {"accessToken": "sk-ant-api03-test", "expiresAt": 9999999999999}
+        mock_read.return_value = json.dumps(token_data)
+        result = read_token_from_keychain("claude", "api_key")
+        assert result == token_data
+        mock_read.assert_called_once_with("claude-api-key")
+
+
+# ---------------------------------------------------------------------------
+# write_token_to_keychain (mocked keystore backend)
+# ---------------------------------------------------------------------------
+
+class TestWriteTokenToKeychain:
+    @patch("ralph.token._keystore_write")
+    def test_writes_to_claude_token_service(self, mock_write):
+        write_token_to_keychain("claude", '{"accessToken":"t","expiresAt":1}')
+        mock_write.assert_called_once_with(
+            "claude-token", '{"accessToken":"t","expiresAt":1}')
+
+    @patch("ralph.token._keystore_write")
+    def test_uses_cursor_service_name(self, mock_write):
+        write_token_to_keychain("cursor", '{}')
+        assert mock_write.call_args[0][0] == "cursor-token"
+
+    @patch("ralph.token._keystore_write")
+    def test_api_key_mode_uses_correct_service(self, mock_write):
         write_token_to_keychain("claude", '{}', auth_mode="api_key")
-        cmd = mock_run.call_args[0][0]
-        s_idx = cmd.index("-s")
-        assert cmd[s_idx + 1] == "claude-api-key"
+        assert mock_write.call_args[0][0] == "claude-api-key"
 
 
 # ---------------------------------------------------------------------------

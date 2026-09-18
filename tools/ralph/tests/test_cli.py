@@ -1,5 +1,6 @@
 """Tests for ralph.cli — CLI argument parsing and routing."""
 
+import json
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -145,6 +146,43 @@ class TestMainSandboxFlags:
     @patch("ralph.cli.process_issue", return_value=0)
     @patch("ralph.cli.ensure_token", return_value=("sk-test", {}))
     @patch("ralph.cli.ensure_proxy", return_value=18080)
+    @patch("ralph.cli.start_proxy_keepalive")
+    @patch("ralph.cli.Git")
+    @patch("ralph.cli.check_dependencies_prereq")
+    def test_proxy_bound_to_runtime_listen_addr(self, mock_prereq, mock_git_cls,
+                                                mock_keepalive, mock_proxy,
+                                                mock_token, mock_process,
+                                                tmp_path):
+        """The proxy binds to the address the project's runtime asks for."""
+        mock_git_cls.return_value = MagicMock(
+            output=MagicMock(return_value=str(tmp_path)))
+        with pytest.raises(SystemExit):
+            main()
+        # No .agent-loop/config.json → docker-sandbox → loopback only
+        assert mock_proxy.call_args[0][4] == "127.0.0.1"
+
+    @patch("ralph.cli.sys.argv", ["ralph", "--issue", "42"])
+    @patch("ralph.cli.process_issue", return_value=0)
+    @patch("ralph.cli.ensure_token", return_value=("sk-test", {}))
+    @patch("ralph.cli.ensure_proxy", return_value=18080)
+    @patch("ralph.cli.start_proxy_keepalive")
+    @patch("ralph.cli.Git")
+    @patch("ralph.cli.check_dependencies_prereq")
+    def test_proxy_listen_addr_env_override(self, mock_prereq, mock_git_cls,
+                                            mock_keepalive, mock_proxy,
+                                            mock_token, mock_process,
+                                            tmp_path, monkeypatch):
+        monkeypatch.setenv("RALPH_PROXY_LISTEN_ADDR", "::1")
+        mock_git_cls.return_value = MagicMock(
+            output=MagicMock(return_value=str(tmp_path)))
+        with pytest.raises(SystemExit):
+            main()
+        assert mock_proxy.call_args[0][4] == "::1"
+
+    @patch("ralph.cli.sys.argv", ["ralph", "--issue", "42"])
+    @patch("ralph.cli.process_issue", return_value=0)
+    @patch("ralph.cli.ensure_token", return_value=("sk-test", {}))
+    @patch("ralph.cli.ensure_proxy", return_value=18080)
     @patch("ralph.cli.Git")
     @patch("ralph.cli.check_dependencies_prereq")
     def test_starts_proxy_before_processing(self, mock_prereq,
@@ -168,7 +206,7 @@ class TestMainSandboxFlags:
         with patch("ralph.cli.ensure_token") as mock_token, \
              patch("ralph.cli.ensure_proxy", return_value=18080) as mock_proxy:
             mock_token.side_effect = lambda a, m: (call_order.append("token"), ("sk-test", {}))[1]
-            mock_proxy.side_effect = lambda a, p, d, m: (
+            mock_proxy.side_effect = lambda a, p, d, m, addr: (
                 call_order.append("proxy"), p)[-1]
             with pytest.raises(SystemExit):
                 main()
@@ -231,6 +269,102 @@ class TestMainSandboxFlags:
         call_args = mock_process.call_args[0]
         assert call_args[9] == 18080
         assert call_args[10] == "sk-test"
+
+
+# ---------------------------------------------------------------------------
+# main() — nono runtime
+# ---------------------------------------------------------------------------
+
+def _nono_repo(tmp_path, network=None):
+    """Write a nono .agent-loop/config.json into tmp_path and return it."""
+    cfg_dir = tmp_path / ".agent-loop"
+    cfg_dir.mkdir()
+    config = {"type": "nono"}
+    if network:
+        config["network"] = network
+    (cfg_dir / "config.json").write_text(json.dumps(config))
+    return str(tmp_path)
+
+
+class TestMainNonoRuntime:
+    @patch("ralph.cli.sys.argv", ["ralph", "--issue", "42"])
+    @patch("ralph.cli.process_issue", return_value=0)
+    @patch("ralph.cli.ensure_token", return_value=("sk-test", {}))
+    @patch("ralph.cli.ensure_proxy")
+    @patch("ralph.cli.start_proxy_keepalive")
+    @patch("ralph.cli.Git")
+    @patch("ralph.cli.check_dependencies_prereq")
+    def test_nono_skips_credential_proxy(self, mock_prereq, mock_git_cls,
+                                         mock_keepalive, mock_proxy,
+                                         mock_token, mock_process, tmp_path):
+        mock_git_cls.return_value = MagicMock(
+            output=MagicMock(return_value=_nono_repo(tmp_path)))
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+        assert exc_info.value.code == 0
+
+        mock_proxy.assert_not_called()
+        mock_keepalive.assert_not_called()
+        # process_issue still runs, with no proxy port
+        assert mock_process.call_args[0][9] is None
+        # docker/gh are still required
+        mock_prereq.assert_called_once_with()
+
+    @patch("ralph.cli.sys.argv", ["ralph", "--issue", "42"])
+    @patch("ralph.cli.process_issue", return_value=0)
+    @patch("ralph.cli.ensure_token", return_value=("sk-test", {}))
+    @patch("ralph.cli.ensure_proxy")
+    @patch("ralph.cli.start_proxy_keepalive")
+    @patch("ralph.cli.Git")
+    @patch("ralph.cli.check_dependencies_prereq")
+    def test_unrestricted_network_config_accepted(
+            self, mock_prereq, mock_git_cls, mock_keepalive, mock_proxy,
+            mock_token, mock_process, tmp_path):
+        mock_git_cls.return_value = MagicMock(
+            output=MagicMock(
+                return_value=_nono_repo(tmp_path, network="unrestricted")))
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+        assert exc_info.value.code == 0
+        mock_proxy.assert_not_called()
+
+    @patch("ralph.cli.sys.argv", ["ralph", "--issue", "42", "--agent", "cursor"])
+    @patch("ralph.cli.process_issue", return_value=0)
+    @patch("ralph.cli.ensure_token", return_value=("sk-test", {}))
+    @patch("ralph.cli.Git")
+    @patch("ralph.cli.check_dependencies_prereq")
+    def test_nono_rejects_non_claude_agent(self, mock_prereq, mock_git_cls,
+                                           mock_token, mock_process,
+                                           tmp_path, capsys):
+        mock_git_cls.return_value = MagicMock(
+            output=MagicMock(return_value=_nono_repo(tmp_path)))
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+        assert exc_info.value.code == 2
+        assert ("ralph: runtime nono only supports agent claude"
+                in capsys.readouterr().err)
+        # Rejected before any token prompt or issue processing
+        mock_token.assert_not_called()
+        mock_process.assert_not_called()
+
+    @patch("ralph.cli.sys.argv", ["ralph", "--issue", "42"])
+    @patch("ralph.cli.process_issue", return_value=0)
+    @patch("ralph.cli.ensure_token", return_value=("sk-test", {}))
+    @patch("ralph.cli.ensure_proxy", return_value=18080)
+    @patch("ralph.cli.start_proxy_keepalive")
+    @patch("ralph.cli.Git")
+    @patch("ralph.cli.check_dependencies_prereq")
+    def test_docker_runtime_still_starts_proxy(self, mock_prereq, mock_git_cls,
+                                               mock_keepalive, mock_proxy,
+                                               mock_token, mock_process,
+                                               tmp_path):
+        """Guard only suppresses the proxy for nono, not for docker."""
+        mock_git_cls.return_value = MagicMock(
+            output=MagicMock(return_value=str(tmp_path)))
+        with pytest.raises(SystemExit):
+            main()
+        mock_proxy.assert_called_once()
+        mock_keepalive.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -362,6 +496,31 @@ class TestMainSelftestRouting:
             main()
         assert exc_info.value.code == 2
 
+    @patch("ralph.cli.selftest", return_value=0)
+    @patch("ralph.cli.check_dependencies_prereq")
+    @patch("ralph.cli.sys.argv", ["ralph", "selftest", "--runtime", "nono"])
+    def test_main_routes_selftest_nono(self, mock_prereq, mock_selftest):
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+        assert exc_info.value.code == 0
+        mock_selftest.assert_called_once_with(
+            "claude", mock_selftest.call_args[0][1],
+            runtime_type="nono", auth_mode=None)
+
+    @patch("ralph.cli.selftest")
+    @patch("ralph.cli.check_dependencies_prereq")
+    @patch("ralph.cli.sys.argv",
+           ["ralph", "selftest", "--runtime", "nono", "--agent", "cursor"])
+    def test_main_selftest_nono_rejects_non_claude_agent(
+            self, mock_prereq, mock_selftest, capsys):
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+        assert exc_info.value.code == 2
+        assert ("ralph: runtime nono only supports agent claude"
+                in capsys.readouterr().err)
+        mock_selftest.assert_not_called()
+        mock_prereq.assert_not_called()
+
 
 # ---------------------------------------------------------------------------
 # prune-sandboxes --runtime
@@ -419,6 +578,20 @@ class TestPruneSandboxesRuntime:
         assert exc_info.value.code == 0
         mock_create.assert_called_once_with(
             "docker-container", mock_create.call_args[0][1])
+        mock_runtime.prune_sandboxes.assert_called_once_with(
+            "claude", max_age_days=None)
+
+    @patch("ralph.cli.create_runtime")
+    @patch("ralph.cli.sys.argv",
+           ["ralph", "prune-sandboxes", "--runtime", "nono"])
+    def test_runtime_nono(self, mock_create):
+        mock_runtime = MagicMock()
+        mock_runtime.prune_sandboxes.return_value = []
+        mock_create.return_value = mock_runtime
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+        assert exc_info.value.code == 0
+        mock_create.assert_called_once_with("nono", mock_create.call_args[0][1])
         mock_runtime.prune_sandboxes.assert_called_once_with(
             "claude", max_age_days=None)
 

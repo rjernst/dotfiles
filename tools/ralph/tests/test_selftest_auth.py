@@ -58,7 +58,7 @@ def _patch_selftest_deps():
     return {
         "proxy_health_check": patch(
             "ralph.selftest.proxy_health_check",
-            return_value=(False, None, None)),
+            return_value=(False, None, None, None)),
         "proxy_port": patch(
             "ralph.selftest.proxy_port_for_agent", return_value=18080),
         "ensure_proxy": patch("ralph.selftest.ensure_proxy"),
@@ -193,8 +193,10 @@ class TestSelftestPassesAuthModeToProxy:
             }
             runtime_mock = started["runtime_cls"].return_value
             runtime_mock.check_prerequisites.return_value = []
+            runtime_mock.proxy_listen_addr.return_value = "127.0.0.1"
             # Make proxy health check succeed after ensure_proxy
-            started["proxy_health_check"].return_value = (True, "abc123", "api_key")
+            started["proxy_health_check"].return_value = (
+                True, "abc123", "api_key", "127.0.0.1")
 
             # Will fail at _selftest_docker (image build), but proxy call
             # should have happened
@@ -203,7 +205,7 @@ class TestSelftestPassesAuthModeToProxy:
 
             rc = selftest("claude", "/fake/dotfiles", auth_mode="api_key")
             started["ensure_proxy"].assert_called_once_with(
-                "claude", 18080, "/fake/dotfiles", "api_key")
+                "claude", 18080, "/fake/dotfiles", "api_key", "127.0.0.1")
         finally:
             for p in patches.values():
                 p.stop()

@@ -21,6 +21,10 @@ class DockerSandboxRuntime(DockerImageMixin, Runtime):
         self.allowed_hosts = tuple(allowed_hosts) if allowed_hosts else ()
         self._worktree_path = None
 
+    # Docker Desktop routes host.docker.internal to the host's loopback,
+    # so the proxies never need to be exposed beyond 127.0.0.1.
+    PROXY_LISTEN_ADDR = "127.0.0.1"
+
     def proxy_host(self):
         """Return the hostname for reaching the credential proxy."""
         return "host.docker.internal"
@@ -235,6 +239,7 @@ class DockerSandboxRuntime(DockerImageMixin, Runtime):
             stored = self._read_sandbox_fingerprint(name)
             if stored == fingerprint:
                 print(f"ralph: reusing sandbox {name}")
+                self._touch_sandbox_timestamp(name)
                 return name
             print(f"ralph: config changed, recreating sandbox {name}")
             self.remove_sandbox(name)
@@ -384,7 +389,7 @@ class DockerSandboxRuntime(DockerImageMixin, Runtime):
                     cmd.extend(["-e", f"{k}={v}"])
             cmd.extend([
                 sandbox_name, cli_command,
-                "-p", self.ITERATION_PROMPT,
+                "-p", self.iteration_prompt(spec_path),
                 "--model", model,
             ] + cli_flags)
             rc = subprocess.run(cmd, check=False).returncode
@@ -397,7 +402,7 @@ class DockerSandboxRuntime(DockerImageMixin, Runtime):
                 f'export {env_var_name}="$(cat {secret_path})" && '
                 f"rm {secret_path} && "
                 f"exec {cli_command} -p "
-                + shlex.quote(self.ITERATION_PROMPT)
+                + shlex.quote(self.iteration_prompt(spec_path))
                 + f" --model {shlex.quote(model)}"
             )
             for flag in cli_flags:
