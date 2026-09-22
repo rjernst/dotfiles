@@ -1,0 +1,20 @@
+#!/usr/bin/env zsh
+
+echo "Setting up macOS launchd agents"
+dry_mkdir "$HOME/Library/LaunchAgents"
+
+for plist in "$DOTFILES/launchd/"*.plist; do
+  [ -f "$plist" ] || continue
+  name=$(basename "$plist")
+  setup_link "launchd/$name" "Library/LaunchAgents/$name"
+
+  label="${name%.plist}"
+  if ! launchctl list "$label" >/dev/null 2>&1; then
+    if (( DRY_RUN )); then
+      echo "[dry-run] launchctl load ~/Library/LaunchAgents/$name"
+    else
+      echo "Loading launchd agent: $label"
+      launchctl load "$HOME/Library/LaunchAgents/$name"
+    fi
+  fi
+done

@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.rjernst.tmux-agent-snapshot</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/sh</string>
+        <string>-c</string>
+        <string>mkdir -p "$HOME/.tmux-snapshot" &amp;&amp; exec "$HOME/bin/tmux-agent-snapshot" &gt;&gt; "$HOME/.tmux-snapshot/agent.log" 2&gt;&amp;1</string>
+    </array>
+    <key>StartInterval</key>
+    <integer>300</integer>
+</dict>
+</plist>
