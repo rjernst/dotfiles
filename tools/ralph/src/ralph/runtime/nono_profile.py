@@ -220,6 +220,22 @@ def _dedupe(paths):
     return result
 
 
+def _with_realpaths(paths):
+    """Return paths with resolved realpath versions included.
+
+    nono evaluates grants against the kernel's view of the filesystem, not
+    symlink names. Any path that is itself a symlink (or whose ancestors are)
+    must be granted under its real path as well as its logical one.
+    """
+    expanded = []
+    for path in paths:
+        expanded.append(path)
+        real = os.path.realpath(path)
+        if real != path:
+            expanded.append(real)
+    return expanded
+
+
 def _require_abs(name, value):
     """Return an absolute path argument, or raise ValueError.
 
@@ -335,15 +351,25 @@ def build_profile(sandbox_name, worktree, git_common_dir, git_dir, state_dir,
         profile["extends"] = project_profile_name
 
     git_writable, git_readable = git_grants(git_common_dir, git_dir)
+    repo_root = os.path.dirname(git_common_dir)
     profile["filesystem"] = {
-        "allow": _dedupe([worktree] + git_writable
+        "allow": _dedupe(_with_realpaths([worktree] + git_writable
                          + ([spec_dir] if spec_dir else [])
-                         + [claude_config, claude_config + ".lock"]),
-        "read": _dedupe(
+                         + [claude_config, claude_config + ".lock"])),
+        "read": _dedupe(_with_realpaths(
             git_readable
             + _home_path_dirs(path_env, home)
-            + [os.path.dirname(os.path.realpath(claude_bin))]),
-        "read_file": [os.path.join(state_dir, "gitconfig")],
+            + [os.path.dirname(os.path.realpath(claude_bin))]
+            + [p for p in [
+                os.path.join(home, ".claude"),
+                os.path.join(repo_root, ".claude"),
+                os.path.join(home, ".git"),
+            ] if os.path.exists(p)])),
+        "read_file": [
+            os.path.join(state_dir, "gitconfig"),
+            os.path.join(home, ".config", "git", "ignore"),
+            os.path.join(home, ".CFUserTextEncoding"),
+        ],
     }
 
     profile["environment"] = {"allow_vars": list(ALLOW_VARS)}
@@ -363,6 +389,11 @@ def build_profile(sandbox_name, worktree, git_common_dir, git_dir, state_dir,
         "anthropic": credential_route(auth_mode, token_data),
     }
     profile["network"] = net
+
+    # CFPreferences/NSUserDefaults is read by macOS system frameworks on
+    # startup; denying it causes a prompt on every iteration.
+    if sys.platform == "darwin":
+        profile["unsafe_macos_seatbelt_rules"] = ["(allow user-preference-read)"]
 
     # nono sanitizes PATH for captures, so the command must be absolute.
     ralph_bin = os.path.abspath(os.path.join(dotfiles_dir, "scripts", "ralph"))

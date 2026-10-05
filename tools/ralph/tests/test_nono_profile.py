@@ -242,16 +242,22 @@ def make_profile(home_dir, **overrides):
 
 
 def path_reads(profile, home):
-    """Read grants other than the repo's git dir, which every profile has."""
+    """PATH-derived read grants, excluding the repo git dir and always-present dirs."""
+    excluded = {
+        str(home / "src/proj/.git"),
+        str(home / ".claude"),
+        str(home / ".git"),
+    }
     return [path for path in profile["filesystem"]["read"]
-            if path != str(home / "src/proj/.git")]
+            if path not in excluded]
 
 
 class TestBuildProfileShape:
     def test_filtered_profile(self, home):
+        import sys
         profile = make_profile(
             home, spec_dir=str(home / "src/proj/.git/ralph/nono/sbx/spec-ab12"))
-        assert profile == {
+        expected = {
             "meta": {"name": "ralph-agent-loop-claude-feature-x",
                      "version": PROFILE_VERSION},
             "filesystem": {
@@ -272,7 +278,10 @@ class TestBuildProfileShape:
                     str(home / "tools"),
                 ],
                 "read_file": [
-                    str(home / "src/proj/.git/ralph/nono/sbx/gitconfig")],
+                    str(home / "src/proj/.git/ralph/nono/sbx/gitconfig"),
+                    str(home / ".config/git/ignore"),
+                    str(home / ".CFUserTextEncoding"),
+                ],
             },
             "environment": {"allow_vars": ALLOW_VARS},
             "network": {
@@ -292,6 +301,9 @@ class TestBuildProfileShape:
                 },
             },
         }
+        if sys.platform == "darwin":
+            expected["unsafe_macos_seatbelt_rules"] = ["(allow user-preference-read)"]
+        assert profile == expected
 
     def test_unrestricted_omits_network_filters(self, home):
         profile = make_profile(home, network="unrestricted")
@@ -354,19 +366,18 @@ class TestBuildProfileShape:
         assert "extends" not in make_profile(home)
 
     def test_no_grant_reaches_the_users_own_config(self, home):
-        """No grant may name — or contain — the user's real config.
+        """Private keys and git identity must stay outside the sandbox.
 
-        The agent gets a dedicated config dir under ~/.ralph; the user's
-        Claude state, git identity, and keys stay outside the sandbox.
-        Granting HOME itself, or ~/.claude, would hand all three over.
+        ~/.claude is intentionally granted for CLAUDE.md and skills access.
+        The hard constraints are: no grant may name HOME itself (which would
+        give everything), and SSH keys and the real gitconfig stay out.
         """
         profile = make_profile(
             home, spec_dir=str(home / "src/proj/.git/ralph/nono/sbx/spec-ab12"))
         granted = sum((profile["filesystem"][key] for key in
                        ("allow", "read", "read_file")), [])
 
-        for secret in (home, home / ".claude", home / ".claude.json",
-                       home / ".gitconfig", home / ".ssh"):
+        for secret in (home, home / ".ssh", home / ".gitconfig"):
             for path in granted:
                 assert path != str(secret), path
                 assert not str(secret).startswith(path + "/"), path
@@ -424,6 +435,30 @@ class TestBuildProfileFilesystem:
         link.symlink_to(home / "tools" / "claude")
         profile = make_profile(home, claude_bin=str(link))
         assert str(home / "tools") in profile["filesystem"]["read"]
+
+    def test_claude_config_dir_granted_when_present(self, home):
+        """~/.claude is granted read access so the agent can read CLAUDE.md."""
+        claude_dir = home / ".claude"
+        claude_dir.mkdir()
+        profile = make_profile(home)
+        assert str(claude_dir) in profile["filesystem"]["read"]
+
+    def test_claude_config_symlink_realpath_granted(self, home):
+        """If ~/.claude is a symlink, both the link and its target are granted."""
+        real_dir = home / "dotfiles" / "claude"
+        real_dir.mkdir(parents=True)
+        link = home / ".claude"
+        link.symlink_to(real_dir)
+        profile = make_profile(home)
+        reads = profile["filesystem"]["read"]
+        assert str(link) in reads
+        assert str(real_dir) in reads
+
+    def test_claude_config_omitted_when_absent(self, home):
+        """No ~/.claude grant is emitted when the directory does not exist."""
+        profile = make_profile(home)
+        reads = profile["filesystem"]["read"]
+        assert not any(".claude" in p for p in reads)
 
     def test_claude_bin_dir_not_duplicated_when_already_on_path(self, home):
         profile = make_profile(

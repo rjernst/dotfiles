@@ -49,7 +49,7 @@ from ralph.token import keychain_service_name, keystore_read_command
 
 # Oldest nono that supports everything the generated profile uses
 # (``cmd://`` credential capture, ``--allow-unix-socket``).
-MIN_NONO_VERSION = (0, 77, 0)
+MIN_NONO_VERSION = (0, 78, 0)
 
 # Project files the Docker backends build an image from.  The nono runtime
 # uses the host toolchain, so they mean nothing here and are called out
@@ -472,7 +472,7 @@ class NonoRuntime(Runtime):
             "-p", profile_path,
             "--workdir", worktree,
             "--no-rollback",
-            "--suppress-save-prompt",
+            "--suppress-save-prompt", "/",
             "--allow-unix-socket", self.docker_socket_path(),
         ]
         if self.network == "unrestricted":

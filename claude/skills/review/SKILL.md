@@ -176,6 +176,15 @@ You are now in the worktree of the branch to review. Do NOT modify any files —
 2. Run `git diff <base>...HEAD` to get the full diff.
 3. Run `git log <base>..HEAD --oneline` to understand commit history.
 4. If you need more context beyond the diff (e.g., to understand a function being called), read the relevant files.
+5. **Spec completeness check** — check if this branch has an associated Ralph spec and whether it is fully implemented:
+   - Get the current branch name with `git branch --show-current`.
+   - Search for a spec issue whose title starts with `[<branch-name>]`:
+     ```
+     gh issue list --repo <origin-repo> --label spec --search "[<branch-name>]" --json number,title,body,state --limit 5
+     ```
+   - If a spec issue is found, parse its body for step headings matching `### Step` and identify any that do **not** end with `[done]` on the same line.
+   - Carry any uncompleted steps forward to Phase 3 as **Critical** findings (see below).
+   - If no spec issue is found, skip this check silently.
 
 ### Phase 2: Review the changes
 Evaluate the diff for:
@@ -193,8 +202,9 @@ Use this exact format:
 ## Code Review: <branch name>
 
 ### Critical
-<Issues that MUST be fixed before merge -- bugs, security vulnerabilities, data loss risks>
+<Issues that MUST be fixed before merge -- bugs, security vulnerabilities, data loss risks, uncompleted spec steps>
 - **<file>:<line>** -- <description>
+- **Spec issue #N** -- Steps X, Y, Z are not marked [done] (spec is not fully implemented)
 
 ### Suggestions
 <Issues that SHOULD be fixed -- code quality, naming, simplification, missing edge cases>

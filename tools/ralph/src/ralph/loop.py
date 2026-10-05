@@ -2,6 +2,7 @@
 
 import os
 import platform
+import re
 import signal
 import subprocess
 import sys
@@ -18,6 +19,11 @@ from ralph.proxy import (
 )
 from ralph.runtime import load_runtime_config, create_runtime
 from ralph.util import parse_frontmatter, parse_issue_branch
+
+
+def _has_uncompleted_steps(body):
+    """Return True if the body contains any step heading not marked [done]."""
+    return bool(re.search(r'^### Step [^\n]*(?<!\[done\])$', body, re.MULTILINE))
 
 
 def _open_review_workspace(branch, issue_number, work_dir=None):
@@ -205,6 +211,7 @@ def process_issue(issue_number, git, dotfiles_dir, gh, agent, push, model,
         env_vars = {}
         api_key = token
 
+    no_commit_streak = 0
     try:
         while True:
             # Record HEAD before iteration — shared .git means host sees
@@ -236,11 +243,24 @@ def process_issue(issue_number, git, dotfiles_dir, gh, agent, push, model,
             head_after = git.output("rev-parse", "HEAD", cwd=work_dir)
 
             if head_before == head_after:
+                # Always persist the body so step ticks aren't lost
+                gh.issue_edit(issue_number, repo, body=body)
                 if "[blocked:" in body:
                     print(f"ralph: blocked tasks found in issue #{issue_number}, marking needs-attention")
                     gh.issue_edit(issue_number, repo,
                                   remove_labels="status:in-progress",
                                   add_label="status:needs-attention")
+                    break
+                elif _has_uncompleted_steps(body):
+                    no_commit_streak += 1
+                    if no_commit_streak >= 3:
+                        print(f"ralph: {no_commit_streak} consecutive no-commit iterations with steps remaining, marking needs-attention")
+                        gh.issue_edit(issue_number, repo,
+                                      remove_labels="status:in-progress",
+                                      add_label="status:needs-attention")
+                        break
+                    print(f"ralph: no commit but steps remain, continuing (streak={no_commit_streak})")
+                    continue
                 else:
                     print(f"ralph: no commit made, marking issue #{issue_number} done")
                     gh.issue_edit(issue_number, repo,
@@ -249,7 +269,9 @@ def process_issue(issue_number, git, dotfiles_dir, gh, agent, push, model,
                     unblock_ready_specs(repo, gh)
                     runtime.cleanup_sandbox(agent, branch)
                     _open_review_workspace(branch, issue_number, work_dir)
-                break
+                    break
+
+            no_commit_streak = 0
 
             # Sync commits from sandbox to host worktree
             if not runtime.sync_to_host(sandbox_name, head_before, head_after, work_dir):

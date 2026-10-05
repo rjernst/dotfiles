@@ -49,12 +49,17 @@ session_id_for_pane() {
 
 printf 'session\twindow\tname\tauto_rename\tcommand\tsession_id\tcwd\n' > "$manifest"
 
-while IFS=$'\t' read -r sess idx name auto cmd pane_pid cwd; do
+# tmux replaces literal tabs in -F output with underscores when invoked
+# outside of any tmux client (no $TMUX in the environment, as is always the
+# case for a launchd/cron job) — so a pipe is used here instead, since it
+# survives that sanitization pass intact. The manifest file itself stays
+# tab-separated below; only this tmux-facing delimiter needs to change.
+while IFS='|' read -r sess idx name auto cmd pane_pid cwd; do
     sid=$(session_id_for_pane "$pane_pid")
     printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
         "$sess" "$idx" "${name:-$EMPTY}" "$auto" "$cmd" "$sid" "${cwd:-$EMPTY}" >> "$manifest"
 done < <(tmux list-panes -a -F \
-    '#{session_name}	#{window_index}	#{window_name}	#{automatic-rename}	#{pane_current_command}	#{pane_pid}	#{pane_current_path}')
+    '#{session_name}|#{window_index}|#{window_name}|#{automatic-rename}|#{pane_current_command}|#{pane_pid}|#{pane_current_path}')
 
 claude_count=$(awk -F'\t' -v e="$EMPTY" 'NR>1 && $6!=e' "$manifest" | wc -l | tr -d ' ')
 other_count=$(awk -F'\t' -v e="$EMPTY" 'NR>1 && $6==e' "$manifest" | wc -l | tr -d ' ')
