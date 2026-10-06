@@ -16,7 +16,7 @@ setup() {
 
 @test "git role succeeds (install script skips when config exists)" {
   mkdir -p "$HOME/.git" "$HOME/.ssh"
-  touch "$HOME/.git/user.config" "$HOME/.ssh/allowed_signers"
+  touch "$HOME/.gitrc/user.config" "$HOME/.ssh/allowed_signers"
 
   run zsh "$HELPER" git
   [ "$status" -eq 0 ]

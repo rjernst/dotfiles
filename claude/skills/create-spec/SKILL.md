@@ -346,7 +346,7 @@ When creating specs for the dotfiles repo (`~/.dotfiles`), apply these conventio
 - **Linting**: shellcheck for shell scripts, `zsh -n` for syntax checking
 - **Config**: Symlink-based — all config lives in the repo, symlinked to `$HOME` by `setup`
 - **Roles**: Modular configuration via `roles/<name>/` with `setup`, `zsh_plugin`, `install`, `requires`
-- **Git**: SSH-signed commits, single-char aliases in `git/config`
+- **Git**: SSH-signed commits, single-char aliases in `.gitrc/config`
 
 ## Tips for Effective Specs
 - Keep tasks atomic — one logical change per task

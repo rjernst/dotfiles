@@ -86,7 +86,7 @@ EOF
 
 @test "help: git config annotations appear under Git Aliases" {
   touch "$DOTFILES/zsh/zshrc"
-  cat > "$DOTFILES/git/config" <<'EOF'
+  cat > "$DOTFILES/.gitrc/config" <<'EOF'
 [alias]
   # @help git s -- Show status
   s = status
@@ -156,7 +156,7 @@ EOF
 # @help h -- Show history
 alias h='history'
 EOF
-  cat > "$DOTFILES/git/config" <<'EOF'
+  cat > "$DOTFILES/.gitrc/config" <<'EOF'
   # @help git s -- Show status
 EOF
 

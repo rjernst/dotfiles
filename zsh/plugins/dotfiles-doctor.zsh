@@ -15,8 +15,8 @@ _doctor_check_symlinks() {
     [zsh/zshrc]=".zshrc"
     [gradle/properties]=".gradle/gradle.properties"
     [ssh/config]=".ssh/config"
-    [git/config]=".gitconfig"
-    [git/ignore]=".git/ignore"
+    [.gitrc/config]=".gitconfig"
+    [.gitrc/ignore]=".gitrc/ignore"
     [starship/starship.toml]=".config/starship.toml"
     [gh/config.yml]=".config/gh/config.yml"
     [claude/CLAUDE.md]=".claude/CLAUDE.md"
@@ -124,10 +124,10 @@ _doctor_check_git_signing() {
   _doctor_section "Git Signing"
 
   # Check user.config exists
-  if [[ -f "$HOME/.git/user.config" ]]; then
-    _doctor_pass "~/.git/user.config exists"
+  if [[ -f "$HOME/.gitrc/user.config" ]]; then
+    _doctor_pass "~/.gitrc/user.config exists"
   else
-    _doctor_fail "~/.git/user.config missing (run roles/git/install)"
+    _doctor_fail "~/.gitrc/user.config missing (run roles/git/install)"
   fi
 
   # Check signing key

@@ -27,8 +27,8 @@ setup() {
   touch "$DOTFILES/zsh/zshrc"
   touch "$DOTFILES/gradle/properties"
   touch "$DOTFILES/ssh/config"
-  touch "$DOTFILES/git/config"
-  touch "$DOTFILES/git/ignore"
+  touch "$DOTFILES/.gitrc/config"
+  touch "$DOTFILES/.gitrc/ignore"
   touch "$DOTFILES/starship/starship.toml"
   touch "$DOTFILES/gh/config.yml"
   touch "$DOTFILES/claude/CLAUDE.md"
@@ -42,8 +42,8 @@ setup() {
   ln -s "$DOTFILES/zsh/zshrc" "$HOME/.zshrc"
   ln -s "$DOTFILES/gradle/properties" "$HOME/.gradle/gradle.properties"
   ln -s "$DOTFILES/ssh/config" "$HOME/.ssh/config"
-  ln -s "$DOTFILES/git/config" "$HOME/.gitconfig"
-  ln -s "$DOTFILES/git/ignore" "$HOME/.git/ignore"
+  ln -s "$DOTFILES/.gitrc/config" "$HOME/.gitconfig"
+  ln -s "$DOTFILES/.gitrc/ignore" "$HOME/.gitrc/ignore"
   ln -s "$DOTFILES/starship/starship.toml" "$HOME/.config/starship.toml"
   ln -s "$DOTFILES/gh/config.yml" "$HOME/.config/gh/config.yml"
   ln -s "$DOTFILES/claude/CLAUDE.md" "$HOME/.claude/CLAUDE.md"
@@ -95,8 +95,8 @@ setup() {
   ln -s "$DOTFILES/zsh/zshrc" "$HOME/.zshrc"
   ln -s "$DOTFILES/gradle/properties" "$HOME/.gradle/gradle.properties"
   ln -s "$DOTFILES/ssh/config" "$HOME/.ssh/config"
-  ln -s "$DOTFILES/git/config" "$HOME/.gitconfig"
-  ln -s "$DOTFILES/git/ignore" "$HOME/.git/ignore"
+  ln -s "$DOTFILES/.gitrc/config" "$HOME/.gitconfig"
+  ln -s "$DOTFILES/.gitrc/ignore" "$HOME/.gitrc/ignore"
   ln -s "$DOTFILES/starship/starship.toml" "$HOME/.config/starship.toml"
   ln -s "$DOTFILES/gh/config.yml" "$HOME/.config/gh/config.yml"
   ln -s "$DOTFILES/claude/CLAUDE.md" "$HOME/.claude/CLAUDE.md"
@@ -247,7 +247,7 @@ SCRIPT
 # --- Git signing checks ---
 
 @test "doctor git-signing: configured passes" {
-  touch "$HOME/.git/user.config"
+  touch "$HOME/.gitrc/user.config"
   touch "$HOME/.ssh/signing_key.pub"
 
   # Mock git config to return signing info

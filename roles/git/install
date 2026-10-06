@@ -1,7 +1,7 @@
 #!/usr/bin/env zsh
 
 echo "Setting up git"
-git_userconfig=~/.git/user.config
+git_userconfig=~/.gitrc/user.config
 ssh_allowed_signers=~/.ssh/allowed_signers
 if [ ! -f "$git_userconfig" ]; then
   echo "---> generating $git_userconfig"

@@ -233,9 +233,9 @@ for SKILL_DIR in $DOTFILES/claude/skills/*/; do
   setup_link "claude/skills/$NAME"                ".claude/skills/$NAME"
 done
 
-dry_mkdir $HOME/.git
-setup_link "git/config"                         ".gitconfig"
-setup_link "git/ignore"                         ".git/ignore"
+dry_mkdir $HOME/.gitrc
+setup_link ".gitrc/config"                       ".gitconfig"
+setup_link ".gitrc/ignore"                       ".gitrc/ignore"
 
 dry_mkdir $HOME/bin
 for SCRIPT in $DOTFILES/scripts/*; do

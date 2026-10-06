@@ -1,12 +1,12 @@
 # allow for someone else to use this config file with their own username
 [include]
-    path = .git/user.config
+    path = .gitrc/user.config
 
 [core]
     editor = vim
     pager = less -FRSX
     whitespace = fix,-indent-with-non-tab,trailing-space,cr-at-eol
-    excludesfile = ~/.git/ignore
+    excludesfile = ~/.gitrc/ignore
     autocrlf = input
 
 [init]
